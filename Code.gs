@@ -2,6 +2,9 @@ const APP_TITLE = 'ESO Item Share';
 const EXPECTED_WINDOWS_PATH = String.raw`Documents\Elder Scrolls Online\live\SavedVariables\ItemShare.lua`;
 
 const MASTER_SHEET_NAME = 'Master';
+const BATCH_UPDATE_FLAG_KEY = 'ITEMSHARE_BATCH_UPDATING';
+const LAST_HIGHLIGHTED_ROW_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_ROW';
+const LAST_HIGHLIGHTED_SHEET_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_SHEET';
 
 const HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'Location', 'RequestedBy', 'SyncKey'];
 const MASTER_HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'RequestedBy', 'Source Sheet', 'SyncKey'];
@@ -15,18 +18,48 @@ const COL_COUNT = 6;
 const COL_LOCATION = 7;
 const COL_REQUESTED_BY = 8;
 const COL_SYNC_KEY = 9;
+
+const MASTER_COL_REQUESTED_BY = 7;
 const MASTER_COL_SOURCE_SHEET = 8;
 const MASTER_COL_SYNC_KEY = 9;
+
+const UI_PANEL_START_COL = 11; // K
+const UI_PANEL_WIDTH = 4;      // K:N
+const DOCUMENT_LOCK_TIMEOUT_MS = 30000;
+
+function withDocumentLock_(callback) {
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(DOCUMENT_LOCK_TIMEOUT_MS);
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function tryWithDocumentLock_(callback) {
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    return false;
+  }
+  try {
+    callback();
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Item Share')
     .addItem('Open Updater', 'showUploadDialog')
     .addItem('Reset/format active account sheet', 'prepareActiveSheetForImports')
-    .addItem('Reapply Protections', 'reapplyProtectionsForActiveSheet')
-    .addItem('Rebuild Master', 'rebuildMasterSheet')
-    .addItem('Delete selected item safely', 'deleteSelectedItemSafely')
     .addToUi();
+
+  try {
+    activateMasterSheet_(); // always force open to Master
+  } catch (err) {}
 }
 
 function showUploadDialog() {
@@ -44,79 +77,68 @@ function getUploaderConfig() {
 }
 
 function processUploadedSavedVariables(fileText) {
+  return withDocumentLock_(function() {
   if (!fileText || !String(fileText).trim()) {
     throw new Error('No file content was received.');
   }
 
-  const parsedAccounts = parseAllSavedVariablesAccounts_(String(fileText));
-  if (!parsedAccounts.length) {
-    throw new Error('Could not find any ESO account sections with shared items in the saved variables file.');
+  setBatchUpdateInProgress_(true);
+  try {
+    const parsedAccounts = parseAllSavedVariablesAccounts_(String(fileText));
+    if (!parsedAccounts.length) {
+      throw new Error('Could not find any ESO account sections with shared items in the saved variables file.');
+    }
+
+    let totalImportedItems = 0;
+    let totalUpdatedRows = 0;
+    let totalInsertedRows = 0;
+    let totalRemovedRows = 0;
+    const updatedSheets = [];
+
+    parsedAccounts.forEach(parsed => {
+      const sheet = getOrCreateAccountSheet_(parsed.accountName);
+      initializeAccountSheet_(sheet);
+
+      const existingRows = readExistingRows_(sheet, false);
+      const updates = mergeImportedRows_(existingRows, parsed.items);
+      writeRows_(sheet, updates.rows, false);
+      sortAccountSheet_(sheet);
+
+      totalImportedItems += parsed.items.length;
+      totalUpdatedRows += updates.updatedRows;
+      totalInsertedRows += updates.insertedRows;
+      totalRemovedRows += updates.removedRows || 0;
+      updatedSheets.push(sheet.getName());
+    });
+
+    rebuildMasterSheet_();
+    activateMasterSheet_();
+    SpreadsheetApp.flush();
+
+    return {
+      accountName: parsedAccounts.length === 1 ? parsedAccounts[0].accountName : parsedAccounts.length + ' accounts',
+      importedItems: totalImportedItems,
+      sheetName: updatedSheets.join(', '),
+      updatedRows: totalUpdatedRows,
+      insertedRows: totalInsertedRows,
+      removedRows: totalRemovedRows
+    };
+  } finally {
+    setBatchUpdateInProgress_(false);
   }
-
-  let totalImportedItems = 0;
-  let totalUpdatedRows = 0;
-  let totalInsertedRows = 0;
-  let totalRemovedRows = 0;
-  const updatedSheets = [];
-
-  parsedAccounts.forEach(parsed => {
-    const sheet = getOrCreateAccountSheet_(parsed.accountName);
-    initializeAccountSheet_(sheet);
-
-    const existingRows = readExistingRows_(sheet, false);
-    const updates = mergeImportedRows_(existingRows, parsed.items);
-
-    clearProtections_(sheet);
-    writeRows_(sheet, updates.rows, false);
-    sortAccountSheet_(sheet);
-    applyProtections_(sheet, false);
-    relockRequestedByCells_(sheet);
-
-    totalImportedItems += parsed.items.length;
-    totalUpdatedRows += updates.updatedRows;
-    totalInsertedRows += updates.insertedRows;
-    totalRemovedRows += updates.removedRows || 0;
-    updatedSheets.push(sheet.getName());
   });
-
-  rebuildMasterSheet_();
-  activateMasterSheet_();
-  SpreadsheetApp.flush();
-
-  return {
-    accountName: parsedAccounts.length === 1 ? parsedAccounts[0].accountName : parsedAccounts.length + ' accounts',
-    importedItems: totalImportedItems,
-    sheetName: updatedSheets.join(', '),
-    updatedRows: totalUpdatedRows,
-    insertedRows: totalInsertedRows,
-    removedRows: totalRemovedRows
-  };
 }
 
 function prepareActiveSheetForImports() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  if (sheet.getName() === MASTER_SHEET_NAME) {
-    initializeMasterSheet_(sheet);
-    applyProtections_(sheet, true);
-  } else {
-    initializeAccountSheet_(sheet);
-    applyProtections_(sheet, false);
-  }
-  SpreadsheetApp.getActive().toast('Active sheet prepared.', APP_TITLE, 5);
-}
-
-function reapplyProtectionsForActiveSheet() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const isMaster = sheet.getName() === MASTER_SHEET_NAME;
-  applyProtections_(sheet, isMaster);
-  relockRequestedByCells_(sheet);
-  SpreadsheetApp.getActive().toast('Protections reapplied.', APP_TITLE, 5);
-}
-
-function rebuildMasterSheet() {
-  rebuildMasterSheet_();
-  activateMasterSheet_();
-  SpreadsheetApp.getActive().toast('Master rebuilt.', APP_TITLE, 5);
+  return withDocumentLock_(function() {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    if (sheet.getName() === MASTER_SHEET_NAME) {
+      initializeMasterSheet_(sheet);
+    } else {
+      initializeAccountSheet_(sheet);
+    }
+    SpreadsheetApp.getActive().toast('Active sheet prepared.', APP_TITLE, 5);
+  });
 }
 
 function getOrCreateAccountSheet_(accountName) {
@@ -143,6 +165,7 @@ function activateMasterSheet_() {
   const master = getOrCreateMasterSheet_();
   ss.setActiveSheet(master);
   ss.moveActiveSheet(1);
+  ensureMasterControlPanel_();
 }
 
 function sanitizeSheetName_(name) {
@@ -186,6 +209,7 @@ function initializeAccountSheet_(sheet) {
   sheet.setColumnWidths(7, 1, 180);
   sheet.setColumnWidths(8, 1, 160);
   safeHideColumn_(sheet, COL_SYNC_KEY);
+  applyAlternatingRowColors_(sheet, false);
 }
 
 function initializeMasterSheet_(sheet) {
@@ -209,6 +233,67 @@ function initializeMasterSheet_(sheet) {
   sheet.setColumnWidths(7, 1, 160);
   sheet.setColumnWidths(8, 1, 180);
   safeHideColumn_(sheet, MASTER_COL_SYNC_KEY);
+  applyAlternatingRowColors_(sheet, true);
+}
+
+function ensureMasterControlPanel_() {
+  const master = getOrCreateMasterSheet_();
+
+  if (master.getMaxColumns() < UI_PANEL_START_COL + UI_PANEL_WIDTH - 1) {
+    master.insertColumnsAfter(master.getMaxColumns(), (UI_PANEL_START_COL + UI_PANEL_WIDTH - 1) - master.getMaxColumns());
+  }
+
+  master.setColumnWidths(UI_PANEL_START_COL, 1, 150);
+  master.setColumnWidths(UI_PANEL_START_COL + 1, UI_PANEL_WIDTH - 1, 110);
+
+  const panelRange = master.getRange(1, UI_PANEL_START_COL, 10, UI_PANEL_WIDTH);
+  panelRange.clearFormat();
+  panelRange.clearNote();
+  panelRange.breakApart();
+  panelRange.setBackground('#ffffff');
+
+  const titleRange = master.getRange(1, UI_PANEL_START_COL, 1, UI_PANEL_WIDTH).merge();
+  titleRange
+    .setValue('ESO Item Share')
+    .setFontWeight('bold')
+    .setFontSize(14)
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setBackground('#1f4e78')
+    .setFontColor('#ffffff');
+
+  const buttonRange = master.getRange(3, UI_PANEL_START_COL, 2, UI_PANEL_WIDTH).merge();
+  buttonRange
+    .setValue('UPLOAD ITEMS\nUse Item Share → Open Updater')
+    .setFontWeight('bold')
+    .setFontSize(12)
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setBackground('#1a73e8')
+    .setFontColor('#ffffff')
+    .setBorder(true, true, true, true, true, true, '#0b57d0', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  buttonRange.setNote('Google Sheets drawings can have assigned script actions, but this script builds a sheet-based control panel instead. Open the uploader from the Item Share menu.');
+
+  const infoRange = master.getRange(6, UI_PANEL_START_COL, 4, UI_PANEL_WIDTH).merge();
+  infoRange
+    .setValue(
+      'How to update:\n' +
+      '1) Click Item Share\n' +
+      '2) Choose Open Updater\n' +
+      '3) Select ItemShare.lua\n' +
+      '4) Click Update Sheet'
+    )
+    .setWrap(true)
+    .setVerticalAlignment('top')
+    .setHorizontalAlignment('left')
+    .setBackground('#f8f9fa')
+    .setFontColor('#202124')
+    .setBorder(true, true, true, true, true, true, '#dadce0', SpreadsheetApp.BorderStyle.SOLID);
+
+  master.setRowHeights(1, 1, 28);
+  master.setRowHeights(3, 2, 32);
+  master.setRowHeights(6, 4, 24);
 }
 
 function initializeSheetCommon_(sheet, headerRow) {
@@ -236,6 +321,36 @@ function initializeSheetCommon_(sheet, headerRow) {
 
   const filterRows = Math.max(sheet.getLastRow(), 2);
   sheet.getRange(1, 1, filterRows, headerRow.length).createFilter();
+}
+
+function applyAlternatingRowColors_(sheet, isMaster) {
+  const columnCount = isMaster ? MASTER_HEADER_ROW.length : HEADER_ROW.length;
+  const existingRules = sheet.getConditionalFormatRules() || [];
+  const preservedRules = existingRules.filter(rule => {
+    try {
+      const ranges = rule.getRanges() || [];
+      return !ranges.some(range =>
+        range.getSheet().getSheetId() === sheet.getSheetId() &&
+        range.getRow() === 2 &&
+        range.getColumn() === 1 &&
+        range.getNumColumns() === columnCount
+      );
+    } catch (err) {
+      return true;
+    }
+  });
+
+  const rowCount = Math.max(sheet.getMaxRows() - 1, 1);
+  const range = sheet.getRange(2, 1, rowCount, columnCount);
+
+  const alternatingRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=ISEVEN(ROW())')
+    .setBackground('#f8f9fa')
+    .setRanges([range])
+    .build();
+
+  preservedRules.push(alternatingRule);
+  sheet.setConditionalFormatRules(preservedRules);
 }
 
 function readExistingRows_(sheet, isMaster) {
@@ -415,8 +530,8 @@ function sortAccountSheet_(sheet) {
   if (lastRow <= 2) return;
 
   sheet.getRange(2, 1, lastRow - 1, HEADER_ROW.length).sort([
-    { column: COL_ITEM_TYPE, ascending: true },
     { column: COL_NAME, ascending: true },
+    { column: COL_ITEM_TYPE, ascending: true },
     { column: COL_QUALITY, ascending: true },
     { column: COL_TRAIT, ascending: true }
   ]);
@@ -427,8 +542,8 @@ function sortMasterSheet_(sheet) {
   if (lastRow <= 2) return;
 
   sheet.getRange(2, 1, lastRow - 1, MASTER_HEADER_ROW.length).sort([
-    { column: COL_ITEM_TYPE, ascending: true },
     { column: COL_NAME, ascending: true },
+    { column: COL_ITEM_TYPE, ascending: true },
     { column: COL_QUALITY, ascending: true },
     { column: COL_TRAIT, ascending: true },
     { column: MASTER_COL_SOURCE_SHEET, ascending: true }
@@ -460,12 +575,8 @@ function rebuildMasterSheet_() {
       });
     });
   });
-
-  clearProtections_(master);
   writeRows_(master, rows, true);
   sortMasterSheet_(master);
-  applyProtections_(master, true);
-  relockRequestedByCells_(master);
   SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(master);
   SpreadsheetApp.getActiveSpreadsheet().moveActiveSheet(1);
 }
@@ -657,108 +768,44 @@ function findMatchingBrace_(text, openIndex) {
   throw new Error('Could not match braces in uploaded file.');
 }
 
-function clearProtections_(sheet) {
-  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE);
-  protections.forEach(protection => {
-    try {
-      protection.remove();
-    } catch (err) {}
-  });
-}
-
-function applyProtections_(sheet, isMaster) {
-  clearProtections_(sheet);
-
-  const lastRow = Math.max(sheet.getMaxRows(), 2);
-  const protectedColumns = isMaster ? 6 : 7;
-  const range = sheet.getRange(1, 1, lastRow, protectedColumns);
-  const protection = range.protect();
-  protection.setDescription('Protected item data columns');
-
-  const me = Session.getEffectiveUser();
-  try {
-    protection.addEditor(me);
-    const editors = protection.getEditors();
-    if (editors && editors.length) {
-      protection.removeEditors(editors.filter(editor => editor.getEmail() !== me.getEmail()));
-    }
-  } catch (err) {}
-
-  if (protection.canDomainEdit()) {
-    protection.setDomainEdit(false);
-  }
-}
-
-function relockRequestedByCells_(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return;
-
-  const values = sheet.getRange(2, COL_REQUESTED_BY, lastRow - 1, 1).getValues();
-  for (let i = 0; i < values.length; i++) {
-    if (String(values[i][0] || '').trim() !== '') {
-      protectRequestedByCell_(sheet.getRange(i + 2, COL_REQUESTED_BY));
-    }
-  }
-}
-
-function protectRequestedByCell_(range) {
-  const sheet = range.getSheet();
-  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE);
-
-  for (const protection of protections) {
-    try {
-      const pRange = protection.getRange();
-      if (
-        pRange.getRow() === range.getRow() &&
-        pRange.getColumn() === range.getColumn() &&
-        pRange.getNumRows() === 1 &&
-        pRange.getNumColumns() === 1
-      ) {
-        return;
-      }
-    } catch (err) {}
-  }
-
-  const protection = range.protect();
-  protection.setDescription('Locked RequestedBy cell after entry');
-
-  const me = Session.getEffectiveUser();
-  try {
-    protection.addEditor(me);
-    const editors = protection.getEditors();
-    if (editors && editors.length) {
-      protection.removeEditors(editors.filter(editor => editor.getEmail() !== me.getEmail()));
-    }
-  } catch (err) {}
-
-  if (protection.canDomainEdit()) {
-    protection.setDomainEdit(false);
-  }
-
-  range.setBackground('#fce5cd');
-  range.setNote('Locked after RequestedBy entry');
-}
-
-function clearCellProtection_(range) {
-  const protections = range.getSheet().getProtections(SpreadsheetApp.ProtectionType.RANGE);
-  protections.forEach(p => {
-    try {
-      const r = p.getRange();
-      if (
-        r.getRow() === range.getRow() &&
-        r.getColumn() === range.getColumn() &&
-        r.getNumRows() === 1 &&
-        r.getNumColumns() === 1
-      ) {
-        p.remove();
-      }
-    } catch (err) {}
-  });
-}
-
 function clearRequestedByVisuals_(range) {
   range.setBackground(null);
   range.clearNote();
+}
+
+function onSelectionChange(e) {
+  if (!e || !e.range) return;
+  if (isBatchUpdateInProgress_()) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getDocumentProperties();
+
+  const previousSheetName = props.getProperty(LAST_HIGHLIGHTED_SHEET_KEY);
+  const previousRow = Number(props.getProperty(LAST_HIGHLIGHTED_ROW_KEY) || 0);
+
+  if (previousSheetName && previousRow > 1) {
+    const previousSheet = ss.getSheetByName(previousSheetName);
+    if (previousSheet && previousRow <= previousSheet.getMaxRows()) {
+      const previousColumnCount = previousSheet.getName() === MASTER_SHEET_NAME ? MASTER_HEADER_ROW.length : HEADER_ROW.length;
+      previousSheet.getRange(previousRow, 1, 1, previousColumnCount).setBackground(null);
+    }
+  }
+
+  const range = e.range;
+  const sheet = range.getSheet();
+  const row = range.getRow();
+
+  if (row <= 1) {
+    props.deleteProperty(LAST_HIGHLIGHTED_SHEET_KEY);
+    props.deleteProperty(LAST_HIGHLIGHTED_ROW_KEY);
+    return;
+  }
+
+  const columnCount = sheet.getName() === MASTER_SHEET_NAME ? MASTER_HEADER_ROW.length : HEADER_ROW.length;
+  sheet.getRange(row, 1, 1, columnCount).setBackground('#fff2cc');
+
+  props.setProperty(LAST_HIGHLIGHTED_SHEET_KEY, sheet.getName());
+  props.setProperty(LAST_HIGHLIGHTED_ROW_KEY, String(row));
 }
 
 function onEdit(e) {
@@ -766,37 +813,53 @@ function onEdit(e) {
 
   const range = e.range;
   const sheet = range.getSheet();
-  if (range.getColumn() !== COL_REQUESTED_BY || range.getRow() === 1) return;
+  if (range.getRow() === 1) return;
 
-  const value = String(range.getValue() || '').trim();
+  const isMaster = sheet.getName() === MASTER_SHEET_NAME;
+  const requestedByCol = isMaster ? MASTER_COL_REQUESTED_BY : COL_REQUESTED_BY;
 
-  // Sync even when blank so clearing propagates.
-  syncRequestedByFromEdit_(sheet, range.getRow(), value);
-}
-
-function lockRequestedByOnEdit(e) {
-  if (!e || !e.range) return;
-
-  const range = e.range;
-  const sheet = range.getSheet();
-  if (range.getColumn() !== COL_REQUESTED_BY || range.getRow() === 1) return;
-
-  const value = String(range.getValue() || '').trim();
-
-  // Sync even when blank so clearing propagates.
-  syncRequestedByFromEdit_(sheet, range.getRow(), value);
-
-  if (value !== '') {
-    protectRequestedByCell_(sheet.getRange(range.getRow(), COL_REQUESTED_BY));
-  } else {
-    clearCellProtection_(sheet.getRange(range.getRow(), COL_REQUESTED_BY));
-    clearRequestedByVisuals_(sheet.getRange(range.getRow(), COL_REQUESTED_BY));
+  if (range.getColumn() === requestedByCol) {
+    withDocumentLock_(function() {
+      const value = String(range.getValue() || '').trim();
+      syncRequestedByFromEdit_(sheet, range.getRow(), value);
+    });
+    return;
   }
+
+  if (isBatchUpdateInProgress_()) return;
+  if (isMaster) return;
+
+  tryWithDocumentLock_(function() {
+    if (isBatchUpdateInProgress_()) return;
+    rebuildMasterSheet_();
+    activateMasterSheet_();
+  });
 }
 
-function rebuildMasterOnChange(e) {
-  rebuildMasterSheet_();
-  activateMasterSheet_();
+function onChange(e) {
+  if (!e) return;
+  if (isBatchUpdateInProgress_()) return;
+
+  tryWithDocumentLock_(function() {
+    if (isBatchUpdateInProgress_()) return;
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const activeSheet = ss.getActiveSheet();
+    if (!activeSheet || activeSheet.getName() === MASTER_SHEET_NAME) return;
+
+    const changeType = String(e.changeType || '');
+    const shouldRebuild =
+      changeType === 'INSERT_ROW' ||
+      changeType === 'REMOVE_ROW' ||
+      changeType === 'INSERT_GRID' ||
+      changeType === 'REMOVE_GRID' ||
+      changeType === 'EDIT';
+
+    if (!shouldRebuild) return;
+
+    rebuildMasterSheet_();
+    activateMasterSheet_();
+  });
 }
 
 function syncRequestedByFromEdit_(sheet, rowIndex, value) {
@@ -817,14 +880,8 @@ function syncRequestedByFromEdit_(sheet, rowIndex, value) {
       const currentValue = String(targetRange.getValue() || '').trim();
 
       if (currentValue !== value) {
-        clearCellProtection_(targetRange);
         targetRange.setValue(value);
-
-        if (value !== '') {
-          protectRequestedByCell_(targetRange);
-        } else {
-          clearRequestedByVisuals_(targetRange);
-        }
+        clearRequestedByVisuals_(targetRange);
       }
     }
   } else {
@@ -834,18 +891,12 @@ function syncRequestedByFromEdit_(sheet, rowIndex, value) {
     const master = getOrCreateMasterSheet_();
     const masterRow = findRowBySyncKey_(master, syncKey, true);
     if (masterRow > 0) {
-      const targetRange = master.getRange(masterRow, COL_REQUESTED_BY);
+      const targetRange = master.getRange(masterRow, MASTER_COL_REQUESTED_BY);
       const currentValue = String(targetRange.getValue() || '').trim();
 
       if (currentValue !== value) {
-        clearCellProtection_(targetRange);
         targetRange.setValue(value);
-
-        if (value !== '') {
-          protectRequestedByCell_(targetRange);
-        } else {
-          clearRequestedByVisuals_(targetRange);
-        }
+        clearRequestedByVisuals_(targetRange);
       }
     }
   }
@@ -865,40 +916,18 @@ function findRowBySyncKey_(sheet, syncKey, isMaster) {
   return -1;
 }
 
-function deleteSelectedItemSafely() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const row = sheet.getActiveRange() ? sheet.getActiveRange().getRow() : 0;
-
-  if (row <= 1) {
-    throw new Error('Select a data row first.');
-  }
-
-  if (sheet.getName() === MASTER_SHEET_NAME) {
-    const sourceSheetName = String(sheet.getRange(row, MASTER_COL_SOURCE_SHEET).getValue() || '').trim();
-    const syncKey = String(sheet.getRange(row, MASTER_COL_SYNC_KEY).getValue() || '').trim();
-
-    if (sourceSheetName && syncKey) {
-      const sourceSheet = ss.getSheetByName(sourceSheetName);
-      if (sourceSheet) {
-        const sourceRow = findRowBySyncKey_(sourceSheet, syncKey, false);
-        if (sourceRow > 0) {
-          sourceSheet.deleteRow(sourceRow);
-        }
-      }
-    }
-
-    sheet.deleteRow(row);
-  } else {
-    sheet.deleteRow(row);
-  }
-
-  rebuildMasterSheet_();
-  activateMasterSheet_();
-}
-
 function safeHideColumn_(sheet, column) {
   try {
     sheet.hideColumns(column);
   } catch (err) {}
+}
+
+function setBatchUpdateInProgress_(inProgress) {
+  const props = PropertiesService.getDocumentProperties();
+  props.setProperty(BATCH_UPDATE_FLAG_KEY, inProgress ? '1' : '0');
+}
+
+function isBatchUpdateInProgress_() {
+  const props = PropertiesService.getDocumentProperties();
+  return props.getProperty(BATCH_UPDATE_FLAG_KEY) === '1';
 }
