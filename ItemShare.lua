@@ -422,7 +422,8 @@ local function BuildActualInventoryIndex()
         local bagLocation = GetBagLocationLabel(bagId)
         local bagSize = GetBagSize(bagId) or 0
         for slotIndex = 0, bagSize - 1 do
-            if not IsSlotEmpty(bagId, slotIndex) then
+            local slotItemName = GetItemName(bagId, slotIndex)
+            if slotItemName and slotItemName ~= "" then
                 local isEligible = IsItemEligibleForShare(bagId, slotIndex)
                 if isEligible then
                     local itemKey, itemName, _, itemTypeName, quality, _, traitName, _, itemLink, legacyItemKey =
