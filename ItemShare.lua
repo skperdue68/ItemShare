@@ -31,9 +31,17 @@ local function GetCurrentAccountName()
     return GetDisplayName() or "@Unknown"
 end
 
+local function GetCurrentCharacterName()
+    local characterName = GetUnitName("player")
+    if not characterName or characterName == "" then
+        return "Unknown"
+    end
+    return zo_strformat("<<t:1>>", characterName)
+end
+
 local function GetBagLocationLabel(bagId)
     if bagId == BAG_BACKPACK then
-        return "Inventory"
+        return string.format("Inventory (%s)", GetCurrentCharacterName())
     elseif bagId == BAG_BANK then
         return "Bank"
     elseif BAG_SUBSCRIBER_BANK and bagId == BAG_SUBSCRIBER_BANK then
@@ -223,6 +231,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
         existing.trait = traitName
         existing.traitType = traitType
         existing.itemLink = itemLink
+        existing.sharedFrom = sharedFrom
         existing.count = (existing.count or 0) + incrementCount
         existing.lastDumpedAt = now
 
@@ -248,6 +257,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
             qualityName = qualityName,
             trait = traitName,
             traitType = traitType,
+            sharedFrom = sharedFrom,
             count = incrementCount,
             firstDumpedAt = now,
             lastDumpedAt = now,
