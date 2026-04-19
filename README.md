@@ -13,9 +13,8 @@ You can use commands
 /ishare save - Does a reloadUI which forces the Shared list to be written to disk so you can import it to the spreadsheet
 /ishare sync - Checks your shared list against items you still have, items you no longer have are removed from the shared list.
 
-
-You may add items to the shared list from Inventory, House Storage, Your Bank, The Guild Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
+You may add items to the shared list from Inventory, House Storage, Your Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
 
 Once Everything is as you want it, save the file by doing /ishare save or typing /reloadui
 
-Open your google spreadsheet (see Initial Setup and Run of Spreadsheet if you need instructions on setting this up for the first time), and import your file into the spreadsheet, its that easy.
+Open your google spreadsheet (Documentation includes a link to a templatae file you can use which should have everything set for you, just save it as a copy yourself), and use the update feature to add your data into the spreadsheet, its that easy.
