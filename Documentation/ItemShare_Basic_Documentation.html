@@ -20,9 +20,7 @@
         border-radius: 8px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.1);
     }
-    ul {
-        margin-left: 20px;
-    }
+    ul { margin-left: 20px; }
     code {
         background: #eef;
         padding: 3px 6px;
@@ -50,131 +48,156 @@
 
 <div class="section">
 <h2>Overview</h2>
+
 <p>
-<strong>ItemShare</strong> is an Elder Scrolls Online addon that allows players to mark items in-game as shareable 
-and export that information for use in an external Google Sheets tracker.
+<strong>ItemShare</strong> is an addon that helps you keep track of items you are willing to share with others.
 </p>
+
 <p>
-It is designed for guilds and groups to easily track available items across multiple players and accounts, 
-making item sharing and requesting simple and organized.
+On its own, the addon has a very limited role. It simply collects item data and stores it in your SavedVariables.
+That data is then used outside of the game in a Google Sheets document, where it becomes a full item-sharing system.
 </p>
+
+<p>
+The spreadsheet allows you and others to:
+</p>
+<ul>
+<li>See what items are available</li>
+<li>Browse and search items easily</li>
+<li>Mark items you would like to receive</li>
+<li>Coordinate sharing without using guild banks or chat spam</li>
+</ul>
+
 </div>
 
 <div class="section">
-<h2>What the Addon Does</h2>
+<h2>Why Use ItemShare?</h2>
 <ul>
-<li>Adds right-click menu options to inventory items</li>
-<li>Allows marking items as <strong>shareable</strong></li>
-<li>Prevents adding items that are bound or restricted</li>
-<li>Displays a visual icon for shared items</li>
-<li>Tracks item count and location</li>
-<li>Provides a dedicated <strong>Shared Items</strong> window</li>
-<li>Saves data for export to Google Sheets</li>
-<li>Supports sharing a spreadsheet link directly from the addon UI</li>
+<li>Avoid spamming guild chat with item lists</li>
+<li>Share items without relying on guild bank access</li>
+<li>Keep a clean, organized list of what you have available</li>
 </ul>
 </div>
 
 <div class="section">
 <h2>Requirements</h2>
 <ul>
-<li><strong>LibCustomMenu</strong> (Required dependency)</li>
-<li>Elder Scrolls Online (latest supported API version)</li>
+<li><strong>LibCustomMenu</strong> (required)</li>
+<li>Elder Scrolls Online (current version)</li>
 </ul>
+</div>
+
+<div class="section">
+<h2>Quick Start</h2>
+<ol>
+<li>Right-click an item in your inventory and choose <strong>Add to Share</strong></li>
+<li>Repeat for any items you want to share</li>
+<li>Run <code>/ishare save</code> or reload your UI</li>
+<li>Upload your SavedVariables file to the Google Sheet</li>
+<li>Use the spreadsheet to manage requests</li>
+</ol>
+</div>
+
+<div class="section">
+<h2>What the Addon Does</h2>
+<ul>
+<li>Adds right-click options to inventory items so you can add or remove them from your shared list</li>
+<li>Shows an icon for items that are marked as shared</li>
+<li>Keeps track of item counts and where they are stored</li>
+<li>Provides a window (<code>/itemshare list</code>) showing your shared items</li>
+<li>Saves your data for use in Google Sheets</li>
+<li>Allows you to store and share your spreadsheet link in chat</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>List Window</h2>
+
+<p>
+The Shared Items window shows everything currently marked for sharing.
+</p>
+
+<ul>
+<li>Right-click an item to turn sharing off</li>
+<li>Right-click again to turn sharing back on</li>
+<li>Left-click the item name to view full item details</li>
+</ul>
+
+<p>
+When you close and reopen the window, it will only show items that are currently being shared.
+This is expected behavior.
+</p>
+
 </div>
 
 <div class="section">
 <h2>Commands</h2>
 <table>
 <tr><th>Command</th><th>Description</th></tr>
-<tr><td><code>/itemshare</code></td><td>Shows command help (debug output).</td></tr>
-<tr><td><code>/itemshare list</code></td><td>Opens or closes the Shared Items window.</td></tr>
-<tr><td><code>/itemshare reset</code></td><td>Clears all saved shared entries.</td></tr>
-<tr><td><code>/itemshare sync</code></td><td>Reconciles saved entries with items you still own and updates counts and locations.</td></tr>
-<tr><td><code>/itemshare save</code></td><td>Prompts to reload the UI so saved variable data is written out.</td></tr>
-<tr><td><code>/itemshare debug</code></td><td>Toggles debug messages on or off.</td></tr>
-<tr><td><code>/itemshare guildbank</code></td><td>Toggles guild bank sharing functionality (currently disabled while under development).</td></tr>
-<tr><td><code>/itemshare sheet</code></td><td>Displays the currently configured spreadsheet URL. If a URL is provided, it will be saved.</td></tr>
-<tr><td><code>/itemshare sheet &lt;url&gt;</code></td><td>Sets or updates the spreadsheet URL used for sharing.</td></tr>
-<tr><td><code>/itemshare sheet clear</code></td><td>Clears the stored spreadsheet URL.</td></tr>
-<tr><td><code>/itemshare sharelink</code></td><td>Places the configured spreadsheet URL into the chat input for easy sharing.</td></tr>
+<tr><td><code>/itemshare</code></td><td>Shows basic help</td></tr>
+<tr><td><code>/itemshare list</code></td><td>Open or close the shared items window</td></tr>
+<tr><td><code>/itemshare reset</code></td><td>Clear all shared items</td></tr>
+<tr><td><code>/itemshare sync</code></td><td>Update your list with items you still have</td></tr>
+<tr><td><code>/itemshare save</code></td><td>Reload UI to save your data</td></tr>
+<tr><td><code>/itemshare debug</code></td><td>Toggle debug messages</td></tr>
+<tr><td><code>/itemshare sheet</code></td><td>View or set your spreadsheet link</td></tr>
+<tr><td><code>/itemshare sheet &lt;url&gt;</code></td><td>Save your spreadsheet link</td></tr>
+<tr><td><code>/itemshare sheet clear</code></td><td>Clear the stored link</td></tr>
+<tr><td><code>/itemshare sharelink</code></td><td>Place your sheet link into chat</td></tr>
 </table>
 
 <p><strong>Alias:</strong> <code>/ishare</code></p>
 </div>
 
 <div class="section">
-<h2>Spreadsheet Link Integration</h2>
+<h2>Google Sheets Template &amp; Setup</h2>
 
 <p>
-ItemShare allows you to store a reference to your Google Sheets document directly in-game.
-This makes it easier to share access to your item list with others.
-</p>
-
-<ul>
-<li>You can store your spreadsheet URL using <code>/itemshare sheet &lt;url&gt;</code></li>
-<li>The URL will be displayed at the top of the Shared Items window</li>
-<li>A button in the window allows you to send the URL to chat</li>
-<li><code>/itemshare sharelink</code> will prefill the chat box with the URL for easy sharing</li>
-</ul>
-
-<p><strong>Note:</strong> The spreadsheet link is provided as plain text. ESO does not support opening external web links directly from the game client.</p>
-</div>
-
-<div class="section">
-<h2>How It Works</h2>
-<p>
-Each item is tracked using a unique key based on:
-</p>
-<p><code>ItemLink + Location</code></p>
-
-<p>
-The addon stores:
-</p>
-<ul>
-<li>Item Name and Link</li>
-<li>Item Type, Quality, and Trait</li>
-<li>Count</li>
-<li>Location (Inventory, Bank, etc.)</li>
-<li>Timestamps</li>
-</ul>
-
-<p>
-All data is saved using account-wide saved variables and can be exported for external processing.
-</p>
-</div>
-
-<div class="section">
-<h2>Typical Workflow</h2>
-<ol>
-<li>Right-click an item and select <strong>Add to Share</strong></li>
-<li>Repeat for all items you want to share</li>
-<li>Run <code>/ishare save</code> or reload UI</li>
-<li>Upload SavedVariables file to Google Sheets</li>
-<li>Manage requests and sharing externally</li>
-</ol>
-
-</div>
-
-<div class="section">
-<h2>Google Sheets Template &amp; Sample Data</h2>
-
-<p>
-Instead of manually creating and configuring a Google Sheets document, you can use a ready-made template:
+For your convenience, a Google Sheets template document is available:
 </p>
 
 <p>
 <a href="https://docs.google.com/spreadsheets/d/1nznYCXFJHmlCn2XqmMlFy1p4UYlOdKCEIdbaCKSYFu4/template/preview" target="_blank">
-Open ItemShare Template Spreadsheet
+Google Sheet Template
 </a>
 </p>
 
 <p>
-Click <strong>Use Template</strong> to create your own copy with the required structure and workflow already configured.
+After opening the template, click <strong>Use Template</strong> and save a copy to your Google Drive.
 </p>
 
 <p>
-The addon package also includes a <code>SampleData</code> directory containing example SavedVariables files. These can be uploaded to the spreadsheet to see how the system works before using your own data.
+Then update sharing settings by going to:
+<strong>File → Share → Share with others</strong> and setting it to
+<strong>Anyone with the link</strong> with <strong>Editor</strong> access.
 </p>
+
+<p>
+Save the URL of your sheet. You can store it in-game using:
+<code>/itemshare sheet &lt;url&gt;</code>
+</p>
+
+<p>
+Sample data is included in the <code>SampleData</code> folder if you want to see how everything works.
+</p>
+
+</div>
+
+<div class="section">
+<h2>Notes</h2>
+<ul>
+<li>You must reload your UI to save data before exporting</li>
+<li>The addon does not upload data automatically</li>
+<li>All processing happens in Google Sheets</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>Known Issues</h2>
+<ul>
+<li>Marking items in a guild bank as shareable is currently disabled pending further testing</li>
+<li>If an item is marked as shared while in the Furnishing Vault and is later placed in a house, it will continue to show as shared. This behavior may change in a future update</li>
+</ul>
 </div>
 
 </body>

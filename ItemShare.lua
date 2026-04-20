@@ -29,26 +29,6 @@ local RefreshShareListWindowIfVisible
 local CanModifyGuildBankShare
 
 
-local function IsContextMenuCurrentlyHovered()
-    local control = moc and moc() or nil
-    while control do
-        if control == ZO_Menu then
-            return true
-        end
-        if control.GetName and control:GetName() == "ZO_Menu" then
-            return true
-        end
-        control = control.GetParent and control:GetParent() or nil
-    end
-    return false
-end
-
-
-local RemoveItemFromShareByKey
-local SaveSharedEntry
-local SaveSharedEntryFromSavedEntry
-
-
 
 ItemShare.ui = {
     listWindow = nil,
@@ -57,9 +37,7 @@ ItemShare.ui = {
     reloadButton = nil,
     sheetValueLabel = nil,
     sheetSendButton = nil,
-    rowControls = {},
-    activeContextMenuRow = nil,
-    pendingContextMenuRow = nil
+    rowControls = {}
 }
 
 local function SaveListWindowState()
@@ -502,59 +480,7 @@ local function GetOrCreateShareListRow(index)
         RefreshRowAppearance()
     end
 
-    local function cancelPendingRowContextMenuClose()
-        if EVENT_MANAGER then
-            EVENT_MANAGER:UnregisterForUpdate("ItemShareListWindowContextMenuClose")
-        end
-        if ItemShare.ui then
-            ItemShare.ui.pendingContextMenuRow = nil
-        end
-    end
-
-    local function hideRowContextMenu(force)
-        if not force and IsContextMenuCurrentlyHovered() then
-            return
-        end
-
-        cancelPendingRowContextMenuClose()
-        ClearMenu()
-        if ItemShare.ui then
-            ItemShare.ui.activeContextMenuRow = nil
-        end
-    end
-
-    local function scheduleDelayedRowContextMenuClose()
-        if not ItemShare.ui or ItemShare.ui.activeContextMenuRow ~= row then
-            return
-        end
-
-        cancelPendingRowContextMenuClose()
-        ItemShare.ui.pendingContextMenuRow = row
-
-        if EVENT_MANAGER then
-            EVENT_MANAGER:RegisterForUpdate("ItemShareListWindowContextMenuClose", 1000, function()
-                if not ItemShare.ui or ItemShare.ui.pendingContextMenuRow ~= row or ItemShare.ui.activeContextMenuRow ~= row then
-                    cancelPendingRowContextMenuClose()
-                    return
-                end
-
-                if row.IsMouseOver and row:IsMouseOver() then
-                    cancelPendingRowContextMenuClose()
-                    return
-                end
-
-                if IsContextMenuCurrentlyHovered() then
-                    return
-                end
-
-                hideRowContextMenu(true)
-            end)
-        end
-    end
-
     local function handleRowMouseEnter()
-        cancelPendingRowContextMenuClose()
-
         if ItemShare.ui and ItemShare.ui.hoveredRow and ItemShare.ui.hoveredRow ~= row then
             ItemShare.ui.hoveredRow.isMouseOver = false
             if ItemShare.ui.hoveredRow.RefreshAppearance then
@@ -567,21 +493,9 @@ local function GetOrCreateShareListRow(index)
             ItemShare.ui.hoveredRow = row
         end
         RefreshRowAppearance()
-
-        if ItemShare.ui and ItemShare.ui.activeContextMenuRow and ItemShare.ui.activeContextMenuRow ~= row then
-            hideRowContextMenu(true)
-        end
     end
 
-    local function showRowContextMenu(control)
-        cancelPendingRowContextMenuClose()
-
-        if ItemShare.ui and ItemShare.ui.activeContextMenuRow and ItemShare.ui.activeContextMenuRow ~= row then
-            hideRowContextMenu(true)
-        else
-            ClearMenu()
-        end
-
+    local function toggleRowSharedState()
         local isGuildBankEntry = row.entryData and tostring(row.entryData.locationKey or ""):find("guildbank", 1, true) == 1
         local guildIdForEntry = nil
         if isGuildBankEntry and row.entryData then
@@ -589,43 +503,45 @@ local function GetOrCreateShareListRow(index)
         end
         local canModifyGuildBankEntry = not isGuildBankEntry or CanModifyGuildBankShare(BAG_GUILDBANK, row.entryData and row.entryData.slotIndex, guildIdForEntry)
 
-        if row.isShared then
-            if canModifyGuildBankEntry then
-                AddCustomMenuItem("Remove from Shared List", function()
-                    local currentEntry = row.entryKey and ItemShare.savedVars.sharedItems[row.entryKey] or row.entryData
-                    RemoveItemFromShareByKey(row.entryKey, currentEntry, false)
-                    row.entryData = currentEntry or row.entryData
-                    row.isShared = false
-                    updateRowSharedVisuals()
-                end, MENU_ADD_OPTION_LABEL)
-            end
-        elseif row.entryData then
-            if canModifyGuildBankEntry then
-                AddCustomMenuItem("Add to Share", function()
-                    local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
-                    if savedEntry then
-                        row.entryData = savedEntry
-                        row.entryKey = tostring(savedEntry.itemKey or row.entryKey or "")
-                        row.isShared = true
-                        dmsg(string.format(
-                            "Added shared item %s from %s (stack size: %d)",
-                            tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
-                            tostring(savedEntry.sharedFrom or "-"),
-                            tonumber(savedEntry.count or 0) or 0
-                        ))
-                    else
-                        dmsg("Could not re-add item from shared list window.")
-                    end
-                    updateRowSharedVisuals()
-                end, MENU_ADD_OPTION_LABEL)
-            end
+        if not canModifyGuildBankEntry then
+            return
         end
 
-        if ItemShare.ui then
-            ItemShare.ui.activeContextMenuRow = row
+        if row.isShared then
+            local currentEntry = row.entryKey and ItemShare.savedVars.sharedItems[row.entryKey] or row.entryData
+            RemoveItemFromShareByKey(row.entryKey, currentEntry, false)
+            row.entryData = currentEntry or row.entryData
+            row.isShared = false
+            updateRowSharedVisuals()
+        elseif row.entryData then
+            local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
+            if savedEntry then
+                row.entryData = savedEntry
+                row.entryKey = tostring(savedEntry.itemKey or row.entryKey or "")
+                row.isShared = true
+                dmsg(string.format(
+                    "Added shared item %s from %s (stack size: %d)",
+                    tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
+                    tostring(savedEntry.sharedFrom or "-"),
+                    tonumber(savedEntry.count or 0) or 0
+                ))
+                updateRowSharedVisuals()
+            else
+                dmsg("Could not re-add item from shared list window.")
+            end
         end
-        ShowMenu(control)
     end
+
+    local function handleRowRightClick(button)
+        local rightButton = MOUSE_BUTTON_INDEX_RIGHT or 2
+        if button ~= rightButton then
+            return false
+        end
+
+        toggleRowSharedState()
+        return true
+    end
+
 
     statusIcon:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
@@ -635,21 +551,13 @@ local function GetOrCreateShareListRow(index)
 
     statusIcon:SetHandler("OnMouseExit", function()
         ClearTooltip(InformationTooltip)
-        scheduleDelayedRowContextMenuClose()
     end)
 
     itemLabel:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
-        local itemLink = row.itemLink
-        if itemLink and itemLink ~= "" then
-            InitializeTooltip(ItemTooltip, self, RIGHT, 0, 0, LEFT)
-            ItemTooltip:SetLink(itemLink)
-        end
     end)
 
     itemLabel:SetHandler("OnMouseExit", function()
-        ClearTooltip(ItemTooltip)
-        scheduleDelayedRowContextMenuClose()
     end)
 
     itemLabel:SetHandler("OnMouseUp", function(self, button, upInside)
@@ -657,17 +565,13 @@ local function GetOrCreateShareListRow(index)
             return
         end
 
-        local rightButton = MOUSE_BUTTON_INDEX_RIGHT or 2
-        if button == rightButton then
-            showRowContextMenu(self)
+        local didToggle = handleRowRightClick(button)
+        if didToggle then
             return
         end
 
-        if ItemShare.ui and ItemShare.ui.activeContextMenuRow == row then
-            hideRowContextMenu(true)
-        end
-
-        if row.itemLink and row.itemLink ~= "" then
+        local leftButton = MOUSE_BUTTON_INDEX_LEFT or 1
+        if button == leftButton and row.itemLink and row.itemLink ~= "" then
             ZO_LinkHandler_OnLinkClicked(row.itemLink, button, self)
         end
     end)
@@ -677,10 +581,7 @@ local function GetOrCreateShareListRow(index)
             return
         end
 
-        local rightButton = MOUSE_BUTTON_INDEX_RIGHT or 2
-        if button == rightButton then
-            showRowContextMenu(self)
-        end
+        handleRowRightClick(button)
     end)
 
     row:SetHandler("OnMouseEnter", function()
@@ -693,7 +594,14 @@ local function GetOrCreateShareListRow(index)
             ItemShare.ui.hoveredRow = nil
         end
         RefreshRowAppearance()
-        scheduleDelayedRowContextMenuClose()
+    end)
+
+    row:SetHandler("OnMouseUp", function(self, button, upInside)
+        if not upInside then
+            return
+        end
+
+        handleRowRightClick(button)
     end)
 
     row.itemLabel = itemLabel
@@ -722,7 +630,12 @@ RefreshShareListWindow = function()
         row.itemLink = tostring(entry.itemLink or "")
         row.entryKey = tostring(entry.itemKey or BuildSharedItemKey(entry.itemLink, entry.locationKey))
         row.entryData = entry
-        row.itemLabel:SetText(row.itemLink ~= "" and row.itemLink or tostring(entry.itemName or ""))
+        local displayText = row.itemLink ~= "" and row.itemLink or tostring(entry.itemName or "")
+        local traitText = tostring(entry.trait or "")
+        if traitText ~= "" then
+            displayText = string.format("%s (%s)", displayText, traitText)
+        end
+        row.itemLabel:SetText(displayText)
         row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
         row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
         row.isShared = true
@@ -850,7 +763,22 @@ CanModifyGuildBankShare = function(bagId, slotIndex, guildId)
         return false
     end
 
-    return CanUseBank(GUILD_PERMISSION_BANK_WITHDRAW)
+    if type(CanUseBank) == "function" and GUILD_PERMISSION_BANK_WITHDRAW ~= nil then
+        return CanUseBank(GUILD_PERMISSION_BANK_WITHDRAW)
+    end
+
+    local selectedGuildId = tonumber(guildId)
+    if (not selectedGuildId or selectedGuildId <= 0) and type(GetSelectedGuildBankId) == "function" then
+        selectedGuildId = tonumber(GetSelectedGuildBankId()) or 0
+    end
+
+    if selectedGuildId > 0
+        and type(DoesPlayerHaveGuildPermission) == "function"
+        and GUILD_PERMISSION_BANK_WITHDRAW ~= nil then
+        return DoesPlayerHaveGuildPermission(selectedGuildId, GUILD_PERMISSION_BANK_WITHDRAW) == true
+    end
+
+    return false
 end
 
 
@@ -1678,28 +1606,11 @@ local function OnSlashCommand(arg)
             ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
         ))
         RefreshShareListWindowIfVisible()
-    elseif string.match(lowerArg, "^sheet%s+") then
-        local url = rawArg:match("^sheet%s+(.+)$")
-        url = zo_strtrim(tostring(url or ""))
-        if url ~= "" then
-            SetStoredSpreadsheetUrl(url)
-            RefreshSpreadsheetControls()
-            d(string.format("[ItemShare] Spreadsheet link saved: %s", url))
-            OpenItemShareWindow()
-        else
-            local currentUrl = GetStoredSpreadsheetUrl()
-            if currentUrl ~= "" then
-                d(string.format("[ItemShare] Spreadsheet link: %s", currentUrl))
-                OpenItemShareWindow()
-            else
-                d("[ItemShare] No spreadsheet link is set. Use /itemshare sheet <url>")
-            end
-        end
-    elseif string.match(lowerArg, "^sheet%s+clear$") then
+    elseif lowerArg == "sheet clear" then
         SetStoredSpreadsheetUrl("")
         RefreshSpreadsheetControls()
         d("[ItemShare] Spreadsheet link cleared.")
-    
+        OpenItemShareWindow()
     elseif string.match(lowerArg, "^sheet%s+") then
         local url = rawArg:match("^sheet%s+(.+)$")
         url = zo_strtrim(tostring(url or ""))
