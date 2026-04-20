@@ -22,6 +22,7 @@ local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
+local CanModifyGuildBankShare
 
 
 local function IsContextMenuCurrentlyHovered()
@@ -226,8 +227,7 @@ local function CreateShareListWindow()
 
     local scroll = wm:CreateControlFromVirtual(nil, window, "ZO_ScrollContainer")
     scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 74)
-    scroll:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, -52)
-    scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
+        scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
     scroll:SetMouseEnabled(true)
 
     local content = scroll:GetNamedChild("ScrollChild")
@@ -523,9 +523,8 @@ RefreshShareListWindow = function()
         row.itemLabel:SetText(row.itemLink ~= "" and row.itemLink or tostring(entry.itemName or ""))
         row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
         row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
-        if row.UpdateSharedVisuals then
-            row:UpdateSharedVisuals()
-        end
+        row.isShared = true
+        row.statusIcon:SetHidden(false)
     end
 
     for index = #entries + 1, #ItemShare.ui.rowControls do
@@ -633,7 +632,7 @@ local function GetSelectedGuildBankLocationInfo()
     return "guildbank", "Guild Bank"
 end
 
-local function CanModifyGuildBankShare(bagId, slotIndex, guildId)
+CanModifyGuildBankShare = function(bagId, slotIndex, guildId)
     if not (BAG_GUILDBANK and bagId == BAG_GUILDBANK) then
         return true
     end
