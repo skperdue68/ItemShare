@@ -2,7 +2,7 @@ ItemShare = {}
 ItemShare.name = "ItemShare"
 ItemShare.savedVars = nil
 
-local SHARE_TEXTURE_PATH = "/ItemShare/media/itemshare_share.dds"
+local SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_share2.dds"
 local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
@@ -264,6 +264,12 @@ local function GetOrCreateShareListRow(index)
     row:SetDimensions(660, 22)
     row:SetMouseEnabled(true)
 
+    local rowBackdrop = wm:CreateControl(nil, row, CT_BACKDROP)
+    rowBackdrop:SetAnchorFill(row)
+    rowBackdrop:SetCenterColor(0, 0, 0, 0)
+    rowBackdrop:SetEdgeColor(0, 0, 0, 0)
+    rowBackdrop:SetMouseEnabled(false)
+
     local statusIcon = wm:CreateControl(nil, row, CT_TEXTURE)
     statusIcon:SetAnchor(LEFT, row, LEFT, 2, 0)
     statusIcon:SetDimensions(16, 16)
@@ -307,10 +313,50 @@ local function GetOrCreateShareListRow(index)
     end
     locationLabel:SetVerticalAlignment(TEXT_ALIGN_CENTER)
 
+    local function IsGuildBankEntryDisabled()
+        local isGuildBankEntry = row.entryData and tostring(row.entryData.locationKey or ""):find("guildbank", 1, true) == 1
+        if not isGuildBankEntry then
+            return false
+        end
+
+        local guildIdForEntry = nil
+        if row.entryData then
+            guildIdForEntry = tonumber(string.match(tostring(row.entryData.locationKey or ""), "^guildbank:(%d+)$"))
+        end
+
+        return not CanModifyGuildBankShare(BAG_GUILDBANK, row.entryData and row.entryData.slotIndex, guildIdForEntry)
+    end
+
+    local function RefreshRowAppearance()
+        local isDisabled = IsGuildBankEntryDisabled()
+        local isActive = row.isMouseOver and true or false
+
+        if isActive then
+            rowBackdrop:SetCenterColor(0.85, 0.72, 0.35, 0.14)
+        elseif (tonumber(row.rowIndex or 0) % 2) == 0 then
+            rowBackdrop:SetCenterColor(1, 1, 1, 0.05)
+        else
+            rowBackdrop:SetCenterColor(0, 0, 0, 0)
+        end
+
+        if isDisabled then
+            itemLabel:SetColor(0.55, 0.55, 0.55, 1)
+            countLabel:SetColor(0.55, 0.55, 0.55, 1)
+            locationLabel:SetColor(0.55, 0.55, 0.55, 1)
+            statusIcon:SetAlpha(0.35)
+        else
+            itemLabel:SetColor(1, 1, 1, 1)
+            countLabel:SetColor(1, 1, 1, 1)
+            locationLabel:SetColor(1, 1, 1, 1)
+            statusIcon:SetAlpha(1)
+        end
+    end
+
     local function updateRowSharedVisuals()
         local isShared = row.entryKey and ItemShare.savedVars and ItemShare.savedVars.sharedItems and ItemShare.savedVars.sharedItems[row.entryKey] ~= nil
         row.isShared = isShared and true or false
         statusIcon:SetHidden(not row.isShared)
+        RefreshRowAppearance()
     end
 
     local function cancelPendingRowContextMenuClose()
@@ -369,6 +415,19 @@ local function GetOrCreateShareListRow(index)
 
     local function handleRowMouseEnter()
         cancelPendingRowContextMenuClose()
+
+        if ItemShare.ui and ItemShare.ui.hoveredRow and ItemShare.ui.hoveredRow ~= row then
+            ItemShare.ui.hoveredRow.isMouseOver = false
+            if ItemShare.ui.hoveredRow.RefreshAppearance then
+                ItemShare.ui.hoveredRow:RefreshAppearance()
+            end
+        end
+
+        row.isMouseOver = true
+        if ItemShare.ui then
+            ItemShare.ui.hoveredRow = row
+        end
+        RefreshRowAppearance()
 
         if ItemShare.ui and ItemShare.ui.activeContextMenuRow and ItemShare.ui.activeContextMenuRow ~= row then
             hideRowContextMenu(true)
@@ -494,6 +553,11 @@ local function GetOrCreateShareListRow(index)
     end)
 
     row:SetHandler("OnMouseExit", function()
+        row.isMouseOver = false
+        if ItemShare.ui and ItemShare.ui.hoveredRow == row then
+            ItemShare.ui.hoveredRow = nil
+        end
+        RefreshRowAppearance()
         scheduleDelayedRowContextMenuClose()
     end)
 
@@ -501,7 +565,9 @@ local function GetOrCreateShareListRow(index)
     row.countLabel = countLabel
     row.locationLabel = locationLabel
     row.statusIcon = statusIcon
+    row.rowBackdrop = rowBackdrop
     row.UpdateSharedVisuals = updateRowSharedVisuals
+    row.RefreshAppearance = RefreshRowAppearance
     ItemShare.ui.rowControls[index] = row
     return row
 end
@@ -517,6 +583,7 @@ RefreshShareListWindow = function()
         row:SetAnchor(TOPLEFT, ItemShare.ui.listContent, TOPLEFT, 0, (index - 1) * rowHeight)
         row:SetDimensions(contentWidth - 8, rowHeight)
         row:SetHidden(false)
+        row.rowIndex = index
         row.itemLink = tostring(entry.itemLink or "")
         row.entryKey = tostring(entry.itemKey or BuildSharedItemKey(entry.itemLink, entry.locationKey))
         row.entryData = entry
@@ -525,6 +592,9 @@ RefreshShareListWindow = function()
         row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
         row.isShared = true
         row.statusIcon:SetHidden(false)
+        if row.RefreshAppearance then
+            row:RefreshAppearance()
+        end
     end
 
     for index = #entries + 1, #ItemShare.ui.rowControls do
@@ -1474,7 +1544,9 @@ local function OnSlashCommand(arg)
         ItemShare.savedVars.debugEnabled = not not ItemShare.savedVars.debugEnabled and false or true
         d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
     elseif arg == "guildbank" then
-        ItemShare.savedVars.guildBankSharingEnabled = not not ItemShare.savedVars.guildBankSharingEnabled and false or true
+        local current = ItemShare.savedVars.guildBankSharingEnabled == true
+        ItemShare.savedVars.guildBankSharingEnabled = not current
+
         d(string.format(
             "[ItemShare] Guild bank sharing %s.",
             ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
