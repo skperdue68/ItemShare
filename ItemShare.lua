@@ -1,5 +1,8 @@
-ItemShare = {}
+local ItemShare = {}
 ItemShare.name = "ItemShare"
+local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
+local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
+
 ItemShare.savedVars = nil
 
 local SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_share2.dds"
@@ -27,21 +30,16 @@ local CanModifyGuildBankShare
 
 
 local function IsContextMenuCurrentlyHovered()
-    if not GuiRoot or not GuiRoot.GetChild then
-        return false
-    end
-
-    local childCount = GuiRoot:GetNumChildren() or 0
-    for i = 1, childCount do
-        local child = GuiRoot:GetChild(i)
-        if child and child.IsMouseOver and child:IsMouseOver() then
-            local childName = child.GetName and child:GetName() or ""
-            if type(childName) == "string" and string.find(childName, "ZO_Menu", 1, true) then
-                return true
-            end
+    local control = moc and moc() or nil
+    while control do
+        if control == ZO_Menu then
+            return true
         end
+        if control.GetName and control:GetName() == "ZO_Menu" then
+            return true
+        end
+        control = control.GetParent and control:GetParent() or nil
     end
-
     return false
 end
 
@@ -519,11 +517,7 @@ local function GetOrCreateShareListRow(index)
         end
 
         cancelPendingRowContextMenuClose()
-        if ClearMenu then
-            ClearMenu()
-        elseif HideMenu then
-            HideMenu()
-        end
+        ClearMenu()
         if ItemShare.ui then
             ItemShare.ui.activeContextMenuRow = nil
         end
@@ -585,11 +579,7 @@ local function GetOrCreateShareListRow(index)
         if ItemShare.ui and ItemShare.ui.activeContextMenuRow and ItemShare.ui.activeContextMenuRow ~= row then
             hideRowContextMenu(true)
         else
-            if ClearMenu then
-                ClearMenu()
-            elseif HideMenu then
-                HideMenu()
-            end
+            ClearMenu()
         end
 
         local isGuildBankEntry = row.entryData and tostring(row.entryData.locationKey or ""):find("guildbank", 1, true) == 1
@@ -826,6 +816,10 @@ local function GetCurrentCharacterName()
     return GetNormalizedText(GetUnitName("player")) or "Unknown"
 end
 
+local function GetCurrentDisplayName()
+    return CURRENT_DISPLAY_NAME
+end
+
 
 local function GetSelectedGuildBankLocationInfo()
     local guildId = 0
@@ -856,24 +850,7 @@ CanModifyGuildBankShare = function(bagId, slotIndex, guildId)
         return false
     end
 
-    if CanUseBank and GUILD_PERMISSION_BANK_WITHDRAW then
-        return CanUseBank(GUILD_PERMISSION_BANK_WITHDRAW) and true or false
-    end
-
-    local selectedGuildId = tonumber(guildId) or 0
-    if selectedGuildId <= 0 and GetSelectedGuildBankId then
-        selectedGuildId = tonumber(GetSelectedGuildBankId()) or 0
-    end
-
-    if selectedGuildId <= 0 then
-        return false
-    end
-
-    if DoesPlayerHaveGuildPermission and GUILD_PERMISSION_BANK_WITHDRAW then
-        return DoesPlayerHaveGuildPermission(selectedGuildId, GUILD_PERMISSION_BANK_WITHDRAW) and true or false
-    end
-
-    return false
+    return CanUseBank(GUILD_PERMISSION_BANK_WITHDRAW)
 end
 
 
@@ -1175,10 +1152,11 @@ local function EnsureShareMarker(control)
     local icon = control.GetNamedChild and control:GetNamedChild("Icon") or nil
     local nameLabel = control.GetNamedChild and control:GetNamedChild("Name") or nil
 
-    if icon and icon.GetRight then
-        marker:SetAnchor(LEFT, icon, RIGHT, 2, 0)
-    elseif nameLabel and nameLabel.GetLeft then
-        marker:SetAnchor(LEFT, nameLabel, LEFT, -20, 0)
+    if icon then
+        marker:ClearAnchors()
+        marker:SetAnchor(RIGHT, icon, LEFT, -4, 0)
+        marker:SetDrawLayer(icon:GetDrawLayer())
+        marker:SetDrawTier(icon:GetDrawTier() + 1)
     else
         marker:SetAnchor(TOPLEFT, control, TOPLEFT, 2, 2)
     end
