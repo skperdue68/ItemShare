@@ -70,6 +70,7 @@ making item sharing and requesting simple and organized.
 <li>Tracks item count and location</li>
 <li>Provides a dedicated <strong>Shared Items</strong> window</li>
 <li>Saves data for export to Google Sheets</li>
+<li>Supports sharing a spreadsheet link directly from the addon UI</li>
 </ul>
 </div>
 
@@ -85,15 +86,38 @@ making item sharing and requesting simple and organized.
 <h2>Commands</h2>
 <table>
 <tr><th>Command</th><th>Description</th></tr>
-<tr><td><code>/itemshare</code></td><td>Displays help menu</td></tr>
-<tr><td><code>/itemshare list</code></td><td>Opens or closes the shared items window</td></tr>
-<tr><td><code>/itemshare reset</code></td><td>Clears all shared items</td></tr>
-<tr><td><code>/itemshare sync</code></td><td>Synchronizes shared items with inventory</td></tr>
-<tr><td><code>/itemshare save</code></td><td>Reloads UI to save data</td></tr>
-<tr><td><code>/itemshare debug</code></td><td>Toggles debug output</td></tr>
+<tr><td><code>/itemshare</code></td><td>Shows command help (debug output).</td></tr>
+<tr><td><code>/itemshare list</code></td><td>Opens or closes the Shared Items window.</td></tr>
+<tr><td><code>/itemshare reset</code></td><td>Clears all saved shared entries.</td></tr>
+<tr><td><code>/itemshare sync</code></td><td>Reconciles saved entries with items you still own and updates counts and locations.</td></tr>
+<tr><td><code>/itemshare save</code></td><td>Prompts to reload the UI so saved variable data is written out.</td></tr>
+<tr><td><code>/itemshare debug</code></td><td>Toggles debug messages on or off.</td></tr>
+<tr><td><code>/itemshare guildbank</code></td><td>Toggles guild bank sharing functionality (currently disabled while under development).</td></tr>
+<tr><td><code>/itemshare sheet</code></td><td>Displays the currently configured spreadsheet URL. If a URL is provided, it will be saved.</td></tr>
+<tr><td><code>/itemshare sheet &lt;url&gt;</code></td><td>Sets or updates the spreadsheet URL used for sharing.</td></tr>
+<tr><td><code>/itemshare sheet clear</code></td><td>Clears the stored spreadsheet URL.</td></tr>
+<tr><td><code>/itemshare sharelink</code></td><td>Places the configured spreadsheet URL into the chat input for easy sharing.</td></tr>
 </table>
 
 <p><strong>Alias:</strong> <code>/ishare</code></p>
+</div>
+
+<div class="section">
+<h2>Spreadsheet Link Integration</h2>
+
+<p>
+ItemShare allows you to store a reference to your Google Sheets document directly in-game.
+This makes it easier to share access to your item list with others.
+</p>
+
+<ul>
+<li>You can store your spreadsheet URL using <code>/itemshare sheet &lt;url&gt;</code></li>
+<li>The URL will be displayed at the top of the Shared Items window</li>
+<li>A button in the window allows you to send the URL to chat</li>
+<li><code>/itemshare sharelink</code> will prefill the chat box with the URL for easy sharing</li>
+</ul>
+
+<p><strong>Note:</strong> The spreadsheet link is provided as plain text. ESO does not support opening external web links directly from the game client.</p>
 </div>
 
 <div class="section">

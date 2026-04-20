@@ -9,6 +9,7 @@ local defaults = {
     sharedItems = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
+    spreadsheetUrl = "",
     listWindowState = {
         left = nil,
         top = nil,
@@ -56,6 +57,8 @@ ItemShare.ui = {
     listScroll = nil,
     listContent = nil,
     reloadButton = nil,
+    sheetValueLabel = nil,
+    sheetSendButton = nil,
     rowControls = {},
     activeContextMenuRow = nil,
     pendingContextMenuRow = nil
@@ -129,6 +132,104 @@ local function GetSortedSharedEntries()
     return entries
 end
 
+
+local ITEM_SHARE_CHAT_LINK_TYPE = "itemshare"
+local ITEM_SHARE_CHAT_LINK_TOKEN = "sheet"
+
+local function GetStoredSpreadsheetUrl()
+    if not ItemShare.savedVars then
+        return ""
+    end
+
+    local url = tostring(ItemShare.savedVars.spreadsheetUrl or "")
+    url = zo_strtrim(url)
+    if url == "" then
+        return ""
+    end
+
+    return url
+end
+
+local function SetStoredSpreadsheetUrl(url)
+    if not ItemShare.savedVars then
+        return
+    end
+
+    ItemShare.savedVars.spreadsheetUrl = zo_strtrim(tostring(url or ""))
+end
+
+local function BuildSpreadsheetChatLink()
+    return GetStoredSpreadsheetUrl()
+end
+
+local function BuildSpreadsheetChatMessage()
+    local url = GetStoredSpreadsheetUrl()
+    if url == "" then
+        return nil
+    end
+
+    return string.format("ItemShare Sheet: %s", url)
+end
+
+local function OpenItemShareWindow()
+    RefreshShareListWindow()
+end
+
+local function QueueSpreadsheetChatMessage()
+    local message = BuildSpreadsheetChatMessage()
+    if not message then
+        d("[ItemShare] No spreadsheet link is set. Use /itemshare sheet <url>")
+        return
+    end
+
+    if StartChatInput then
+        StartChatInput(message)
+    else
+        d(message)
+    end
+end
+
+local function QueueSpreadsheetUrlToChat()
+    local url = GetStoredSpreadsheetUrl()
+    if url == "" then
+        d("[ItemShare] No spreadsheet link is set. Use /itemshare sheet <url>")
+        return
+    end
+
+    if StartChatInput then
+        StartChatInput(url)
+    else
+        d(url)
+    end
+end
+
+local function RefreshSpreadsheetControls()
+    local label = ItemShare.ui and ItemShare.ui.sheetValueLabel
+    local button = ItemShare.ui and ItemShare.ui.sheetSendButton
+    local url = GetStoredSpreadsheetUrl()
+
+    if label then
+        if url ~= "" then
+            label:SetText(url)
+            label:SetColor(0.82, 0.76, 0.55, 1)
+        else
+            label:SetText("No spreadsheet link set. Use /itemshare sheet <url>")
+            label:SetColor(0.65, 0.65, 0.65, 1)
+        end
+    end
+
+    if button then
+        if button.SetEnabled then
+            button:SetEnabled(url ~= "")
+        end
+        button:SetAlpha(url ~= "" and 1 or 0.45)
+    end
+end
+
+local function InstallItemShareLinkHandler()
+    return
+end
+
 local function CreateShareListWindow()
     if ItemShare.ui.listWindow then
         return ItemShare.ui.listWindow
@@ -177,9 +278,50 @@ local function CreateShareListWindow()
         SaveListWindowState()
     end)
 
+    local sheetHeader = wm:CreateControl(nil, window, CT_LABEL)
+    sheetHeader:SetFont("ZoFontGameSmall")
+    sheetHeader:SetColor(1, 1, 1, 1)
+    sheetHeader:SetText("Spreadsheet")
+    sheetHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 18, 44)
+
+    local sheetValueLabel = wm:CreateControl(nil, window, CT_LABEL)
+    sheetValueLabel:SetFont("ZoFontGame")
+    sheetValueLabel:SetAnchor(TOPLEFT, window, TOPLEFT, 18, 62)
+    sheetValueLabel:SetAnchor(TOPRIGHT, window, TOPRIGHT, -150, 62)
+    sheetValueLabel:SetHeight(18)
+    sheetValueLabel:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
+    if sheetValueLabel.SetMaxLineCount then
+        sheetValueLabel:SetMaxLineCount(1)
+    end
+    sheetValueLabel:SetMouseEnabled(true)
+    sheetValueLabel:SetHandler("OnMouseUp", function(_, button, upInside)
+        if not upInside then
+            return
+        end
+
+        local leftButton = MOUSE_BUTTON_INDEX_LEFT or 1
+        if button == leftButton then
+            QueueSpreadsheetUrlToChat()
+        end
+    end)
+
+    local sheetSendButton = wm:CreateControl(nil, window, CT_BUTTON)
+    sheetSendButton:SetDimensions(120, 28)
+    sheetSendButton:SetAnchor(TOPRIGHT, window, TOPRIGHT, -18, 56)
+    sheetSendButton:SetFont("ZoFontGameSmall")
+    sheetSendButton:SetText("Send URL")
+    sheetSendButton:SetNormalTexture("/esoui/art/buttons/accept_up.dds")
+    sheetSendButton:SetPressedTexture("/esoui/art/buttons/accept_down.dds")
+    sheetSendButton:SetMouseOverTexture("/esoui/art/buttons/accept_over.dds")
+    sheetSendButton:SetDisabledTexture("/esoui/art/buttons/accept_disabled.dds")
+    sheetSendButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
+    sheetSendButton:SetHandler("OnClicked", function()
+        QueueSpreadsheetChatMessage()
+    end)
+
     local divider = wm:CreateControl(nil, window, CT_BACKDROP)
-    divider:SetAnchor(TOPLEFT, window, TOPLEFT, 12, 48)
-    divider:SetAnchor(TOPRIGHT, window, TOPRIGHT, -12, 48)
+    divider:SetAnchor(TOPLEFT, window, TOPLEFT, 12, 90)
+    divider:SetAnchor(TOPRIGHT, window, TOPRIGHT, -12, 90)
     divider:SetHeight(1)
     divider:SetCenterColor(0.6, 0.6, 0.6, 1)
     divider:SetEdgeColor(0.6, 0.6, 0.6, 1)
@@ -188,20 +330,20 @@ local function CreateShareListWindow()
     shareHeader:SetFont("ZoFontGameSmall")
     shareHeader:SetColor(1, 1, 1, 1)
     shareHeader:SetText("")
-    shareHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 20, 54)
+    shareHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 20, 96)
     shareHeader:SetDimensions(20, 20)
 
     local itemHeader = wm:CreateControl(nil, window, CT_LABEL)
     itemHeader:SetFont("ZoFontGameSmall")
     itemHeader:SetColor(1, 1, 1, 1)
     itemHeader:SetText("Item")
-    itemHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 44, 54)
+    itemHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 44, 96)
 
     local countHeader = wm:CreateControl(nil, window, CT_LABEL)
     countHeader:SetFont("ZoFontGameSmall")
     countHeader:SetColor(1, 1, 1, 1)
     countHeader:SetText("Count")
-    countHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 390, 54)
+    countHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 390, 96)
     countHeader:SetWidth(50)
     countHeader:SetHorizontalAlignment(TEXT_ALIGN_RIGHT)
 
@@ -209,7 +351,7 @@ local function CreateShareListWindow()
     locationHeader:SetFont("ZoFontGameSmall")
     locationHeader:SetColor(1, 1, 1, 1)
     locationHeader:SetText("Location")
-    locationHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 460, 54)
+    locationHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 460, 96)
 
     local reloadButton = wm:CreateControl(nil, window, CT_BUTTON)
     reloadButton:SetDimensions(200, 36)
@@ -226,8 +368,8 @@ local function CreateShareListWindow()
     end)
 
     local scroll = wm:CreateControlFromVirtual(nil, window, "ZO_ScrollContainer")
-    scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 74)
-        scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
+    scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 116)
+    scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
     scroll:SetMouseEnabled(true)
 
     local content = scroll:GetNamedChild("ScrollChild")
@@ -249,6 +391,9 @@ local function CreateShareListWindow()
     ItemShare.ui.listScroll = scroll
     ItemShare.ui.listContent = content
     ItemShare.ui.reloadButton = reloadButton
+    ItemShare.ui.sheetValueLabel = sheetValueLabel
+    ItemShare.ui.sheetSendButton = sheetSendButton
+    RefreshSpreadsheetControls()
     return window
 end
 
@@ -1516,17 +1661,20 @@ local function SyncSharedItemsWithInventory()
 end
 
 local function OnSlashCommand(arg)
-    arg = zo_strtrim(zo_strlower(arg or ""))
+    local rawArg = zo_strtrim(arg or "")
+    local lowerArg = zo_strlower(rawArg)
 
-    if arg == "" then
+    if lowerArg == "" then
         dmsg("Commands:")
-        dmsg("/itemshare list    - Open the shared items window")
-        dmsg("/itemshare reset   - Clear all shared entries")
-        dmsg("/itemshare sync    - Update counts and remove items no longer owned")
-        dmsg("/itemshare save    - Reload the UI")
-        dmsg("/itemshare debug   - Toggle debug messages on or off")
-        dmsg("                 - Furnishings also check furnishing vault and placed furniture")
-    elseif arg == "list" then
+        dmsg("/itemshare list      - Open the shared items window")
+        dmsg("/itemshare reset     - Clear all shared entries")
+        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
+        dmsg("/itemshare save      - Reload the UI")
+        dmsg("/itemshare debug     - Toggle debug messages on or off")
+        dmsg("/itemshare sheet     - Show the saved spreadsheet link")
+        dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("                   - Furnishings also check furnishing vault and placed furniture")
+    elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
         if window and not window:IsHidden() then
             window:SetHidden(true)
@@ -1534,16 +1682,16 @@ local function OnSlashCommand(arg)
         else
             PrintSharedItems()
         end
-    elseif arg == "clear" or arg == "reset" then
+    elseif lowerArg == "clear" or lowerArg == "reset" then
         ResetSharedItems()
-    elseif arg == "sync" or arg == "cleanup" or arg == "reconcile" then
+    elseif lowerArg == "sync" or lowerArg == "cleanup" or lowerArg == "reconcile" then
         SyncSharedItemsWithInventory()
-    elseif arg == "save" then
+    elseif lowerArg == "save" then
         ConfirmReloadUI()
-    elseif arg == "debug" then
+    elseif lowerArg == "debug" then
         ItemShare.savedVars.debugEnabled = not not ItemShare.savedVars.debugEnabled and false or true
         d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
-    elseif arg == "guildbank" then
+    elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
 
@@ -1551,13 +1699,57 @@ local function OnSlashCommand(arg)
             "[ItemShare] Guild bank sharing %s.",
             ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
         ))
+        RefreshShareListWindowIfVisible()
+    elseif string.match(lowerArg, "^sheet%s+") then
+        local url = rawArg:match("^sheet%s+(.+)$")
+        url = zo_strtrim(tostring(url or ""))
+        if url ~= "" then
+            SetStoredSpreadsheetUrl(url)
+            RefreshSpreadsheetControls()
+            d(string.format("[ItemShare] Spreadsheet link saved: %s", url))
+            OpenItemShareWindow()
+        else
+            local currentUrl = GetStoredSpreadsheetUrl()
+            if currentUrl ~= "" then
+                d(string.format("[ItemShare] Spreadsheet link: %s", currentUrl))
+                OpenItemShareWindow()
+            else
+                d("[ItemShare] No spreadsheet link is set. Use /itemshare sheet <url>")
+            end
+        end
+    elseif string.match(lowerArg, "^sheet%s+clear$") then
+        SetStoredSpreadsheetUrl("")
+        RefreshSpreadsheetControls()
+        d("[ItemShare] Spreadsheet link cleared.")
+    
+    elseif string.match(lowerArg, "^sheet%s+") then
+        local url = rawArg:match("^sheet%s+(.+)$")
+        url = zo_strtrim(tostring(url or ""))
+        if url == "" then
+            local currentUrl = GetStoredSpreadsheetUrl()
+            if currentUrl ~= "" then
+                d(string.format("[ItemShare] Spreadsheet link: %s", currentUrl))
+                OpenItemShareWindow()
+            else
+                d("[ItemShare] No spreadsheet link is set. Use /itemshare sheet <url>")
+            end
+        else
+            SetStoredSpreadsheetUrl(url)
+            RefreshSpreadsheetControls()
+            d(string.format("[ItemShare] Spreadsheet link saved: %s", url))
+            OpenItemShareWindow()
+        end
+    elseif lowerArg == "sharelink" then
+        QueueSpreadsheetChatMessage()
     else
         dmsg("Commands:")
-        dmsg("/itemshare list    - Open the shared items window")
-        dmsg("/itemshare reset   - Clear all shared entries")
-        dmsg("/itemshare sync    - Update counts and remove items no longer owned")
-        dmsg("/itemshare save    - Reload the UI")
-        dmsg("                 - Furnishings also check furnishing vault and placed furniture")
+        dmsg("/itemshare list      - Open the shared items window")
+        dmsg("/itemshare reset     - Clear all shared entries")
+        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
+        dmsg("/itemshare save      - Reload the UI")
+        dmsg("/itemshare sheet     - Show the saved spreadsheet link")
+        dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
 end
 
@@ -1575,6 +1767,7 @@ local function OnAddonLoaded(event, addonName)
         defaults
     )
 
+    InstallItemShareLinkHandler()
     RegisterContextMenus()
     HookInventoryRowCallbacks()
     if zo_callLater then
