@@ -8,6 +8,7 @@ local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 local defaults = {
     sharedItems = {},
     debugEnabled = false,
+    guildBankSharingEnabled = false,
     listWindowState = {
         left = nil,
         top = nil,
@@ -225,6 +226,7 @@ local function CreateShareListWindow()
 
     local scroll = wm:CreateControlFromVirtual(nil, window, "ZO_ScrollContainer")
     scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 74)
+    scroll:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, -52)
     scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
     scroll:SetMouseEnabled(true)
 
@@ -634,6 +636,10 @@ end
 local function CanModifyGuildBankShare(bagId, slotIndex, guildId)
     if not (BAG_GUILDBANK and bagId == BAG_GUILDBANK) then
         return true
+    end
+
+    if not (ItemShare.savedVars and ItemShare.savedVars.guildBankSharingEnabled) then
+        return false
     end
 
     if CanUseBank and GUILD_PERMISSION_BANK_WITHDRAW then
@@ -1468,6 +1474,12 @@ local function OnSlashCommand(arg)
     elseif arg == "debug" then
         ItemShare.savedVars.debugEnabled = not not ItemShare.savedVars.debugEnabled and false or true
         d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
+    elseif arg == "guildbank" then
+        ItemShare.savedVars.guildBankSharingEnabled = not not ItemShare.savedVars.guildBankSharingEnabled and false or true
+        d(string.format(
+            "[ItemShare] Guild bank sharing %s.",
+            ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
+        ))
     else
         dmsg("Commands:")
         dmsg("/itemshare list    - Open the shared items window")
