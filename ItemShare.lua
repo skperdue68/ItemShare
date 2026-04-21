@@ -329,6 +329,15 @@ local function CreateShareListWindow()
     locationHeader:SetText("Location")
     locationHeader:SetAnchor(TOPLEFT, window, TOPLEFT, 460, 96)
 
+    local instructionLabel = wm:CreateControl(nil, window, CT_LABEL)
+    instructionLabel:SetFont("ZoFontGameSmall")
+    instructionLabel:SetColor(0.85, 0.85, 0.85, 1)
+    instructionLabel:SetText("Right Click a row to Enable / Disable Sharing from this window")
+    instructionLabel:SetHorizontalAlignment(TEXT_ALIGN_CENTER)
+    instructionLabel:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, -48)
+    instructionLabel:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -48)
+    instructionLabel:SetHeight(20)
+
     local reloadButton = wm:CreateControl(nil, window, CT_BUTTON)
     reloadButton:SetDimensions(200, 36)
     reloadButton:SetAnchor(BOTTOM, window, BOTTOM, 0, -12)
@@ -340,12 +349,13 @@ local function CreateShareListWindow()
     reloadButton:SetDisabledTexture("/esoui/art/buttons/accept_disabled.dds")
     reloadButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
     reloadButton:SetHandler("OnClicked", function()
+        SyncSharedItemsWithInventory()
         ReloadUI()
     end)
 
     local scroll = wm:CreateControlFromVirtual(nil, window, "ZO_ScrollContainer")
     scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 116)
-    scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -52)
+    scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -72)
     scroll:SetMouseEnabled(true)
 
     local content = scroll:GetNamedChild("ScrollChild")
@@ -687,6 +697,7 @@ local function ConfirmReloadUI()
                 [1] = {
                     text = SI_DIALOG_ACCEPT,
                     callback = function()
+                        SyncSharedItemsWithInventory()
                         dmsg("Reloading UI.")
                         ReloadUI()
                     end,
@@ -1447,6 +1458,9 @@ local function BuildActualInventoryIndex()
                         countsByEntryKey[entryKey] = {
                             count = (countsByEntryKey[entryKey] and countsByEntryKey[entryKey].count or 0) + stackCount,
                             sharedFrom = locationLabel,
+                            locationKey = locationKey,
+                            trait = tostring(itemData.trait or ""),
+                            furnitureDataId = tonumber(itemData.furnitureDataId) or 0,
                         }
                         countsByLink[itemData.itemLink] = (countsByLink[itemData.itemLink] or 0) + stackCount
 
@@ -1498,6 +1512,44 @@ local function BuildActualInventoryIndex()
     }
 end
 
+local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
+    if not entry or not inventoryIndex then
+        return nil
+    end
+
+    local entryItemLink = tostring(entry.itemLink or "")
+    if entryItemLink == "" then
+        return nil
+    end
+
+    local entryTrait = tostring(entry.trait or "")
+    local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+
+    for entryKey, actualEntry in pairs(inventoryIndex.countsByEntryKey or {}) do
+        if entryKey ~= "" and entryKey ~= tostring(entry.itemKey or "") and type(actualEntry) == "table" then
+            local actualItemLink, actualLocationKey = string.match(entryKey, "^(.*)||([^|]*)$")
+            actualItemLink = tostring(actualItemLink or "")
+            actualLocationKey = tostring(actualLocationKey or "")
+
+            if actualItemLink == entryItemLink and actualLocationKey ~= "" and actualLocationKey ~= entryLocationKey then
+                local actualTrait = tostring(actualEntry.trait or "")
+                local traitMatches = (entryTrait == "" and actualTrait == "") or (entryTrait ~= "" and actualTrait == entryTrait)
+
+                if traitMatches then
+                    return {
+                        itemKey = entryKey,
+                        locationKey = actualLocationKey,
+                        sharedFrom = tostring(actualEntry.sharedFrom or entry.sharedFrom or "-"),
+                        count = tonumber(actualEntry.count or 0) or 0,
+                    }
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 local function SyncSharedItemsWithInventory()
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
@@ -1513,8 +1565,20 @@ local function SyncSharedItemsWithInventory()
         local actualByEntry = inventoryIndex.countsByEntryKey[itemKey]
         local actualCount = actualByEntry and (tonumber(actualByEntry.count or 0) or 0) or 0
         local currentLocation = actualByEntry and tostring(actualByEntry.sharedFrom or entry.sharedFrom or "-") or tostring(entry.sharedFrom or "-")
+        local currentLocationKey = actualByEntry and tostring(actualByEntry.locationKey or entry.locationKey or "") or tostring(entry.locationKey or "")
+        local currentItemKey = itemKey
         local isFurnishing = IsEntryFurnishing(entry)
         local furnitureDataId = tonumber(entry.furnitureDataId) or 0
+
+        if actualCount == 0 then
+            local alternateMatch = FindAlternateSharedEntryMatch(entry, inventoryIndex)
+            if alternateMatch then
+                actualCount = tonumber(alternateMatch.count or 0) or 0
+                currentLocation = tostring(alternateMatch.sharedFrom or currentLocation or "-")
+                currentLocationKey = tostring(alternateMatch.locationKey or currentLocationKey or "")
+                currentItemKey = tostring(alternateMatch.itemKey or currentItemKey or itemKey)
+            end
+        end
 
         if isFurnishing and actualCount == 0 then
             local extraCount = 0
@@ -1543,11 +1607,27 @@ local function SyncSharedItemsWithInventory()
         else
             local previousCount = tonumber(entry.count or 0) or 0
             local previousLocation = tostring(entry.sharedFrom or "")
+            local previousItemKey = tostring(entry.itemKey or itemKey)
+            local previousLocationKey = tostring(entry.locationKey or "")
+            local targetItemKey = tostring(currentItemKey or itemKey)
+
             entry.count = actualCount
             entry.sharedFrom = currentLocation
+            entry.locationKey = currentLocationKey
+            entry.itemKey = targetItemKey
             entry.lastDumpedAt = GetTimeStamp()
 
-            if previousCount ~= actualCount or previousLocation ~= currentLocation then
+            if targetItemKey ~= itemKey then
+                sharedItems[itemKey] = nil
+                sharedItems[targetItemKey] = entry
+            else
+                sharedItems[itemKey] = entry
+            end
+
+            if previousCount ~= actualCount
+                or previousLocation ~= currentLocation
+                or previousItemKey ~= targetItemKey
+                or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
                 dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
             else
@@ -1593,6 +1673,7 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "sync" or lowerArg == "cleanup" or lowerArg == "reconcile" then
         SyncSharedItemsWithInventory()
     elseif lowerArg == "save" then
+        SyncSharedItemsWithInventory()
         ConfirmReloadUI()
     elseif lowerArg == "debug" then
         ItemShare.savedVars.debugEnabled = not not ItemShare.savedVars.debugEnabled and false or true
