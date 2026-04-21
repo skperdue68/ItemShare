@@ -6,7 +6,7 @@ const BATCH_UPDATE_FLAG_KEY = 'ITEMSHARE_BATCH_UPDATING';
 const LAST_HIGHLIGHTED_ROW_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_ROW';
 const LAST_HIGHLIGHTED_SHEET_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_SHEET';
 
-const HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'Location', 'RequestedBy', 'SyncKey'];
+const HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'RequestedBy', 'Location', 'SyncKey'];
 const MASTER_HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'RequestedBy', 'Source Sheet', 'SyncKey'];
 
 const COL_NAME = 1;
@@ -15,8 +15,8 @@ const COL_QUALITY = 3;
 const COL_TRAIT = 4;
 const COL_DATE_ADDED = 5;
 const COL_COUNT = 6;
-const COL_LOCATION = 7;
-const COL_REQUESTED_BY = 8;
+const COL_REQUESTED_BY = 7;
+const COL_LOCATION = 8;
 const COL_SYNC_KEY = 9;
 
 const MASTER_COL_REQUESTED_BY = 7;
@@ -96,15 +96,17 @@ function processUploadedSavedVariables(fileText) {
     const updatedSheets = [];
 
     parsedAccounts.forEach(parsed => {
+      const groupedItems = aggregateImportedItems_(parsed.items);
       const sheet = getOrCreateAccountSheet_(parsed.accountName);
       initializeAccountSheet_(sheet);
 
       const existingRows = readExistingRows_(sheet, false);
-      const updates = mergeImportedRows_(existingRows, parsed.items);
+      const updates = mergeImportedRows_(existingRows, groupedItems);
       writeRows_(sheet, updates.rows, false);
       sortAccountSheet_(sheet);
+      autoSizeLocationColumn_(sheet);
 
-      totalImportedItems += parsed.items.length;
+      totalImportedItems += groupedItems.length;
       totalUpdatedRows += updates.updatedRows;
       totalInsertedRows += updates.insertedRows;
       totalRemovedRows += updates.removedRows || 0;
@@ -177,13 +179,24 @@ function sanitizeSheetName_(name) {
 
 function migrateLegacyAccountSheetLayout_(sheet) {
   const lastColumn = sheet.getLastColumn();
-  if (lastColumn < 8) return;
+  if (lastColumn < 9) return;
 
-  const headerValues = sheet.getRange(1, 1, 1, Math.min(lastColumn, 9)).getValues()[0].map(v => String(v || '').trim());
-  const hasLegacyLayout = headerValues[6] === 'RequestedBy' && headerValues[7] === 'SyncKey' && headerValues[8] !== 'SyncKey';
+  const headerValues = sheet.getRange(1, 1, 1, 9).getValues()[0].map(v => String(v || '').trim());
+  const hasOldLayout = headerValues[6] === 'Location' && headerValues[7] === 'RequestedBy' && headerValues[8] === 'SyncKey';
 
-  if (hasLegacyLayout) {
-    sheet.insertColumnAfter(COL_COUNT);
+  if (hasOldLayout) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      const range = sheet.getRange(2, 1, lastRow - 1, 9);
+      const values = range.getValues();
+      values.forEach(function(row) {
+        const location = row[6];
+        const requestedBy = row[7];
+        row[6] = requestedBy;
+        row[7] = location;
+      });
+      range.setValues(values);
+    }
   }
 }
 
@@ -206,10 +219,23 @@ function initializeAccountSheet_(sheet) {
   sheet.setColumnWidths(4, 1, 150);
   sheet.setColumnWidths(5, 1, 130);
   sheet.setColumnWidths(6, 1, 80);
-  sheet.setColumnWidths(7, 1, 180);
-  sheet.setColumnWidths(8, 1, 160);
+  autoSizeLocationColumn_(sheet);
+  sheet.setColumnWidths(8, 1, 180);
   safeHideColumn_(sheet, COL_SYNC_KEY);
   applyAlternatingRowColors_(sheet, false);
+}
+
+
+function autoSizeLocationColumn_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+  const values = sheet.getRange(1, COL_LOCATION, lastRow, 1).getDisplayValues();
+  let maxLen = 0;
+  values.forEach(function(row) {
+    const len = String((row && row[0]) || '').length;
+    if (len > maxLen) maxLen = len;
+  });
+  const width = Math.max(180, Math.min(700, Math.round(maxLen * 7 + 24)));
+  sheet.setColumnWidth(COL_LOCATION, width);
 }
 
 function initializeMasterSheet_(sheet) {
@@ -369,8 +395,8 @@ function readExistingRows_(sheet, isMaster) {
       trait: String(row[3] || '').trim(),
       dateAdded: row[4] instanceof Date ? row[4] : null,
       count: Number(row[5]) || 0,
-      location: isMaster ? '' : String(row[6] || '').trim(),
-      requestedBy: String(row[isMaster ? 6 : 7] || '').trim(),
+      requestedBy: String(row[6] || '').trim(),
+      location: isMaster ? '' : String(row[7] || '').trim(),
       sourceSheet: isMaster ? String(row[7] || '').trim() : sheet.getName(),
       syncKey: String(row[8] || '').trim()
     }));
@@ -485,6 +511,71 @@ function compareText_(a, b) {
   return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
 }
 
+function aggregateImportedItems_(items) {
+  const grouped = new Map();
+
+  (items || []).forEach(item => {
+    if (!item) return;
+
+    const syncKey = buildImportedSyncKey_(item);
+    const existing = grouped.get(syncKey);
+
+    if (!existing) {
+      const clone = Object.assign({}, item);
+      clone.count = Number(item.count) || 0;
+      clone._locationSet = new Set();
+
+      splitLocationList_(item.sharedFrom).forEach(location => clone._locationSet.add(location));
+      grouped.set(syncKey, clone);
+      return;
+    }
+
+    existing.count += Number(item.count) || 0;
+
+    splitLocationList_(item.sharedFrom).forEach(location => existing._locationSet.add(location));
+
+    const existingFirst = Number(existing.firstDumpedAt) || 0;
+    const incomingFirst = Number(item.firstDumpedAt) || 0;
+    if (!existingFirst || (incomingFirst && incomingFirst < existingFirst)) {
+      existing.firstDumpedAt = incomingFirst || existing.firstDumpedAt;
+    }
+
+    const existingLast = Number(existing.lastDumpedAt) || 0;
+    const incomingLast = Number(item.lastDumpedAt) || 0;
+    if (incomingLast > existingLast) {
+      existing.lastDumpedAt = incomingLast;
+    }
+  });
+
+  const results = Array.from(grouped.values()).map(item => {
+    item.sharedFrom = joinSortedLocations_(item._locationSet);
+    delete item._locationSet;
+    return item;
+  });
+
+  results.sort((a, b) => {
+    return compareText_(a.itemTypeName, b.itemTypeName) ||
+      compareText_(a.name, b.name) ||
+      compareText_(a.qualityName, b.qualityName) ||
+      compareText_(a.trait, b.trait);
+  });
+
+  return results;
+}
+
+function splitLocationList_(value) {
+  return String(value || '')
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+function joinSortedLocations_(locationSet) {
+  return Array.from(locationSet || [])
+    .sort((a, b) => compareText_(a, b))
+    .join(', ');
+}
+
 function writeRows_(sheet, rows, isMaster) {
   const headers = isMaster ? MASTER_HEADER_ROW : HEADER_ROW;
   const dataRowCount = Math.max(sheet.getLastRow() - 1, 0);
@@ -517,8 +608,8 @@ function writeRows_(sheet, rows, isMaster) {
     row.trait,
     row.dateAdded || '',
     row.count,
-    row.location || '',
     row.requestedBy || '',
+    row.location || '',
     row.syncKey || ''
   ]);
 
