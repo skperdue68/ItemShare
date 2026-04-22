@@ -479,7 +479,7 @@ function mergeImportedRows_(existingRows, importedItems) {
     if (existing) {
       updatedRows += 1;
       return {
-        name: item.name,
+        name: buildDisplayItemName_(item),
         itemType: item.itemTypeName,
         quality: item.qualityName,
         trait: item.trait,
@@ -550,6 +550,12 @@ function buildImportedSyncKey_(item) {
     return buildItemLinkSyncKey_(item.itemLink);
   }
   return buildLegacySyncKey_(item.name, item.itemTypeName, item.qualityName, item.trait);
+}
+
+function buildDisplayItemName_(item) {
+  const baseName = String((item && item.name) || '').trim();
+  const handedness = String((item && item.weaponHandedness) || '').trim();
+  return handedness ? `${handedness} ${baseName}` : baseName;
 }
 
 function compareText_(a, b) {
@@ -838,6 +844,7 @@ function parseDumpedItemEntry_(tableText) {
     qualityName: parseLuaStringField_(tableText, 'qualityName') || String(parseLuaNumberField_(tableText, 'quality') || ''),
     trait: parseLuaStringField_(tableText, 'trait') || '',
     weaponType: parseLuaStringField_(tableText, 'weaponType') || '',
+    weaponHandedness: parseLuaStringField_(tableText, 'weaponHandedness') || '',
     apparelWeight: parseLuaStringField_(tableText, 'apparelWeight') || '',
     apparelSlot: parseLuaStringField_(tableText, 'apparelSlot') || '',
     itemLink: parseLuaStringField_(tableText, 'itemLink') || '',
