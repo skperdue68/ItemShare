@@ -925,6 +925,50 @@ local function GetItemTraitInfo(bagId, slotIndex)
     return traitName, traitType
 end
 
+local function GetItemEquipTypeInfo(bagId, slotIndex)
+    local equipType = GetItemEquipType and GetItemEquipType(bagId, slotIndex) or nil
+    equipType = tonumber(equipType) or 0
+    if equipType == 0 or (EQUIP_TYPE_INVALID and equipType == EQUIP_TYPE_INVALID) then
+        return "", equipType
+    end
+
+    local equipTypeName = GetLocalizedStringByPrefix("SI_EQUIPTYPE", equipType, tostring(equipType))
+    return equipTypeName, equipType
+end
+
+local function GetItemArmorWeightInfo(bagId, slotIndex)
+    local armorType = GetItemArmorType and GetItemArmorType(bagId, slotIndex) or nil
+    armorType = tonumber(armorType) or 0
+    if armorType == 0 or (ARMORTYPE_NONE and armorType == ARMORTYPE_NONE) then
+        return "", armorType
+    end
+
+    local armorTypeName = GetLocalizedStringByPrefix("SI_ARMORTYPE", armorType, tostring(armorType))
+    return armorTypeName, armorType
+end
+
+local function GetItemWeaponTypeInfo(bagId, slotIndex)
+    local weaponType = GetItemWeaponType and GetItemWeaponType(bagId, slotIndex) or nil
+    weaponType = tonumber(weaponType) or 0
+    if weaponType == 0 or (WEAPONTYPE_NONE and weaponType == WEAPONTYPE_NONE) then
+        return "", weaponType
+    end
+
+    local weaponTypeName = GetLocalizedStringByPrefix("SI_WEAPONTYPE", weaponType, tostring(weaponType))
+    return weaponTypeName, weaponType
+end
+
+local function GetApparelInfo(bagId, slotIndex)
+    local apparelSlot, equipType = GetItemEquipTypeInfo(bagId, slotIndex)
+    local apparelWeight, armorType = GetItemArmorWeightInfo(bagId, slotIndex)
+
+    if apparelWeight == "" then
+        return "", 0, "", 0
+    end
+
+    return apparelSlot, equipType, apparelWeight, armorType
+end
+
 local function GetItemShareCount(bagId, slotIndex)
     local stackCount = GetSlotStackSize(bagId, slotIndex)
     if stackCount and stackCount > 0 then
@@ -970,6 +1014,8 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     local itemType, itemTypeName = GetItemTypeInfo(bagId, slotIndex)
     local quality, qualityName = GetItemQualityInfo(bagId, slotIndex)
     local traitName, traitType = GetItemTraitInfo(bagId, slotIndex)
+    local apparelSlot, equipType, apparelWeight, armorType = GetApparelInfo(bagId, slotIndex)
+    local weaponTypeName, weaponType = GetItemWeaponTypeInfo(bagId, slotIndex)
     local furnitureDataId = GetItemFurnitureDataIdSafe(bagId, slotIndex)
     local locationKey, sharedFrom = GetBagLocationInfo(bagId)
 
@@ -983,6 +1029,12 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         qualityName = qualityName,
         trait = traitName,
         traitType = traitType,
+        apparelSlot = apparelSlot,
+        equipType = equipType,
+        apparelWeight = apparelWeight,
+        armorType = armorType,
+        weaponType = weaponTypeName,
+        weaponTypeId = weaponType,
         furnitureDataId = furnitureDataId,
         bagId = bagId,
         slotIndex = slotIndex,
@@ -1231,6 +1283,12 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.qualityName = itemData.qualityName
     entry.trait = itemData.trait
     entry.traitType = itemData.traitType
+    entry.apparelSlot = itemData.apparelSlot
+    entry.equipType = itemData.equipType
+    entry.apparelWeight = itemData.apparelWeight
+    entry.armorType = itemData.armorType
+    entry.weaponType = itemData.weaponType
+    entry.weaponTypeId = itemData.weaponTypeId
     entry.furnitureDataId = itemData.furnitureDataId
     entry.bagId = itemData.bagId
     entry.slotIndex = itemData.slotIndex
@@ -1268,6 +1326,12 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         qualityName = entry.qualityName,
         trait = entry.trait,
         traitType = entry.traitType,
+        apparelSlot = entry.apparelSlot,
+        equipType = entry.equipType,
+        apparelWeight = entry.apparelWeight,
+        armorType = entry.armorType,
+        weaponType = entry.weaponType,
+        weaponTypeId = entry.weaponTypeId,
         furnitureDataId = entry.furnitureDataId,
         bagId = entry.bagId,
         slotIndex = entry.slotIndex,
