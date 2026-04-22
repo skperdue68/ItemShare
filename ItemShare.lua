@@ -1700,13 +1700,17 @@ SyncSharedItemsWithInventory = function()
         end
     end
 
-    dmsg(string.format(
+    local summary = string.format(
         "Sync complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
         updatedCount,
         removedCount,
         unchangedCount,
         furnishingProtectedCount
-    ))
+    )
+
+    d("[ItemShare] " .. summary)
+    d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    dmsg(summary)
     RefreshShareListWindowIfVisible()
 end
 
