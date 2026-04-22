@@ -28,6 +28,7 @@ local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
 local CanModifyGuildBankShare
 local SyncSharedItemsWithInventory
+local RebuildSharedItemsWithInventory
 
 
 
@@ -1525,6 +1526,9 @@ local function BuildActualInventoryIndex()
                             locationKey = locationKey,
                             trait = tostring(itemData.trait or ""),
                             furnitureDataId = tonumber(itemData.furnitureDataId) or 0,
+                            bagId = bagId,
+                            slotIndex = slotIndex,
+                            itemData = itemData,
                         }
                         countsByLink[itemData.itemLink] = (countsByLink[itemData.itemLink] or 0) + stackCount
 
@@ -1605,6 +1609,9 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
                         locationKey = actualLocationKey,
                         sharedFrom = tostring(actualEntry.sharedFrom or entry.sharedFrom or "-"),
                         count = tonumber(actualEntry.count or 0) or 0,
+                        bagId = actualEntry.bagId,
+                        slotIndex = actualEntry.slotIndex,
+                        itemData = actualEntry.itemData,
                     }
                 end
             end
@@ -1612,6 +1619,21 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     end
 
     return nil
+end
+
+local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    local summary = string.format(
+        "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
+        tostring(actionName or "Sync"),
+        updatedCount,
+        removedCount,
+        unchangedCount,
+        furnishingProtectedCount
+    )
+
+    d("[ItemShare] " .. summary)
+    d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    dmsg(summary)
 end
 
 SyncSharedItemsWithInventory = function()
@@ -1700,17 +1722,121 @@ SyncSharedItemsWithInventory = function()
         end
     end
 
-    local summary = string.format(
-        "Sync complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
-        updatedCount,
-        removedCount,
-        unchangedCount,
-        furnishingProtectedCount
-    )
+    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    RefreshShareListWindowIfVisible()
+end
 
-    d("[ItemShare] " .. summary)
-    d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
-    dmsg(summary)
+RebuildSharedItemsWithInventory = function()
+    local sharedItems = ItemShare.savedVars.sharedItems
+    local inventoryIndex = BuildActualInventoryIndex()
+    local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
+
+    local snapshot = {}
+    for itemKey, entry in pairs(sharedItems) do
+        snapshot[itemKey] = entry
+    end
+
+    for itemKey, entry in pairs(snapshot) do
+        local itemName = tostring(entry.itemName or "Unknown Item")
+        local actualByEntry = inventoryIndex.countsByEntryKey[itemKey]
+        local actualCount = actualByEntry and (tonumber(actualByEntry.count or 0) or 0) or 0
+        local currentLocation = actualByEntry and tostring(actualByEntry.sharedFrom or entry.sharedFrom or "-") or tostring(entry.sharedFrom or "-")
+        local currentLocationKey = actualByEntry and tostring(actualByEntry.locationKey or entry.locationKey or "") or tostring(entry.locationKey or "")
+        local currentItemKey = itemKey
+        local currentItemData = actualByEntry and actualByEntry.itemData or nil
+        local isFurnishing = IsEntryFurnishing(entry)
+        local furnitureDataId = tonumber(entry.furnitureDataId) or 0
+
+        if actualCount == 0 then
+            local alternateMatch = FindAlternateSharedEntryMatch(entry, inventoryIndex)
+            if alternateMatch then
+                actualCount = tonumber(alternateMatch.count or 0) or 0
+                currentLocation = tostring(alternateMatch.sharedFrom or currentLocation or "-")
+                currentLocationKey = tostring(alternateMatch.locationKey or currentLocationKey or "")
+                currentItemKey = tostring(alternateMatch.itemKey or currentItemKey or itemKey)
+                currentItemData = alternateMatch.itemData or currentItemData
+            end
+        end
+
+        if isFurnishing and actualCount == 0 then
+            local extraCount = 0
+            if furnitureDataId > 0 then
+                extraCount = (inventoryIndex.bagCountsByFurnitureDataId[furnitureDataId] or 0) + (inventoryIndex.placedCountsByFurnitureDataId[furnitureDataId] or 0)
+            else
+                extraCount = inventoryIndex.placedCountsByName[entry.itemName] or 0
+            end
+
+            if extraCount > 0 then
+                actualCount = extraCount
+                currentLocation = "Placed Furniture"
+            end
+        end
+
+        if actualCount <= 0 then
+            if isFurnishing then
+                furnishingProtectedCount = furnishingProtectedCount + 1
+                unchangedCount = unchangedCount + 1
+                dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+            else
+                sharedItems[itemKey] = nil
+                removedCount = removedCount + 1
+                dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+            end
+        else
+            local previousCount = tonumber(entry.count or 0) or 0
+            local previousLocation = tostring(entry.sharedFrom or "")
+            local previousItemKey = tostring(entry.itemKey or itemKey)
+            local previousLocationKey = tostring(entry.locationKey or "")
+            local previousApparelSlot = tostring(entry.apparelSlot or "")
+            local previousApparelWeight = tostring(entry.apparelWeight or "")
+            local previousWeaponType = tostring(entry.weaponType or "")
+            local targetItemKey = tostring(currentItemKey or itemKey)
+
+            local rebuiltEntry = nil
+            if currentItemData then
+                rebuiltEntry = SaveSharedEntry(currentItemData, actualCount, entry.firstDumpedAt or GetTimeStamp(), false)
+            end
+
+            if rebuiltEntry then
+                rebuiltEntry.sharedFrom = currentLocation
+                rebuiltEntry.locationKey = currentLocationKey
+                rebuiltEntry.itemKey = targetItemKey
+                rebuiltEntry.lastDumpedAt = GetTimeStamp()
+                sharedItems[targetItemKey] = rebuiltEntry
+                if targetItemKey ~= itemKey then
+                    sharedItems[itemKey] = nil
+                end
+                entry = rebuiltEntry
+            else
+                entry.count = actualCount
+                entry.sharedFrom = currentLocation
+                entry.locationKey = currentLocationKey
+                entry.itemKey = targetItemKey
+                entry.lastDumpedAt = GetTimeStamp()
+                if targetItemKey ~= itemKey then
+                    sharedItems[itemKey] = nil
+                    sharedItems[targetItemKey] = entry
+                else
+                    sharedItems[itemKey] = entry
+                end
+            end
+
+            if previousCount ~= (tonumber(entry.count or 0) or 0)
+                or previousLocation ~= tostring(entry.sharedFrom or "")
+                or previousItemKey ~= tostring(entry.itemKey or "")
+                or previousLocationKey ~= tostring(entry.locationKey or "")
+                or previousApparelSlot ~= tostring(entry.apparelSlot or "")
+                or previousApparelWeight ~= tostring(entry.apparelWeight or "")
+                or previousWeaponType ~= tostring(entry.weaponType or "") then
+                updatedCount = updatedCount + 1
+                dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+            else
+                unchangedCount = unchangedCount + 1
+            end
+        end
+    end
+
+    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
     RefreshShareListWindowIfVisible()
 end
 
@@ -1723,6 +1849,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
         dmsg("/itemshare sync      - Update counts and remove items no longer owned")
+        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare debug     - Toggle debug messages on or off")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
@@ -1740,6 +1867,8 @@ local function OnSlashCommand(arg)
         ResetSharedItems()
     elseif lowerArg == "sync" or lowerArg == "cleanup" or lowerArg == "reconcile" then
         SyncSharedItemsWithInventory()
+    elseif lowerArg == "rebuild" then
+        RebuildSharedItemsWithInventory()
     elseif lowerArg == "save" then
         SyncSharedItemsWithInventory()
         ConfirmReloadUI()
@@ -1784,6 +1913,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
         dmsg("/itemshare sync      - Update counts and remove items no longer owned")
+        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
