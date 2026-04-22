@@ -1,245 +1,163 @@
 ItemShareSavedVars =
 {
-    ["Default"] = 
+    ["Default"] =
     {
-        ["@DragonSlayerX"] = 
+        ["@MoonlitTemplar"] =
         {
-            ["$AccountWide"] = 
+            ["$AccountWide"] =
             {
-                ["sharedItems"] = 
+                ["sharedItems"] =
                 {
-                    ["|H0:item:199708:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h||inventory:kael stormblade"] = 
+                    ["|H0:item:43532:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h||inventory:seren valis"] =
                     {
-                        ["itemLink"] = "|H0:item:199708:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h",
-                        ["locationKey"] = "inventory:kael stormblade",
-                        ["lastDumpedAt"] = 1776422674,
+                        ["itemLink"] = "|H0:item:43532:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h",
+                        ["locationKey"] = "inventory:seren valis",
+                        ["lastDumpedAt"] = 1776846201,
                         ["count"] = 1,
-                        ["sharedFrom"] = "Inventory (Kael Stormblade)",
+                        ["sharedFrom"] = "Inventory (Seren Valis)",
                         ["bagId"] = 1,
                         ["itemTypeName"] = "Weapon",
-                        ["quality"] = 2,
-                        ["traitType"] = 1,
-                        ["accountName"] = "@DragonSlayerX",
+                        ["quality"] = 3,
+                        ["traitType"] = 7,
+                        ["accountName"] = "@MoonlitTemplar",
                         ["furnitureDataId"] = 0,
-                        ["firstDumpedAt"] = 1776422674,
-                        ["itemKey"] = "|H0:item:199708:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h||inventory:kael stormblade",
-                        ["trait"] = "Powered",
-
-                        ["weaponType"] = "Greatsword",
-
-                        ["weaponHandedness"] = "2H",
-
+                        ["firstDumpedAt"] = 1776846101,
+                        ["itemKey"] = "|H0:item:43532:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h||inventory:seren valis",
+                        ["trait"] = "Sharpened",
+                        ["weaponType"] = "Sword",
+                        ["weaponHandedness"] = "1H",
                         ["apparelWeight"] = "",
-
                         ["apparelSlot"] = "",
-                        ["slotIndex"] = 3,
+                        ["slotIndex"] = 4,
                         ["itemType"] = 1,
-                        ["itemName"] = "Greatsword of Vicious Death",
-                        ["qualityName"] = "Fine",
+                        ["itemName"] = "Sword of Twilight's Embrace",
+                        ["qualityName"] = "Superior",
                     },
-                    ["|H0:item:126473:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||inventory:kael stormblade"] = 
+                    ["|H0:item:77811:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h||inventory:seren valis"] =
                     {
-                        ["itemLink"] = "|H0:item:126473:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
-                        ["locationKey"] = "inventory:kael stormblade",
-                        ["lastDumpedAt"] = 1776422725,
+                        ["itemLink"] = "|H0:item:77811:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h",
+                        ["locationKey"] = "inventory:seren valis",
+                        ["lastDumpedAt"] = 1776846203,
                         ["count"] = 1,
-                        ["sharedFrom"] = "Inventory (Kael Stormblade)",
+                        ["sharedFrom"] = "Inventory (Seren Valis)",
                         ["bagId"] = 1,
+                        ["itemTypeName"] = "Weapon",
+                        ["quality"] = 4,
+                        ["traitType"] = 1,
+                        ["accountName"] = "@MoonlitTemplar",
+                        ["furnitureDataId"] = 0,
+                        ["firstDumpedAt"] = 1776846103,
+                        ["itemKey"] = "|H0:item:77811:370:50:0:0:0:0:0:0:0:0:0:0:0:0:24:0:0:0:10000:0|h|h||inventory:seren valis",
+                        ["trait"] = "Powered",
+                        ["weaponType"] = "Battle Axe",
+                        ["weaponHandedness"] = "2H",
+                        ["apparelWeight"] = "",
+                        ["apparelSlot"] = "",
+                        ["slotIndex"] = 7,
+                        ["itemType"] = 1,
+                        ["itemName"] = "Battle Axe of Hollow Moons",
+                        ["qualityName"] = "Epic",
+                    },
+                    ["|H0:item:224374:363:50:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank"] =
+                    {
+                        ["itemLink"] = "|H0:item:224374:363:50:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
+                        ["locationKey"] = "bank",
+                        ["lastDumpedAt"] = 1776846205,
+                        ["count"] = 1,
+                        ["sharedFrom"] = "Bank",
+                        ["bagId"] = 2,
+                        ["itemTypeName"] = "Apparel",
+                        ["quality"] = 4,
+                        ["traitType"] = 22,
+                        ["accountName"] = "@MoonlitTemplar",
+                        ["furnitureDataId"] = 0,
+                        ["firstDumpedAt"] = 1776846105,
+                        ["itemKey"] = "|H0:item:224374:363:50:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank",
+                        ["trait"] = "Arcane",
+                        ["weaponType"] = "",
+                        ["weaponHandedness"] = "",
+                        ["apparelWeight"] = "",
+                        ["apparelSlot"] = "Ring",
+                        ["slotIndex"] = 22,
+                        ["itemType"] = 2,
+                        ["itemName"] = "Ring of the Gorethief",
+                        ["qualityName"] = "Epic",
+                    },
+                    ["|H0:item:95306:362:50:0:0:0:0:0:0:0:0:0:0:0:0:35:0:0:0:10000:0|h|h||bank"] =
+                    {
+                        ["itemLink"] = "|H0:item:95306:362:50:0:0:0:0:0:0:0:0:0:0:0:0:35:0:0:0:10000:0|h|h",
+                        ["locationKey"] = "bank",
+                        ["lastDumpedAt"] = 1776846208,
+                        ["count"] = 1,
+                        ["sharedFrom"] = "Bank",
+                        ["bagId"] = 2,
+                        ["itemTypeName"] = "Apparel",
+                        ["quality"] = 3,
+                        ["traitType"] = 18,
+                        ["accountName"] = "@MoonlitTemplar",
+                        ["furnitureDataId"] = 0,
+                        ["firstDumpedAt"] = 1776846108,
+                        ["itemKey"] = "|H0:item:95306:362:50:0:0:0:0:0:0:0:0:0:0:0:0:35:0:0:0:10000:0|h|h||bank",
+                        ["trait"] = "Divines",
+                        ["weaponType"] = "",
+                        ["weaponHandedness"] = "",
+                        ["apparelWeight"] = "Heavy",
+                        ["apparelSlot"] = "Feet",
+                        ["slotIndex"] = 31,
+                        ["itemType"] = 2,
+                        ["itemName"] = "Sabatons of the Fire",
+                        ["qualityName"] = "Superior",
+                    },
+                    ["|H0:item:117820:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||furnishingvault"] =
+                    {
+                        ["itemLink"] = "|H0:item:117820:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
+                        ["locationKey"] = "furnishingvault",
+                        ["lastDumpedAt"] = 1776846212,
+                        ["count"] = 1,
+                        ["sharedFrom"] = "Furnishing Vault",
+                        ["bagId"] = 18,
                         ["itemTypeName"] = "Furnishing",
                         ["quality"] = 4,
                         ["traitType"] = 0,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 3548,
-                        ["firstDumpedAt"] = 1776422725,
-                        ["itemKey"] = "|H0:item:126473:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||inventory:kael stormblade",
+                        ["accountName"] = "@MoonlitTemplar",
+                        ["furnitureDataId"] = 1339,
+                        ["firstDumpedAt"] = 1776846112,
+                        ["itemKey"] = "|H0:item:117820:5:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||furnishingvault",
                         ["trait"] = "",
-
                         ["weaponType"] = "",
-
                         ["weaponHandedness"] = "",
-
                         ["apparelWeight"] = "",
-
                         ["apparelSlot"] = "",
-                        ["slotIndex"] = 6,
+                        ["slotIndex"] = 12,
                         ["itemType"] = 61,
-                        ["itemName"] = "Telvanni Lamp, Organic Azure",
+                        ["itemName"] = "Redguard Candelabra, Polished",
                         ["qualityName"] = "Epic",
                     },
-                    ["|H0:item:91650:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h||inventory:kael stormblade"] = 
+                    ["|H0:item:203234:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank"] =
                     {
-                        ["itemLink"] = "|H0:item:91650:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h",
-                        ["locationKey"] = "inventory:kael stormblade",
-                        ["lastDumpedAt"] = 1776422715,
-                        ["count"] = 1,
-                        ["sharedFrom"] = "Inventory (Kael Stormblade)",
-                        ["bagId"] = 1,
-                        ["itemTypeName"] = "Weapon",
-                        ["quality"] = 2,
-                        ["traitType"] = 7,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 0,
-                        ["firstDumpedAt"] = 1776422715,
-                        ["itemKey"] = "|H0:item:91650:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:250:0|h|h||inventory:kael stormblade",
-                        ["trait"] = "Sharpened",
-
-                        ["weaponType"] = "Sword",
-
-                        ["weaponHandedness"] = "1H",
-
-                        ["apparelWeight"] = "",
-
-                        ["apparelSlot"] = "",
-                        ["slotIndex"] = 9,
-                        ["itemType"] = 1,
-                        ["itemName"] = "Sword of the Arch-Mage",
-                        ["qualityName"] = "Fine",
-                    },
-                    ["|H0:item:171727:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank"] = 
-                    {
-                        ["itemLink"] = "|H0:item:171727:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
+                        ["itemLink"] = "|H0:item:203234:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
                         ["locationKey"] = "bank",
-                        ["lastDumpedAt"] = 1776422807,
-                        ["count"] = 1,
+                        ["lastDumpedAt"] = 1776846216,
+                        ["count"] = 2,
                         ["sharedFrom"] = "Bank",
                         ["bagId"] = 2,
                         ["itemTypeName"] = "Collectible",
                         ["quality"] = 5,
                         ["traitType"] = 0,
-                        ["accountName"] = "@DragonSlayerX",
+                        ["accountName"] = "@MoonlitTemplar",
                         ["furnitureDataId"] = 0,
-                        ["firstDumpedAt"] = 1776422807,
-                        ["itemKey"] = "|H0:item:171727:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank",
+                        ["firstDumpedAt"] = 1776846116,
+                        ["itemKey"] = "|H0:item:203234:124:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank",
                         ["trait"] = "",
-
                         ["weaponType"] = "",
-
                         ["weaponHandedness"] = "",
-
                         ["apparelWeight"] = "",
-
                         ["apparelSlot"] = "",
-                        ["slotIndex"] = 103,
+                        ["slotIndex"] = 48,
                         ["itemType"] = 34,
-                        ["itemName"] = "Style Page: Regal Regalia Sash",
+                        ["itemName"] = "Style Page: Earthbone Ayleid Epaulets",
                         ["qualityName"] = "Legendary",
-                    },
-                    ["|H0:item:114363:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank"] = 
-                    {
-                        ["itemLink"] = "|H0:item:114363:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
-                        ["locationKey"] = "bank",
-                        ["lastDumpedAt"] = 1776422971,
-                        ["count"] = 1,
-                        ["sharedFrom"] = "Bank",
-                        ["bagId"] = 2,
-                        ["itemTypeName"] = "Furnishing",
-                        ["quality"] = 3,
-                        ["traitType"] = 0,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 290,
-                        ["firstDumpedAt"] = 1776422971,
-                        ["itemKey"] = "|H0:item:114363:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank",
-                        ["trait"] = "",
-
-                        ["weaponType"] = "",
-
-                        ["weaponHandedness"] = "",
-
-                        ["apparelWeight"] = "",
-
-                        ["apparelSlot"] = "",
-                        ["slotIndex"] = 104,
-                        ["itemType"] = 61,
-                        ["itemName"] = "High Elf Tapestry, Water-Themed",
-                        ["qualityName"] = "Superior",
-                    },
-                    ["|H0:item:126364:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||inventory:kael stormblade"] = 
-                    {
-                        ["itemLink"] = "|H0:item:126364:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
-                        ["locationKey"] = "inventory:kael stormblade",
-                        ["lastDumpedAt"] = 1776422776,
-                        ["count"] = 1,
-                        ["sharedFrom"] = "Inventory (Kael Stormblade)",
-                        ["bagId"] = 1,
-                        ["itemTypeName"] = "Furnishing",
-                        ["quality"] = 3,
-                        ["traitType"] = 0,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 3439,
-                        ["firstDumpedAt"] = 1776422776,
-                        ["itemKey"] = "|H0:item:126364:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||inventory:kael stormblade",
-                        ["trait"] = "",
-
-                        ["weaponType"] = "",
-
-                        ["weaponHandedness"] = "",
-
-                        ["apparelWeight"] = "",
-
-                        ["apparelSlot"] = "",
-                        ["slotIndex"] = 18,
-                        ["itemType"] = 61,
-                        ["itemName"] = "Dres Tapestry, Vines",
-                        ["qualityName"] = "Superior",
-                    },
-                    ["|H0:item:223157:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank"] = 
-                    {
-                        ["itemLink"] = "|H0:item:223157:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h",
-                        ["locationKey"] = "bank",
-                        ["lastDumpedAt"] = 1776422975,
-                        ["count"] = 2,
-                        ["sharedFrom"] = "Bank",
-                        ["bagId"] = 2,
-                        ["itemTypeName"] = "Furnishing",
-                        ["quality"] = 3,
-                        ["traitType"] = 0,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 11180,
-                        ["firstDumpedAt"] = 1776422975,
-                        ["itemKey"] = "|H0:item:223157:4:1:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0|h|h||bank",
-                        ["trait"] = "",
-
-                        ["weaponType"] = "",
-
-                        ["weaponHandedness"] = "",
-
-                        ["apparelWeight"] = "",
-
-                        ["apparelSlot"] = "",
-                        ["slotIndex"] = 106,
-                        ["itemType"] = 61,
-                        ["itemName"] = "Worm Cult Bucket, Bismuth Samples",
-                        ["qualityName"] = "Superior",
-                    },
-                    ["|H0:item:144283:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:0:0|h|h||inventory:kael stormblade"] = 
-                    {
-                        ["itemLink"] = "|H0:item:144283:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:0:0|h|h",
-                        ["locationKey"] = "inventory:kael stormblade",
-                        ["lastDumpedAt"] = 1776422785,
-                        ["count"] = 1,
-                        ["sharedFrom"] = "Inventory (Kael Stormblade)",
-                        ["bagId"] = 1,
-                        ["itemTypeName"] = "Apparel",
-                        ["quality"] = 2,
-                        ["traitType"] = 23,
-                        ["accountName"] = "@DragonSlayerX",
-                        ["furnitureDataId"] = 0,
-                        ["firstDumpedAt"] = 1776422785,
-                        ["itemKey"] = "|H0:item:144283:359:50:0:0:0:0:0:0:0:0:0:0:0:0:25:0:0:0:0:0|h|h||inventory:kael stormblade",
-                        ["trait"] = "Robust",
-
-                        ["weaponType"] = "",
-
-                        ["weaponHandedness"] = "",
-
-                        ["apparelWeight"] = "",
-
-                        ["apparelSlot"] = "Ring",
-                        ["slotIndex"] = 24,
-                        ["itemType"] = 2,
-                        ["itemName"] = "Battlefield Acrobat Ring",
-                        ["qualityName"] = "Fine",
-                    },
+                    }
                 }
             }
         }
