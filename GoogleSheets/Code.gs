@@ -26,8 +26,8 @@ const MASTER_COL_REQUESTED_BY = 10;
 const MASTER_COL_SOURCE_SHEET = 11;
 const MASTER_COL_SYNC_KEY = 12;
 
-const UI_PANEL_START_COL = 11; // K
-const UI_PANEL_WIDTH = 4;      // K:N
+const UI_PANEL_START_COL = 14; // N
+const UI_PANEL_WIDTH = 4;      // N:Q
 const DOCUMENT_LOCK_TIMEOUT_MS = 30000;
 
 function withDocumentLock_(callback) {
@@ -366,6 +366,7 @@ function initializeSheetCommon_(sheet, headerRow) {
 
   sheet.getRange(1, 1, 1, headerRow.length).setValues([headerRow]);
   sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(1);
 
   const headerRange = sheet.getRange(1, 1, 1, headerRow.length);
   headerRange
