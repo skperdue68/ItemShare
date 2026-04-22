@@ -27,6 +27,7 @@ local SaveSharedEntryFromSavedEntry
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
 local CanModifyGuildBankShare
+local SyncSharedItemsWithInventory
 
 
 
@@ -697,7 +698,6 @@ local function ConfirmReloadUI()
                 [1] = {
                     text = SI_DIALOG_ACCEPT,
                     callback = function()
-                        SyncSharedItemsWithInventory()
                         dmsg("Reloading UI.")
                         ReloadUI()
                     end,
@@ -1550,7 +1550,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     return nil
 end
 
-local function SyncSharedItemsWithInventory()
+SyncSharedItemsWithInventory = function()
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
