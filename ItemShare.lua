@@ -951,9 +951,34 @@ end
 local function GetItemWeaponTypeInfo(bagId, slotIndex)
     local weaponType = GetItemWeaponType and GetItemWeaponType(bagId, slotIndex) or nil
     weaponType = tonumber(weaponType) or 0
+
     if weaponType == 0 or (WEAPONTYPE_NONE and weaponType == WEAPONTYPE_NONE) then
-        return "", weaponType
+        return "", weaponType, ""
     end
+
+    local weaponTypeName = GetLocalizedStringByPrefix("SI_WEAPONTYPE", weaponType, tostring(weaponType))
+
+    local handedness = ""
+
+    if weaponType == WEAPONTYPE_AXE
+        or weaponType == WEAPONTYPE_DAGGER
+        or weaponType == WEAPONTYPE_MACE
+        or weaponType == WEAPONTYPE_SWORD then
+        handedness = "1H"
+
+    elseif weaponType == WEAPONTYPE_TWO_HANDED_AXE
+        or weaponType == WEAPONTYPE_TWO_HANDED_HAMMER
+        or weaponType == WEAPONTYPE_TWO_HANDED_SWORD
+        or weaponType == WEAPONTYPE_BOW
+        or weaponType == WEAPONTYPE_FIRE_STAFF
+        or weaponType == WEAPONTYPE_FROST_STAFF
+        or weaponType == WEAPONTYPE_LIGHTNING_STAFF
+        or weaponType == WEAPONTYPE_HEALING_STAFF then
+        handedness = "2H"
+    end
+
+    return weaponTypeName, weaponType, handedness
+end
 
     local weaponTypeName = GetLocalizedStringByPrefix("SI_WEAPONTYPE", weaponType, tostring(weaponType))
     return weaponTypeName, weaponType
@@ -1016,7 +1041,7 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     local quality, qualityName = GetItemQualityInfo(bagId, slotIndex)
     local traitName, traitType = GetItemTraitInfo(bagId, slotIndex)
     local apparelSlot, equipType, apparelWeight, armorType = GetApparelInfo(bagId, slotIndex)
-    local weaponTypeName, weaponType = GetItemWeaponTypeInfo(bagId, slotIndex)
+    local weaponTypeName, weaponType, weaponHandedness = GetItemWeaponTypeInfo(bagId, slotIndex)
     local furnitureDataId = GetItemFurnitureDataIdSafe(bagId, slotIndex)
     local locationKey, sharedFrom = GetBagLocationInfo(bagId)
 
@@ -1035,6 +1060,7 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         apparelWeight = apparelWeight,
         armorType = armorType,
         weaponType = weaponTypeName,
+        weaponHandedness = weaponHandedness,
         weaponTypeId = weaponType,
         furnitureDataId = furnitureDataId,
         bagId = bagId,
