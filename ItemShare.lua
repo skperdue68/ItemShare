@@ -980,9 +980,6 @@ local function GetItemWeaponTypeInfo(bagId, slotIndex)
     return weaponTypeName, weaponType, handedness
 end
 
-    local weaponTypeName = GetLocalizedStringByPrefix("SI_WEAPONTYPE", weaponType, tostring(weaponType))
-    return weaponTypeName, weaponType
-end
 
 local function GetApparelInfo(bagId, slotIndex)
     local apparelSlot, equipType = GetItemEquipTypeInfo(bagId, slotIndex)
@@ -1315,6 +1312,7 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.apparelWeight = itemData.apparelWeight
     entry.armorType = itemData.armorType
     entry.weaponType = itemData.weaponType
+    entry.weaponHandedness = itemData.weaponHandedness
     entry.weaponTypeId = itemData.weaponTypeId
     entry.furnitureDataId = itemData.furnitureDataId
     entry.bagId = itemData.bagId
@@ -1358,6 +1356,7 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         apparelWeight = entry.apparelWeight,
         armorType = entry.armorType,
         weaponType = entry.weaponType,
+        weaponHandedness = entry.weaponHandedness,
         weaponTypeId = entry.weaponTypeId,
         furnitureDataId = entry.furnitureDataId,
         bagId = entry.bagId,
