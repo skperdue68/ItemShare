@@ -6,22 +6,25 @@ const BATCH_UPDATE_FLAG_KEY = 'ITEMSHARE_BATCH_UPDATING';
 const LAST_HIGHLIGHTED_ROW_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_ROW';
 const LAST_HIGHLIGHTED_SHEET_KEY = 'ITEMSHARE_LAST_HIGHLIGHTED_SHEET';
 
-const HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'RequestedBy', 'Location', 'SyncKey'];
-const MASTER_HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Date Added', 'Count', 'RequestedBy', 'Source Sheet', 'SyncKey'];
+const HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Weapon Type', 'Weight', 'Slot', 'Date Added', 'Count', 'RequestedBy', 'Location', 'SyncKey'];
+const MASTER_HEADER_ROW = ['Name', 'Item Type', 'Quality', 'Trait', 'Weapon Type', 'Weight', 'Slot', 'Date Added', 'Count', 'RequestedBy', 'Source Sheet', 'SyncKey'];
 
 const COL_NAME = 1;
 const COL_ITEM_TYPE = 2;
 const COL_QUALITY = 3;
 const COL_TRAIT = 4;
-const COL_DATE_ADDED = 5;
-const COL_COUNT = 6;
-const COL_REQUESTED_BY = 7;
-const COL_LOCATION = 8;
-const COL_SYNC_KEY = 9;
+const COL_WEAPON_TYPE = 5;
+const COL_WEIGHT = 6;
+const COL_SLOT = 7;
+const COL_DATE_ADDED = 8;
+const COL_COUNT = 9;
+const COL_REQUESTED_BY = 10;
+const COL_LOCATION = 11;
+const COL_SYNC_KEY = 12;
 
-const MASTER_COL_REQUESTED_BY = 7;
-const MASTER_COL_SOURCE_SHEET = 8;
-const MASTER_COL_SYNC_KEY = 9;
+const MASTER_COL_REQUESTED_BY = 10;
+const MASTER_COL_SOURCE_SHEET = 11;
+const MASTER_COL_SYNC_KEY = 12;
 
 const UI_PANEL_START_COL = 11; // K
 const UI_PANEL_WIDTH = 4;      // K:N
@@ -181,10 +184,11 @@ function migrateLegacyAccountSheetLayout_(sheet) {
   const lastColumn = sheet.getLastColumn();
   if (lastColumn < 9) return;
 
-  const headerValues = sheet.getRange(1, 1, 1, 9).getValues()[0].map(v => String(v || '').trim());
-  const hasOldLayout = headerValues[6] === 'Location' && headerValues[7] === 'RequestedBy' && headerValues[8] === 'SyncKey';
+  const headerValues = sheet.getRange(1, 1, 1, Math.min(lastColumn, 12)).getValues()[0].map(v => String(v || '').trim());
+  const hasVeryOldLayout = headerValues[6] === 'Location' && headerValues[7] === 'RequestedBy' && headerValues[8] === 'SyncKey';
+  const hasOldLayout = headerValues[9] === 'Location' && headerValues[10] === 'RequestedBy' && headerValues[11] === 'SyncKey';
 
-  if (hasOldLayout) {
+  if (hasVeryOldLayout) {
     const lastRow = sheet.getLastRow();
     if (lastRow >= 2) {
       const range = sheet.getRange(2, 1, lastRow - 1, 9);
@@ -194,6 +198,22 @@ function migrateLegacyAccountSheetLayout_(sheet) {
         const requestedBy = row[7];
         row[6] = requestedBy;
         row[7] = location;
+      });
+      range.setValues(values);
+    }
+    return;
+  }
+
+  if (hasOldLayout) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      const range = sheet.getRange(2, 1, lastRow - 1, 12);
+      const values = range.getValues();
+      values.forEach(function(row) {
+        const location = row[9];
+        const requestedBy = row[10];
+        row[9] = requestedBy;
+        row[10] = location;
       });
       range.setValues(values);
     }
@@ -207,20 +227,26 @@ function initializeAccountSheet_(sheet) {
   sheet.getRange('B:B').setNumberFormat('@');
   sheet.getRange('C:C').setNumberFormat('@');
   sheet.getRange('D:D').setNumberFormat('@');
-  sheet.getRange('E:E').setNumberFormat('yyyy-mm-dd');
-  sheet.getRange('F:F').setNumberFormat('0');
+  sheet.getRange('E:E').setNumberFormat('@');
+  sheet.getRange('F:F').setNumberFormat('@');
   sheet.getRange('G:G').setNumberFormat('@');
-  sheet.getRange('H:H').setNumberFormat('@');
-  sheet.getRange('I:I').setNumberFormat('@');
+  sheet.getRange('H:H').setNumberFormat('yyyy-mm-dd');
+  sheet.getRange('I:I').setNumberFormat('0');
+  sheet.getRange('J:J').setNumberFormat('@');
+  sheet.getRange('K:K').setNumberFormat('@');
+  sheet.getRange('L:L').setNumberFormat('@');
 
   sheet.setColumnWidths(1, 1, 280);
   sheet.setColumnWidths(2, 1, 130);
   sheet.setColumnWidths(3, 1, 110);
   sheet.setColumnWidths(4, 1, 150);
   sheet.setColumnWidths(5, 1, 130);
-  sheet.setColumnWidths(6, 1, 80);
+  sheet.setColumnWidths(6, 1, 90);
+  sheet.setColumnWidths(7, 1, 120);
+  sheet.setColumnWidths(8, 1, 130);
+  sheet.setColumnWidths(9, 1, 80);
+  sheet.setColumnWidths(10, 1, 160);
   autoSizeLocationColumn_(sheet);
-  sheet.setColumnWidths(8, 1, 180);
   safeHideColumn_(sheet, COL_SYNC_KEY);
   applyAlternatingRowColors_(sheet, false);
 }
@@ -244,20 +270,26 @@ function initializeMasterSheet_(sheet) {
   sheet.getRange('B:B').setNumberFormat('@');
   sheet.getRange('C:C').setNumberFormat('@');
   sheet.getRange('D:D').setNumberFormat('@');
-  sheet.getRange('E:E').setNumberFormat('yyyy-mm-dd');
-  sheet.getRange('F:F').setNumberFormat('0');
+  sheet.getRange('E:E').setNumberFormat('@');
+  sheet.getRange('F:F').setNumberFormat('@');
   sheet.getRange('G:G').setNumberFormat('@');
-  sheet.getRange('H:H').setNumberFormat('@');
-  sheet.getRange('I:I').setNumberFormat('@');
+  sheet.getRange('H:H').setNumberFormat('yyyy-mm-dd');
+  sheet.getRange('I:I').setNumberFormat('0');
+  sheet.getRange('J:J').setNumberFormat('@');
+  sheet.getRange('K:K').setNumberFormat('@');
+  sheet.getRange('L:L').setNumberFormat('@');
 
   sheet.setColumnWidths(1, 1, 280);
   sheet.setColumnWidths(2, 1, 130);
   sheet.setColumnWidths(3, 1, 110);
   sheet.setColumnWidths(4, 1, 150);
   sheet.setColumnWidths(5, 1, 130);
-  sheet.setColumnWidths(6, 1, 80);
-  sheet.setColumnWidths(7, 1, 160);
-  sheet.setColumnWidths(8, 1, 180);
+  sheet.setColumnWidths(6, 1, 90);
+  sheet.setColumnWidths(7, 1, 120);
+  sheet.setColumnWidths(8, 1, 130);
+  sheet.setColumnWidths(9, 1, 80);
+  sheet.setColumnWidths(10, 1, 160);
+  sheet.setColumnWidths(11, 1, 180);
   safeHideColumn_(sheet, MASTER_COL_SYNC_KEY);
   applyAlternatingRowColors_(sheet, true);
 }
@@ -393,12 +425,15 @@ function readExistingRows_(sheet, isMaster) {
       itemType: String(row[1] || '').trim(),
       quality: String(row[2] || '').trim(),
       trait: String(row[3] || '').trim(),
-      dateAdded: row[4] instanceof Date ? row[4] : null,
-      count: Number(row[5]) || 0,
-      requestedBy: String(row[6] || '').trim(),
-      location: isMaster ? '' : String(row[7] || '').trim(),
-      sourceSheet: isMaster ? String(row[7] || '').trim() : sheet.getName(),
-      syncKey: String(row[8] || '').trim()
+      weaponType: String(row[4] || '').trim(),
+      weight: String(row[5] || '').trim(),
+      slot: String(row[6] || '').trim(),
+      dateAdded: row[7] instanceof Date ? row[7] : null,
+      count: Number(row[8]) || 0,
+      requestedBy: String(row[9] || '').trim(),
+      location: isMaster ? '' : String(row[10] || '').trim(),
+      sourceSheet: isMaster ? String(row[10] || '').trim() : sheet.getName(),
+      syncKey: String(row[11] || '').trim()
     }));
 }
 
@@ -415,6 +450,9 @@ function mergeImportedRows_(existingRows, importedItems) {
       itemType: row.itemType,
       quality: row.quality,
       trait: row.trait,
+      weaponType: row.weaponType || '',
+      weight: row.weight || '',
+      slot: row.slot || '',
       dateAdded: row.dateAdded,
       count: row.count,
       location: row.location || '',
@@ -444,6 +482,9 @@ function mergeImportedRows_(existingRows, importedItems) {
         itemType: item.itemTypeName,
         quality: item.qualityName,
         trait: item.trait,
+        weaponType: item.weaponType || existing.weaponType || '',
+        weight: item.apparelWeight || existing.weight || '',
+        slot: item.apparelSlot || existing.slot || '',
         dateAdded: existing.dateAdded || unixToDate_(item.firstDumpedAt),
         count: item.count,
         location: item.sharedFrom || existing.location || '',
@@ -458,6 +499,9 @@ function mergeImportedRows_(existingRows, importedItems) {
       itemType: item.itemTypeName,
       quality: item.qualityName,
       trait: item.trait,
+      weaponType: item.weaponType || '',
+      weight: item.apparelWeight || '',
+      slot: item.apparelSlot || '',
       dateAdded: unixToDate_(item.firstDumpedAt),
       count: item.count,
       location: item.sharedFrom || '',
@@ -596,6 +640,9 @@ function writeRows_(sheet, rows, isMaster) {
     row.itemType,
     row.quality,
     row.trait,
+    row.weaponType || '',
+    row.weight || '',
+    row.slot || '',
     row.dateAdded || '',
     row.count,
     row.requestedBy || '',
@@ -606,6 +653,9 @@ function writeRows_(sheet, rows, isMaster) {
     row.itemType,
     row.quality,
     row.trait,
+    row.weaponType || '',
+    row.weight || '',
+    row.slot || '',
     row.dateAdded || '',
     row.count,
     row.requestedBy || '',
@@ -658,6 +708,9 @@ function rebuildMasterSheet_() {
         itemType: row.itemType,
         quality: row.quality,
         trait: row.trait,
+        weaponType: row.weaponType || '',
+        weight: row.weight || '',
+        slot: row.slot || '',
         dateAdded: row.dateAdded,
         count: row.count,
         requestedBy: row.requestedBy,
@@ -783,6 +836,9 @@ function parseDumpedItemEntry_(tableText) {
     quality: parseLuaNumberField_(tableText, 'quality') || 0,
     qualityName: parseLuaStringField_(tableText, 'qualityName') || String(parseLuaNumberField_(tableText, 'quality') || ''),
     trait: parseLuaStringField_(tableText, 'trait') || '',
+    weaponType: parseLuaStringField_(tableText, 'weaponType') || '',
+    apparelWeight: parseLuaStringField_(tableText, 'apparelWeight') || '',
+    apparelSlot: parseLuaStringField_(tableText, 'apparelSlot') || '',
     itemLink: parseLuaStringField_(tableText, 'itemLink') || '',
     sharedFrom: parseLuaStringField_(tableText, 'sharedFrom') || '',
     count: parseLuaNumberField_(tableText, 'count') || 0,
