@@ -169,7 +169,16 @@ from the addon, not from UESP.
 ```bash
 node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua           # import
 node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse only
+node backfillIcons.js --dry-run                                       # what lacks an icon
+node backfillIcons.js --limit 20 --passes 5                            # retry missing icons
+node backfillIcons.js --id 223698                                      # does UESP know this item?
 ```
+
+`backfillIcons.js` reads `Database/.env` by absolute path, exactly like the site,
+so it works from any directory. It runs the same pass the timer runs, with the
+same per-pass ceiling, and `--id` asks UESP about one item without opening a
+database at all - the quickest way to tell a refused lookup from a page that no
+longer embeds the image.
 
 The command line importer handles multi-account files exactly like the website:
 every account is replaced inside one transaction, each with its own guilds.
