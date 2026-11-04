@@ -750,3 +750,10 @@ th.num {
   white-space: nowrap;
   border: 0;
 }
+
+/* Message pages link back with the primary button styling. */
+a.primary-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
