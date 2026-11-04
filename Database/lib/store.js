@@ -222,7 +222,7 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
  *
  * @returns {Promise<number>} how many entries were given a path
  */
-async function reuseKnownIcons(connection, entries) {
+export async function fillKnownIcons(connection, entries) {
   const missing = new Map();
 
   for (const entry of entries) {
@@ -361,7 +361,7 @@ export async function replaceAccounts(
   try {
     // Before anything is deleted: recover icon paths from the rows this upload is
     // about to replace, so a missing getter does not cost the image.
-    await reuseKnownIcons(connection, [
+    await fillKnownIcons(connection, [
       ...accounts.flatMap((account) => account.items || []),
       ...accounts.flatMap((account) => account.alwaysShare || []),
     ]);
