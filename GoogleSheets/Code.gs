@@ -1,5 +1,5 @@
 const APP_TITLE = 'ESO Item Share';
-const EXPECTED_WINDOWS_PATH = String.raw`Documents\Elder Scrolls Online\live\SavedVariables\ItemShare.lua`;
+const EXPECTED_WINDOWS_PATH = String.raw`Documents\Elder Scrolls Online\live\SavedVariables\ItemShareSavedVars.lua`;
 
 const MASTER_SHEET_NAME = 'Master';
 const BATCH_UPDATE_FLAG_KEY = 'ITEMSHARE_BATCH_UPDATING';
@@ -339,7 +339,7 @@ function ensureMasterControlPanel_() {
       'How to update:\n' +
       '1) Click Item Share\n' +
       '2) Choose Open Updater\n' +
-      '3) Select ItemShare.lua\n' +
+      '3) Select ItemShareSavedVars.lua\n' +
       '4) Click Update Sheet'
     )
     .setWrap(true)
