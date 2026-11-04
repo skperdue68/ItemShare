@@ -14,10 +14,12 @@ import 'dotenv/config';
 
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
+import { cacheItemIcons, getCachedIcon } from './lib/icons.js';
 import {
   getAccountSummary,
   getSharedItemsForViewer,
   getViewerAccounts,
+  getViewerFacets,
   getViewerGuilds,
   linkAccountToUser,
   replaceAccounts,
@@ -102,6 +104,10 @@ const upload = multer({
   limits: { fileSize: 12 * 1024 * 1024, files: 1 },
 });
 
+function readParam(value) {
+  return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+}
+
 // Migrations run once at startup; request connections just use the database.
 async function prepareDatabase() {
   const config = readConfig();
@@ -125,7 +131,21 @@ async function withDatabase(handler) {
 
 app.get('/', async (req, res) => {
   const user = req.session.user || null;
-  const base = { user, providers: enabledProviders, accounts: [], sharedItems: [], dbError: null };
+  const filters = {
+    type: readParam(req.query.type),
+    owner: readParam(req.query.owner),
+    search: readParam(req.query.q),
+  };
+
+  const base = {
+    user,
+    providers: enabledProviders,
+    accounts: [],
+    sharedItems: [],
+    facets: { types: [], owners: [] },
+    filters,
+    dbError: null,
+  };
 
   try {
     await withDatabase(async (connection) => {
@@ -154,13 +174,41 @@ app.get('/', async (req, res) => {
         });
       }
 
-      base.sharedItems = await getSharedItemsForViewer(connection, accountNames);
+      base.facets = await getViewerFacets(connection, accountNames);
+      base.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
     });
   } catch (error) {
     base.dbError = error.message;
   }
 
   res.type('html').send(renderPage(base));
+});
+
+// Icons were fetched from UESP once, at upload time, and live in MariaDB now.
+// Long lived caching headers keep repeat views off the database too.
+app.get('/icons/:file', async (req, res) => {
+  const match = String(req.params.file || '').match(/^([a-f0-9]{40})\.png$/);
+
+  if (!match) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const icon = await withDatabase((connection) => getCachedIcon(connection, match[1]));
+
+    if (!icon) {
+      res.status(404).end();
+      return;
+    }
+
+    res.set('Content-Type', icon.content_type || 'image/png');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(icon.image_data);
+  } catch (error) {
+    console.warn(`Could not serve icon ${match[1]}: ${error.message}`);
+    res.status(500).end();
+  }
 });
 
 app.get('/auth/:provider', (req, res) => {
@@ -310,6 +358,21 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       );
     });
 
+    // One fetch per new icon, ever: afterwards /icons serves the stored bytes.
+    let icons = { fetched: 0, skipped: 0, failed: 0 };
+
+    try {
+      icons = await withDatabase((connection) =>
+        cacheItemIcons(connection, parsed.items.map((item) => item.icon))
+      );
+
+      if (icons.fetched || icons.failed) {
+        console.log(`Icons: fetched ${icons.fetched}, already stored ${icons.skipped}, failed ${icons.failed}`);
+      }
+    } catch (error) {
+      console.warn(`Could not cache item icons: ${error.message}`);
+    }
+
     req.session.accountNames = parsed.accounts.slice();
     res.json({
       accounts: outcome,
@@ -317,6 +380,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       itemCount: outcome.reduce((sum, entry) => sum + entry.itemCount, 0),
       totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
       guildCount: parsed.guilds.size,
+      icons,
       link: user ? 'linked' : 'skipped',
     });
   } catch (error) {

@@ -65,10 +65,13 @@ if (uploadButton) {
           `${account.accountName}: ${account.itemCount} items, quantity ${account.totalQuantity}, ${account.guildCount} guilds`
       );
 
+      const fetchedIcons = result.icons ? Number(result.icons.fetched) || 0 : 0;
+
       setStatus(
         [
           `Saved ${summaryLines.length} ESO account${summaryLines.length === 1 ? '' : 's'}.`,
           ...summaryLines,
+          fetchedIcons > 0 ? `Cached ${fetchedIcons} item icon${fetchedIcons === 1 ? '' : 's'} for local display.` : '',
           result.link === 'linked' ? 'Linked to your Discord user.' : '',
         ]
           .filter(Boolean)

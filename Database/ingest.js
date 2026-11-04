@@ -12,6 +12,7 @@ import 'dotenv/config';
 
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
+import { cacheItemIcons } from './lib/icons.js';
 import { replaceAccounts } from './lib/store.js';
 
 function groupByAccount(items) {
@@ -85,6 +86,10 @@ async function main() {
         `  ${result.accountName}: replaced with ${result.itemCount} items, total quantity ${result.totalQuantity}, ${result.guildCount} guilds`
       );
     }
+    const iconResult = await cacheItemIcons(connection, items.map((item) => item.icon));
+    console.log(
+      `  icons: fetched ${iconResult.fetched}, already stored ${iconResult.skipped}, failed ${iconResult.failed}`
+    );
     console.log(`Applied migrations: ${migrations.join(', ')}`);
   } finally {
     await connection.end();

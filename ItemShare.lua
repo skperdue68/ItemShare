@@ -1040,6 +1040,19 @@ local function GetItemFurnitureDataIdSafe(bagId, slotIndex)
     return tonumber(GetItemFurnitureDataId(bagId, slotIndex)) or 0
 end
 
+local function GetItemIconPathSafe(bagId, slotIndex)
+    if not GetItemIcon then
+        return ""
+    end
+    return tostring(GetItemIcon(bagId, slotIndex) or "")
+end
+
+-- The item id lives inside the link: |H0:item:43532:370:50:...|h|h
+local function GetItemIdFromLink(itemLink)
+    local id = string.match(tostring(itemLink or ""), "item:(%d+)")
+    return tonumber(id) or 0
+end
+
 local function IsEntryFurnishing(entry)
     return entry and tonumber(entry.itemType or 0) == tonumber(ITEMTYPE_FURNISHING or -1)
 end
@@ -1063,6 +1076,8 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         itemKey = BuildSharedItemKey(itemLink, locationKey),
         itemName = itemName,
         itemLink = itemLink,
+        itemId = GetItemIdFromLink(itemLink),
+        icon = GetItemIconPathSafe(bagId, slotIndex),
         itemType = itemType,
         itemTypeName = itemTypeName,
         quality = quality,
@@ -1329,6 +1344,8 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.guildsCapturedAt = now
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
+    entry.itemId = tonumber(itemData.itemId or 0) or 0
+    entry.icon = itemData.icon or ""
     entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
@@ -1373,6 +1390,8 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         itemKey = BuildSharedItemKey(entry.itemLink, locationKey),
         itemName = entry.itemName,
         itemLink = entry.itemLink,
+        itemId = entry.itemId,
+        icon = entry.icon,
         itemType = entry.itemType,
         itemTypeName = entry.itemTypeName,
         quality = entry.quality,
