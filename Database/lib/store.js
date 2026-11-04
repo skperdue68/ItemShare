@@ -483,12 +483,47 @@ export async function getViewerGuilds(connection, accountNames) {
   return rows;
 }
 
-const VISIBLE_ITEMS_FROM = `
+/**
+ * Items the viewer may see: the ones offered to a guild they belong to, plus —
+ * for the owner only — their own items with no guild link at all.
+ *
+ * Without the second branch an unstamped share is invisible to everybody,
+ * including the person who shared it, which is exactly what happened to 27 of one
+ * owner's 28 items. The extra branch leaks nothing: it is keyed on the viewer's
+ * own account names, so an unlinked item still never reaches anyone else.
+ */
+function visibleItemsFrom(names) {
+  return `
        FROM itemshare_shared_items i
-       JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
-       JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ig.guild_id
-           AND viewer.account_name IN`;
+       LEFT JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
+       LEFT JOIN itemshare_account_guilds viewer
+              ON viewer.guild_id = ig.guild_id
+             AND viewer.account_name IN (${inClause(names)})
+       LEFT JOIN itemshare_guilds g ON g.guild_id = ig.guild_id
+       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = i.icon_key`;
+}
+
+/** Guild overlap, or the owner's own entry that has no guild overlap to find. */
+function itemsVisibilityClause(names) {
+  return `(viewer.account_name IS NOT NULL
+           OR (ig.guild_id IS NULL AND i.account_name IN (${inClause(names)})))`;
+}
+
+function visibleAlwaysShareFrom(names) {
+  return `
+       FROM itemshare_always_share a
+       LEFT JOIN itemshare_always_share_guilds ag ON ag.always_share_id = a.id
+       LEFT JOIN itemshare_account_guilds viewer
+              ON viewer.guild_id = ag.guild_id
+             AND viewer.account_name IN (${inClause(names)})
+       LEFT JOIN itemshare_guilds g ON g.guild_id = ag.guild_id
+       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = a.icon_key`;
+}
+
+function alwaysShareVisibilityClause(names) {
+  return `(viewer.account_name IS NOT NULL
+           OR (ag.guild_id IS NULL AND a.account_name IN (${inClause(names)})))`;
+}
 
 /**
  * Item types and owner accounts present in what the viewer can see, used to fill
@@ -500,20 +535,23 @@ export async function getViewerFacets(connection, accountNames) {
     return { types: [], owners: [] };
   }
 
+  // The facets have to follow the same visibility rule as the grid, or a type
+  // that only appears on an unattributed entry cannot be filtered to.
   const [types] = await connection.execute(
-    `SELECT i.item_type_name AS name, COUNT(*) AS total
-     ${VISIBLE_ITEMS_FROM} (${inClause(names)})
-      WHERE i.item_type_name <> ''
+    `SELECT i.item_type_name AS name, COUNT(DISTINCT i.id) AS total
+     ${visibleItemsFrom(names)}
+      WHERE i.item_type_name <> '' AND ${itemsVisibilityClause(names)}
       GROUP BY i.item_type_name
       ORDER BY i.item_type_name ASC`,
-    names
+    [...names, ...names]
   );
 
   const [owners] = await connection.execute(
     `SELECT DISTINCT i.account_name AS name
-     ${VISIBLE_ITEMS_FROM} (${inClause(names)})
+     ${visibleItemsFrom(names)}
+      WHERE ${itemsVisibilityClause(names)}
       ORDER BY i.account_name ASC`,
-    names
+    [...names, ...names]
   );
 
   return {
@@ -538,8 +576,8 @@ export async function getSharedItemsForViewer(
   }
 
   const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
-  const filters = [];
-  const params = [...names];
+  const filters = [itemsVisibilityClause(names)];
+  const params = [...names, ...names];
 
   if (type) {
     filters.push('i.item_type_name = ?');
@@ -554,7 +592,8 @@ export async function getSharedItemsForViewer(
     params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
   }
 
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  // Always present: visibility is not optional, only the filters are.
+  const where = `WHERE ${filters.join(' AND ')}`;
 
   const [rows] = await connection.execute(
     `SELECT i.id,
@@ -581,13 +620,7 @@ export async function getSharedItemsForViewer(
             i.character_name,
             (icon.icon_key IS NOT NULL) AS has_icon,
             GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
-       FROM itemshare_shared_items i
-       JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
-       JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ig.guild_id
-           AND viewer.account_name IN (${inClause(names)})
-       LEFT JOIN itemshare_guilds g ON g.guild_id = ig.guild_id
-       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = i.icon_key
+       ${visibleItemsFrom(names)}
        ${where}
       GROUP BY i.id, i.item_name, i.item_id, i.icon_key, i.item_count, i.quality,
                i.quality_name, i.item_type_name, i.trait, i.set_name, i.enchant_name,
@@ -619,8 +652,8 @@ export async function getAlwaysShareForViewer(
   }
 
   const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
-  const filters = [];
-  const params = [...names];
+  const filters = [alwaysShareVisibilityClause(names)];
+  const params = [...names, ...names];
 
   if (type) {
     filters.push('a.item_type_name = ?');
@@ -635,7 +668,7 @@ export async function getAlwaysShareForViewer(
     params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
   }
 
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const where = `WHERE ${filters.join(' AND ')}`;
 
   const [rows] = await connection.execute(
     `SELECT a.id,
@@ -656,13 +689,7 @@ export async function getAlwaysShareForViewer(
                 AND a.item_id > 0
                 AND own.item_id = a.item_id) > 0 AS in_inventory,
             GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
-       FROM itemshare_always_share a
-       JOIN itemshare_always_share_guilds ag ON ag.always_share_id = a.id
-       JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ag.guild_id
-           AND viewer.account_name IN (${inClause(names)})
-       LEFT JOIN itemshare_guilds g ON g.guild_id = ag.guild_id
-       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = a.icon_key
+       ${visibleAlwaysShareFrom(names)}
        ${where}
       GROUP BY a.id, a.item_name, a.item_id, a.icon_key, a.quality, a.item_type_name,
                a.trait, a.set_name, a.first_added_at, a.account_name, a.character_name,
