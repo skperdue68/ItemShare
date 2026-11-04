@@ -230,3 +230,25 @@ So detail the site does not render yet is already in the database and can be
 surfaced later without asking anyone to upload again. UESP enrichment is then
 only used for what the client left empty — the icon PNG mirror is the existing
 example.
+
+## Troubleshooting startup
+
+The server prints the `.env` file it actually read, so a setting that "is in there" but has no effect is usually a file in the wrong place — a `.env` in the repo root instead of `Database/`, or Windows Notepad saving it as `.env.txt`.
+
+**`SESSION_SECRET is not set ... using an ephemeral secret`** — no `Database/.env`, or the key is missing from it. Every restart invalidates existing sessions, so sign-in is lost. Make a secret and paste the printed line into `Database/.env`:
+
+```bash
+node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
+```
+
+**`Server requests authentication using unknown plugin auth_gssapi_client`** — the MariaDB account is configured for Kerberos/GSSAPI, which `mysql2` cannot use. On the MariaDB host, as an administrator, give it an ordinary password login:
+
+```sql
+SELECT user, host, plugin FROM mysql.user WHERE user = 'itemshare';
+ALTER USER 'itemshare'@'%' IDENTIFIED VIA mysql_native_password USING PASSWORD('the-password-from-.env');
+FLUSH PRIVILEGES;
+```
+
+Leave the password inside `PASSWORD(...)` as the plain text one from `Database/.env`; MariaDB hashes it. If `Access denied for user ...` comes back instead, the plugin is fine and the password or the host grant is wrong — check that the account may connect from this machine's address, not just `localhost`.
+
+**`Sign-in providers: none`** — `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` (or the `GOOGLE_*` pair) are empty. Discord also needs `DISCORD_REDIRECT_URI` registered under OAuth2 -> Redirects in the Discord application, and the same URL must be the one the browser is sent to.

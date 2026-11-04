@@ -5,15 +5,16 @@
 //
 //   npm start            (reads Database/.env)
 
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import express from 'express';
 import session from 'express-session';
 import multer from 'multer';
-import 'dotenv/config';
+import dotenv from 'dotenv';
 
 import { extractShareData } from './lib/savedVars.js';
-import { openDatabase, readConfig } from './lib/database.js';
+import { describeConnectionFailure, openDatabase, readConfig } from './lib/database.js';
 import { cacheItemIcons, getCachedIcon } from './lib/icons.js';
 import {
   getAccountSummary,
@@ -28,6 +29,14 @@ import {
 import { renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read Database/.env by absolute path. The `dotenv/config` shorthand resolves
+// .env against the shell's working directory, so starting the server as
+// `node Database/server.js` from the repo root found no settings at all and the
+// site came up with no session secret and no sign-in providers.
+const envPath = path.join(__dirname, '.env');
+const hasEnvFile = existsSync(envPath);
+dotenv.config({ path: envPath });
 
 const PORT = Number(process.env.PORT || 3000);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -83,7 +92,12 @@ const enabledProviders = Object.values(PROVIDERS)
   .map(({ key, label }) => ({ key, label }));
 
 if (!process.env.SESSION_SECRET) {
-  console.warn('SESSION_SECRET is not set; using an ephemeral secret. Sessions end when the server restarts.');
+  console.warn(
+    `SESSION_SECRET is not set${hasEnvFile ? ` in ${envPath}` : `, and there is no .env at ${envPath}`}; ` +
+      'using an ephemeral secret, so everyone is signed out on every restart. Make one with\n' +
+      '  node -e "console.log(\'SESSION_SECRET=\' + require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
+      'and paste the line into Database/.env.'
+  );
 }
 const SESSION_SECRET = process.env.SESSION_SECRET || `itemshare-${Math.random().toString(36).slice(2)}`;
 
@@ -389,8 +403,13 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
 });
 
 await prepareDatabase().catch((error) => {
-  console.warn(`Database not ready at startup: ${error.message}`);
-  console.warn('The site stays up and shows the error; fix the MariaDB settings and restart to apply migrations.');
+  let config = {};
+  try {
+    config = readConfig();
+  } catch {
+    // A malformed ITEMSHARE_DATABASE is reported by prepareDatabase itself.
+  }
+  console.warn(describeConnectionFailure(error, config));
 });
 
 app.listen(PORT, () => {
@@ -400,5 +419,6 @@ app.listen(PORT, () => {
       ? `Sign-in providers: ${enabledProviders.map((provider) => provider.label).join(', ')}`
       : 'Sign-in providers: none (set DISCORD_* or GOOGLE_* env vars)'
   );
+  console.log(`Env file: ${hasEnvFile ? envPath : `${envPath} not found - copy .env.example to .env`}`);
   console.log(`Database target: ${readConfig().database}`);
 });
