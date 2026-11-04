@@ -38,7 +38,8 @@ async function main() {
 
   const absolutePath = path.resolve(filePath);
   const fileText = await readFile(absolutePath, 'utf8');
-  const { guilds, accountGuilds, items, alwaysShare, accounts } = extractShareData(fileText);
+  const { guilds, accountGuilds, items, alwaysShare, addonVersions, accounts } =
+    extractShareData(fileText);
   const groups = groupByAccount(items);
   const alwaysGroups = groupByAccount(alwaysShare);
 
@@ -49,6 +50,9 @@ async function main() {
   console.log(`  accounts: ${accounts.join(', ') || '(none)'}`);
   console.log(`  shared items: ${items.length} (${withGuild} linked to a guild), total quantity ${totalQuantity}`);
   console.log(`  always shared: ${alwaysShare.length} (not counted as inventory)`);
+  console.log(
+    `  addon version: ${[...new Set([...addonVersions.values()])].join(', ') || 'not recorded (addon older than 1.8.1)'}`
+  );
   console.log(`  guilds: ${guilds.size}`);
   for (const [guildId, guildName] of guilds) {
     console.log(`    ${guildId} ${guildName || '(name not captured yet)'}`);
@@ -82,6 +86,7 @@ async function main() {
         accountName,
         items: groups.get(accountName) || [],
         alwaysShare: alwaysGroups.get(accountName) || [],
+        addonVersion: addonVersions.get(accountName) || '',
         guilds: accountGuilds.get(accountName) || new Map(),
       })),
       { sourceFile: path.basename(absolutePath) }

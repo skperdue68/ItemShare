@@ -1,5 +1,9 @@
 local ItemShare = {}
 ItemShare.name = "ItemShare"
+-- Kept in step with ## Version in ItemShare.txt. Written into the saved
+-- variables so an uploaded file says which addon produced it, which is the only
+-- reliable way to answer "am I actually running the new version?".
+local ADDON_VERSION = "1.8.1"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -799,6 +803,104 @@ local function RefreshGuildSnapshot()
     ItemShare.savedVars.guildsUpdatedAt = now
 
     return guilds
+end
+
+-- Shares written before the addon recorded guilds carry no guildIds, so the
+-- site has no item->guild link for them and they are invisible to everyone,
+-- owner included. Guild membership belongs to the account rather than to the
+-- item, so these can be stamped without the item being visible at all — which is
+-- what makes it work for shares sitting in a bag this session cannot read.
+local function GetGuildStampForCharacter(characterName)
+    local guildIds = {}
+    local guildNames = {}
+
+    local characterGuilds = ItemShare.savedVars and ItemShare.savedVars.characterGuilds
+    local snapshot = type(characterGuilds) == "table" and characterGuilds[characterName] or nil
+
+    if type(snapshot) == "table" and type(snapshot.guilds) == "table" then
+        for _, guild in ipairs(snapshot.guilds) do
+            local guildId = type(guild) == "table" and tonumber(guild.guildId) or nil
+            if guildId and guildId > 0 then
+                guildIds[#guildIds + 1] = guildId
+                guildNames[#guildNames + 1] = tostring(guild.guildName or "")
+            end
+        end
+    end
+
+    -- Older snapshots kept only the ids, so fall back to those and recover the
+    -- names from knownGuilds.
+    if #guildIds == 0 and type(snapshot) == "table" and type(snapshot.guildIds) == "table" then
+        for _, rawGuildId in ipairs(snapshot.guildIds) do
+            local guildId = tonumber(rawGuildId)
+            if guildId and guildId > 0 then
+                guildIds[#guildIds + 1] = guildId
+                local knownGuilds = ItemShare.savedVars and ItemShare.savedVars.knownGuilds
+                local knownName = type(knownGuilds) == "table" and knownGuilds[tostring(guildId)] or nil
+                guildNames[#guildNames + 1] = tostring(knownName or "")
+            end
+        end
+    end
+
+    return guildIds, guildNames
+end
+
+local function StampMissingGuilds()
+    local stampedCount = 0
+    if not ItemShare.savedVars then
+        return stampedCount
+    end
+
+    local tables = {}
+    if type(ItemShare.savedVars.sharedItems) == "table" then
+        tables[#tables + 1] = ItemShare.savedVars.sharedItems
+    end
+    if type(ItemShare.savedVars.alwaysShare) == "table" then
+        tables[#tables + 1] = ItemShare.savedVars.alwaysShare
+    end
+
+    local currentCharacter = GetCurrentCharacterName()
+
+    for _, entries in ipairs(tables) do
+        for _, entry in pairs(entries) do
+            if type(entry) == "table" then
+                local existingIds = entry.guildIds
+                local alreadyStamped = type(existingIds) == "table" and #existingIds > 0
+
+                if not alreadyStamped then
+                    local characterName = tostring(entry.characterName or "")
+                    if characterName == "" then
+                        characterName = currentCharacter
+                    end
+
+                    local guildIds, guildNames = GetGuildStampForCharacter(characterName)
+                    if #guildIds == 0 and characterName ~= currentCharacter then
+                        characterName = currentCharacter
+                        guildIds, guildNames = GetGuildStampForCharacter(characterName)
+                    end
+                    if #guildIds == 0 then
+                        -- The per-character snapshot can be stale or absent; the
+                        -- guilds in front of us right now are the better answer.
+                        for _, guild in ipairs(GetCharacterGuilds()) do
+                            guildIds[#guildIds + 1] = guild.guildId
+                            guildNames[#guildNames + 1] = guild.guildName
+                        end
+                    end
+
+                    if #guildIds > 0 then
+                        entry.guildIds = guildIds
+                        entry.guildNames = guildNames
+                        entry.guildsCapturedAt = GetTimeStamp()
+                        if tostring(entry.characterName or "") == "" then
+                            entry.characterName = characterName
+                        end
+                        stampedCount = stampedCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return stampedCount
 end
 
 local function GetSelectedGuildBankLocationInfo()
@@ -2027,7 +2129,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     return nil
 end
 
-local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
+local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     local summary = string.format(
         "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
         tostring(actionName or "Sync"),
@@ -2036,6 +2138,10 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
         unchangedCount,
         furnishingProtectedCount
     )
+
+    if (tonumber(stampedCount) or 0) > 0 then
+        summary = string.format("%s, Guild stamps added: %d", summary, tonumber(stampedCount))
+    end
 
     d("[ItemShare] " .. summary)
     if not quiet then
@@ -2046,6 +2152,9 @@ end
 
 SyncSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
+    -- Before anything is removed: an unstamped share is invisible on the site, and
+    -- stamping needs no bag access, so it must not depend on this pass seeing it.
+    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -2146,12 +2255,13 @@ SyncSharedItemsWithInventory = function(quiet)
         end
     end
 
-    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
+    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     RefreshShareListWindowIfVisible()
 end
 
 RebuildSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
+    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -2275,7 +2385,7 @@ RebuildSharedItemsWithInventory = function(quiet)
         end
     end
 
-    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
+    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     RefreshShareListWindowIfVisible()
 end
 
@@ -2322,6 +2432,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -2356,6 +2467,16 @@ local function OnSlashCommand(arg)
                     guild.guildId
                 ))
             end
+        end
+    elseif lowerArg == "stamp" then
+        local stamped = StampMissingGuilds()
+        if stamped > 0 then
+            d(string.format(
+                "[ItemShare] Stamped guilds on %d share(s). Use /ishare save or /reloadui to write the file, then upload it.",
+                stamped
+            ))
+        else
+            dmsg("Every share already has guild data; nothing to stamp.")
         end
     elseif lowerArg == "always" then
         PrintAlwaysShareItems()
@@ -2406,6 +2527,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
 end
@@ -2427,9 +2549,17 @@ local function OnAddonLoaded(event, addonName)
     -- Files written before this version have no alwaysShare table yet.
     GetAlwaysShareTable()
 
+    ItemShare.savedVars.addonVersion = ADDON_VERSION
+
     RefreshGuildSnapshot()
+    -- Guilds are often not loaded this early, so this is a head start only; the
+    -- delayed refresh and the login pass stamp again once they are.
+    StampMissingGuilds()
     if zo_callLater then
-        zo_callLater(RefreshGuildSnapshot, 3000)
+        zo_callLater(function()
+            RefreshGuildSnapshot()
+            StampMissingGuilds()
+        end, 3000)
     end
 
     if EVENT_PLAYER_ACTIVATED then
@@ -2463,7 +2593,10 @@ local function OnAddonLoaded(event, addonName)
         CreateShareListWindow()
     end
 
-    dmsg("Loaded. Shared items refresh from your bags on login and when you open the bank.")
+    dmsg(string.format(
+        "Loaded (version %s). Shared items refresh from your bags on login and when you open the bank.",
+        ADDON_VERSION
+    ))
 end
 
 EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoaded)

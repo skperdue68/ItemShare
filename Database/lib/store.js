@@ -213,7 +213,7 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
  */
 async function replaceOneAccount(
   connection,
-  { accountName, items, alwaysShare = [], guilds, sourceFile, userId }
+  { accountName, items, alwaysShare = [], guilds, sourceFile, addonVersion = '', userId }
 ) {
   const totalQuantity = items.reduce((sum, item) => sum + (item.itemCount || 0), 0);
 
@@ -222,9 +222,18 @@ async function replaceOneAccount(
 
   const [upload] = await connection.execute(
     `INSERT INTO itemshare_uploads
-       (account_name, character_name, source_file, item_count, total_quantity, guild_count, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [accountName, '*', sourceFile || '', items.length, totalQuantity, guilds.size, userId || null]
+       (account_name, character_name, source_file, addon_version, item_count, total_quantity, guild_count, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      accountName,
+      '*',
+      sourceFile || '',
+      addonVersion || '',
+      items.length,
+      totalQuantity,
+      guilds.size,
+      userId || null,
+    ]
   );
 
   const uploadId = upload.insertId;
@@ -275,13 +284,26 @@ async function replaceOneAccount(
  * @param {Array<{accountName: string, items: object[], guilds: Map<number, string>}>} accounts
  * @returns {Promise<Array<{accountName: string, uploadId: number, itemCount: number, totalQuantity: number, guildCount: number}>>}
  */
-export async function replaceAccounts(connection, accounts, { sourceFile, userId } = {}) {
+export async function replaceAccounts(
+  connection,
+  accounts,
+  { sourceFile, userId, addonVersion = '' } = {}
+) {
   await connection.beginTransaction();
 
   try {
     const results = [];
     for (const account of accounts) {
-      results.push(await replaceOneAccount(connection, { ...account, sourceFile, userId }));
+      // A file can name a different addon version per account; the option is the
+      // fallback for callers that pass one value for the whole upload.
+      results.push(
+        await replaceOneAccount(connection, {
+          ...account,
+          sourceFile,
+          userId,
+          addonVersion: account.addonVersion || addonVersion,
+        })
+      );
     }
     await connection.commit();
     return results;
@@ -398,7 +420,7 @@ export async function getAccountSummary(connection, accountName) {
   );
 
   const [[lastUpload]] = await connection.execute(
-    `SELECT uploaded_at, item_count, total_quantity, source_file
+    `SELECT uploaded_at, item_count, total_quantity, source_file, addon_version
        FROM itemshare_uploads WHERE account_name = ?
       ORDER BY id DESC LIMIT 1`,
     [accountName]
