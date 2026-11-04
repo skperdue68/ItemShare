@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.1"
+local ADDON_VERSION = "1.8.2"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -1197,11 +1197,32 @@ local function GetItemFurnitureDataIdSafe(bagId, slotIndex)
     return tonumber(GetItemFurnitureDataId(bagId, slotIndex)) or 0
 end
 
+-- The icon path is the only thing that lets the site cache an image, so it is
+-- worth asking more than one getter: GetItemIcon is not exposed on every client,
+-- and GetItemInfo still returns the icon file as its second value. A getter that
+-- answers with something that is not a texture path counts as no answer.
+local function LooksLikeIconPath(value)
+    return type(value) == "string"
+        and value ~= ""
+        and string.find(value, "/", 1, true) ~= nil
+end
+
 local function GetItemIconPathSafe(bagId, slotIndex)
-    if not GetItemIcon then
-        return ""
+    if type(GetItemIcon) == "function" then
+        local ok, icon = pcall(GetItemIcon, bagId, slotIndex)
+        if ok and LooksLikeIconPath(icon) then
+            return tostring(icon)
+        end
     end
-    return tostring(GetItemIcon(bagId, slotIndex) or "")
+
+    if type(GetItemInfo) == "function" then
+        local ok, _, icon = pcall(GetItemInfo, bagId, slotIndex)
+        if ok and LooksLikeIconPath(icon) then
+            return tostring(icon)
+        end
+    end
+
+    return ""
 end
 
 -- The item id lives inside the link: |H0:item:43532:370:50:...|h|h
@@ -1633,7 +1654,9 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
     entry.itemId = tonumber(itemData.itemId or 0) or 0
-    entry.icon = itemData.icon or ""
+    -- A getter that answers nothing must not erase an icon captured earlier: the
+    -- path is what the site caches the image from, and it does not change.
+    entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
     entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
@@ -1762,7 +1785,9 @@ local function SaveAlwaysShareEntry(itemData)
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
     entry.itemId = tonumber(itemData.itemId or 0) or 0
-    entry.icon = itemData.icon or ""
+    -- A getter that answers nothing must not erase an icon captured earlier: the
+    -- path is what the site caches the image from, and it does not change.
+    entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
     entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
