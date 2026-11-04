@@ -387,6 +387,19 @@ th.num {
   width: 70px;
 }
 
+.account-block {
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.account-block + .account-block {
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.account-block .subsection {
+  margin-top: 12px;
+}
+
 .subsection {
   margin-top: 18px;
   padding-top: 14px;

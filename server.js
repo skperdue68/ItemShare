@@ -17,9 +17,10 @@ import { openDatabase, readConfig } from './lib/database.js';
 import {
   getAccountSummary,
   getSharedItemsForViewer,
+  getViewerAccounts,
   getViewerGuilds,
   linkDiscordAccount,
-  replaceAccountItems,
+  replaceAccounts,
   upsertDiscordUser,
 } from './lib/store.js';
 import { renderPage } from './lib/views.js';
@@ -77,19 +78,36 @@ async function withDatabase(handler) {
 
 app.get('/', async (req, res) => {
   const user = req.session.user || null;
-  const base = { user, discordConfigured, summary: null, guilds: [], sharedItems: [], dbError: null };
+  const base = { user, discordConfigured, accounts: [], sharedItems: [], dbError: null };
 
   try {
     await withDatabase(async (connection) => {
-      const account = req.session.accountName || (user && (await findAccountForUser(connection, user.id)));
-      if (!account) {
+      // One Discord login can own several ESO accounts; every account linked to
+      // it contributes guilds, and the items stay labelled with their account.
+      let accountNames = [];
+
+      if (user) {
+        const linked = await getViewerAccounts(connection, user.id);
+        accountNames = linked.map((row) => row.eso_account_name);
+      }
+
+      if (accountNames.length === 0 && Array.isArray(req.session.accountNames)) {
+        accountNames = req.session.accountNames.slice();
+      }
+
+      if (accountNames.length === 0) {
         return;
       }
 
-      req.session.accountName = account;
-      base.summary = { accountName: account, ...(await getAccountSummary(connection, account)) };
-      base.guilds = await getViewerGuilds(connection, account);
-      base.sharedItems = await getSharedItemsForViewer(connection, account);
+      for (const accountName of accountNames) {
+        base.accounts.push({
+          accountName,
+          ...(await getAccountSummary(connection, accountName)),
+          guilds: await getViewerGuilds(connection, [accountName]),
+        });
+      }
+
+      base.sharedItems = await getSharedItemsForViewer(connection, accountNames);
     });
   } catch (error) {
     base.dbError = error.message;
@@ -97,14 +115,6 @@ app.get('/', async (req, res) => {
 
   res.type('html').send(renderPage(base));
 });
-
-async function findAccountForUser(connection, discordUserId) {
-  const [rows] = await connection.execute(
-    'SELECT eso_account_name FROM itemshare_accounts WHERE discord_user_id = ? ORDER BY linked_at LIMIT 1',
-    [discordUserId]
-  );
-  return rows[0] ? rows[0].eso_account_name : null;
-}
 
 app.get('/auth/discord', (req, res) => {
   if (!discordConfigured) {
@@ -168,7 +178,7 @@ app.get('/auth/discord/callback', async (req, res) => {
       email: typeof profile.email === 'string' ? profile.email : '',
       emailVerified: profile.verified === true,
     };
-    req.session.accountName = null;
+    req.session.accountNames = null;
 
     // Best effort: a database problem must not block sign-in. The profile is
     // stored again on upload, so nothing is lost while the database is down.
@@ -219,25 +229,26 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     res.status(400).json({ error: 'No ESO account was found in that file. Upload ItemShareSavedVars.lua, not another file.' });
     return;
   }
-  if (parsed.accounts.length > 1) {
-    res.status(400).json({
-      error: `That file contains several ESO accounts (${parsed.accounts.join(', ')}). Upload a file with one account only.`,
-    });
-    return;
-  }
-
-  const accountName = parsed.accounts[0];
-
   try {
-    const result = await withDatabase(async (connection) => {
-      let link = 'skipped';
-
+    const outcome = await withDatabase(async (connection) => {
       if (user) {
-        link = await linkDiscordAccount(connection, {
-          accountName,
-          discordUserId: user.id,
-          discordUsername: user.username,
-        });
+        // Every ESO account in the file belongs to this Discord login. An
+        // account claimed by somebody else stops the whole upload.
+        for (const accountName of parsed.accounts) {
+          const link = await linkDiscordAccount(connection, {
+            accountName,
+            discordUserId: user.id,
+            discordUsername: user.username,
+          });
+
+          if (link === 'conflict') {
+            const conflict = new Error(
+              `The ESO account ${accountName} is already linked to a different Discord user.`
+            );
+            conflict.statusCode = 409;
+            throw conflict;
+          }
+        }
 
         await upsertDiscordUser(connection, {
           id: user.id,
@@ -245,29 +256,28 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
           email: user.email,
           emailVerified: user.emailVerified,
         });
-
-        if (link === 'conflict') {
-          const conflict = new Error(
-            `The ESO account ${accountName} is already linked to a different Discord user.`
-          );
-          conflict.statusCode = 409;
-          throw conflict;
-        }
       }
 
-      const replaced = await replaceAccountItems(connection, {
-        accountName,
-        items: parsed.items,
-        guilds: parsed.guilds,
-        sourceFile: req.file.originalname,
-        discordUserId: user ? user.id : '',
-      });
-
-      return { ...replaced, link, guildCount: parsed.guilds.size };
+      return replaceAccounts(
+        connection,
+        parsed.accounts.map((accountName) => ({
+          accountName,
+          items: parsed.items.filter((item) => item.accountName === accountName),
+          guilds: parsed.accountGuilds.get(accountName) || new Map(),
+        })),
+        { sourceFile: req.file.originalname, discordUserId: user ? user.id : '' }
+      );
     });
 
-    req.session.accountName = accountName;
-    res.json({ accountName, ...result });
+    req.session.accountNames = parsed.accounts.slice();
+    res.json({
+      accounts: outcome,
+      accountCount: outcome.length,
+      itemCount: outcome.reduce((sum, entry) => sum + entry.itemCount, 0),
+      totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
+      guildCount: parsed.guilds.size,
+      link: user ? 'linked' : 'skipped',
+    });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }

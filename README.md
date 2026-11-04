@@ -70,8 +70,12 @@ Discord user and uploads are anonymous.
 
 ## How an upload behaves
 
-- The ESO account name is read from the file itself, so there is nothing to type.
-  A file containing more than one account is rejected.
+- The ESO account names are read from the file itself, so there is nothing to type.
+  Every account in the file is imported: all of them are linked to the same Discord
+  user, and each one keeps its own item list and guild membership. Either every
+  account is replaced or, if anything fails, none of them are.
+- Item rows keep the account they came from (`itemshare_shared_items.account_name`),
+  so a member who plays several ESO accounts can see which account holds each item.
 - Every upload **fully replaces** the items stored for that account: the previous
   rows are deleted and rewritten in one transaction, so un-sharing items in game
   and re-uploading removes them here too.
@@ -85,10 +89,12 @@ Discord user and uploads are anonymous.
 
 ## Seeing shared items
 
-Any Discord account can sign in; it only establishes identity. Once an ESO
-account is linked, the page lists every shared item offered to any guild that
-account belongs to, alphabetically, with the owner, quantity, item type, trait
-and the guilds it is visible through. Items the viewer owns are tagged `You`.
+Any Discord account can sign in; it only establishes identity. Once one or more
+ESO accounts are linked to it, the page lists every shared item offered to any
+guild any of those accounts belongs to, alphabetically, with the owning account,
+character, quantity, item type, trait and the guilds it is visible through. Items
+held by any of the viewer's own accounts are tagged `You`, and the summary card
+shows each linked account with its own totals and guilds.
 
 The list refreshes automatically after an upload.
 
@@ -104,12 +110,15 @@ node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua           # import
 node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse only
 ```
 
+The command line importer handles multi-account files exactly like the website:
+every account is replaced inside one transaction, each with its own guilds.
+
 ## Tables
 
 | Table | Purpose |
 | --- | --- |
 | `itemshare_uploads` | One row per import: account, file, item count, total quantity, Discord user |
-| `itemshare_accounts` | ESO account → Discord user link |
+| `itemshare_accounts` | ESO account → Discord user link; several accounts may share one Discord user |
 | `itemshare_guilds` | Guild ID → name, the stable identity for a guild |
 | `itemshare_shared_items` | One row per shared item per character |
 | `itemshare_shared_item_guilds` | Which guilds each shared item is offered to |
