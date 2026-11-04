@@ -27,9 +27,12 @@ export function iconSourceUrl(iconPath) {
 }
 
 /**
- * Fetches and stores any icons that are not cached yet.
- * Best effort: a failure leaves the icon missing and is retried by a later
- * upload, never by page views.
+ * Fetches and stores only the icons that are not in the database yet.
+ *
+ * UESP is a last resort, not a per-upload step: the cache table is checked first
+ * (in chunks), and every path already present costs nothing but one row in that
+ * lookup. Best effort: a failure leaves the icon missing and is retried by a
+ * later upload, never by page views.
  *
  * @returns {Promise<{fetched: number, skipped: number, failed: number}>}
  */
@@ -47,11 +50,22 @@ export async function cacheItemIcons(connection, iconPaths, { limit = 60, fetche
   }
 
   const entries = paths.map((path) => ({ key: iconCacheKey(path), path }));
-  const [rows] = await connection.execute(
-    `SELECT icon_key FROM itemshare_item_icons WHERE icon_key IN (${entries.map(() => '?').join(', ')})`,
-    entries.map((entry) => entry.key)
-  );
-  const cached = new Set(rows.map((row) => row.icon_key));
+
+  // Database first: anything already stored is skipped below and never requested
+  // from UESP again. Chunked so a large inventory does not build one huge IN().
+  const cached = new Set();
+  const chunkSize = 250;
+
+  for (let start = 0; start < entries.length; start += chunkSize) {
+    const chunk = entries.slice(start, start + chunkSize);
+    const [rows] = await connection.execute(
+      `SELECT icon_key FROM itemshare_item_icons WHERE icon_key IN (${chunk.map(() => '?').join(', ')})`,
+      chunk.map((entry) => entry.key)
+    );
+    for (const row of rows) {
+      cached.add(row.icon_key);
+    }
+  }
 
   let fetched = 0;
   let failed = 0;
