@@ -852,6 +852,54 @@ local function GetDisplaySharedItemName(itemName)
     return string.format("%s %s", SHARE_LIST_ICON, tostring(itemName or ""))
 end
 
+-- The ten home storage chests are separate bags, so they are worth naming one
+-- by one: indices are kept explicit because a missing constant would otherwise
+-- shift every later chest by one.
+local HOUSE_STORAGE_BAGS = {
+    [1] = BAG_HOUSE_BANK_ONE,
+    [2] = BAG_HOUSE_BANK_TWO,
+    [3] = BAG_HOUSE_BANK_THREE,
+    [4] = BAG_HOUSE_BANK_FOUR,
+    [5] = BAG_HOUSE_BANK_FIVE,
+    [6] = BAG_HOUSE_BANK_SIX,
+    [7] = BAG_HOUSE_BANK_SEVEN,
+    [8] = BAG_HOUSE_BANK_EIGHT,
+    [9] = BAG_HOUSE_BANK_NINE,
+    [10] = BAG_HOUSE_BANK_TEN,
+}
+
+local function GetHouseStorageChestIndex(bagId)
+    for index = 1, 10 do
+        local candidate = HOUSE_STORAGE_BAGS[index]
+        if candidate and bagId == candidate then
+            return index
+        end
+    end
+    return 0
+end
+
+-- Best effort, and deliberately pcall'd: the zone name is the house name while
+-- the player is inside a home, which is the difference between "the furnishing
+-- vault" and "the furnishing vault in Mournoth Keep".
+local function GetCurrentZoneDisplayName()
+    if not GetUnitZone then
+        return ""
+    end
+    local ok, zoneName = pcall(GetUnitZone, "player")
+    if not ok or type(zoneName) ~= "string" then
+        return ""
+    end
+    return GetNormalizedText(zoneName) or ""
+end
+
+local function GetPlacedFurnitureLocationInfo()
+    local zoneName = GetCurrentZoneDisplayName()
+    if zoneName ~= "" then
+        return "placedfurniture", string.format("Placed Furniture (%s)", zoneName)
+    end
+    return "placedfurniture", "Placed Furniture"
+end
+
 local function GetBagLocationInfo(bagId)
     if bagId == BAG_BACKPACK then
         local characterName = GetCurrentCharacterName()
@@ -864,18 +912,18 @@ local function GetBagLocationInfo(bagId)
         return GetSelectedGuildBankLocationInfo()
     elseif BAG_VIRTUAL and bagId == BAG_VIRTUAL then
         return "craftbag", "Craft Bag"
-    elseif (BAG_HOUSE_BANK_ONE and bagId == BAG_HOUSE_BANK_ONE)
-        or (BAG_HOUSE_BANK_TWO and bagId == BAG_HOUSE_BANK_TWO)
-        or (BAG_HOUSE_BANK_THREE and bagId == BAG_HOUSE_BANK_THREE)
-        or (BAG_HOUSE_BANK_FOUR and bagId == BAG_HOUSE_BANK_FOUR)
-        or (BAG_HOUSE_BANK_FIVE and bagId == BAG_HOUSE_BANK_FIVE)
-        or (BAG_HOUSE_BANK_SIX and bagId == BAG_HOUSE_BANK_SIX)
-        or (BAG_HOUSE_BANK_SEVEN and bagId == BAG_HOUSE_BANK_SEVEN)
-        or (BAG_HOUSE_BANK_EIGHT and bagId == BAG_HOUSE_BANK_EIGHT)
-        or (BAG_HOUSE_BANK_NINE and bagId == BAG_HOUSE_BANK_NINE)
-        or (BAG_HOUSE_BANK_TEN and bagId == BAG_HOUSE_BANK_TEN) then
-        return "housestorage", "House Storage"
-    elseif BAG_FURNITURE_VAULT and bagId == BAG_FURNITURE_VAULT then
+    end
+
+    local chestIndex = GetHouseStorageChestIndex(bagId)
+    if chestIndex > 0 then
+        return string.format("housestorage:%d", chestIndex), string.format("House Storage %d", chestIndex)
+    end
+
+    if BAG_FURNITURE_VAULT and bagId == BAG_FURNITURE_VAULT then
+        local zoneName = GetCurrentZoneDisplayName()
+        if zoneName ~= "" then
+            return "furnishingvault", string.format("Furnishing Vault (%s)", zoneName)
+        end
         return "furnishingvault", "Furnishing Vault"
     end
 
@@ -895,10 +943,16 @@ local function BuildLocationKeyFromSharedFrom(sharedFrom)
         return "bank"
     elseif value == "craft bag" then
         return "craftbag"
-    elseif value == "house storage" then
+    elseif string.find(value, "house storage", 1, true) == 1 then
+        local chestNumber = string.match(value, "^house storage (%d+)")
+        if chestNumber then
+            return "housestorage:" .. chestNumber
+        end
         return "housestorage"
-    elseif value == "furnishing vault" then
+    elseif string.find(value, "furnishing vault", 1, true) == 1 then
         return "furnishingvault"
+    elseif string.find(value, "placed furniture", 1, true) == 1 then
+        return "placedfurniture"
     elseif string.find(value, "inventory %(", 1, true) == 1 then
         local characterName = string.match(tostring(sharedFrom or ""), "^Inventory %((.*)%)$")
         if characterName and characterName ~= "" then
@@ -1856,8 +1910,11 @@ SyncSharedItemsWithInventory = function(quiet)
             end
 
             if extraCount > 0 then
+                local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
                 actualCount = extraCount
-                currentLocation = "Placed Furniture"
+                currentLocation = placedLabel
+                currentLocationKey = placedKey
+                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
             end
         end
 
@@ -1961,8 +2018,11 @@ RebuildSharedItemsWithInventory = function(quiet)
             end
 
             if extraCount > 0 then
+                local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
                 actualCount = extraCount
-                currentLocation = "Placed Furniture"
+                currentLocation = placedLabel
+                currentLocationKey = placedKey
+                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
             end
         end
 
