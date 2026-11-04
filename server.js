@@ -370,6 +370,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
           accountName,
           items: parsed.items.filter((item) => item.accountName === accountName),
           alwaysShare: parsed.alwaysShare.filter((entry) => entry.accountName === accountName),
+          addonVersion: parsed.addonVersions.get(accountName) || '',
           guilds: parsed.accountGuilds.get(accountName) || new Map(),
         })),
         { sourceFile: req.file.originalname, userId: user ? user.id : null }
