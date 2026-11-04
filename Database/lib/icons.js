@@ -149,13 +149,24 @@ const ITEM_LOOKUP_URL = 'https://esoitem.uesp.net/itemLink.php?itemid=';
 // one.
 const ICON_PATH_PATTERN = /(\/esoui\/art\/icons\/[A-Za-z0-9_%/.-]+\.(?:png|dds))/i;
 
+// UESP serves this texture for ids it has no icon for. Accepting it would give
+// every unknown item the same generic picture and report success, hiding the gap
+// instead of leaving it visible, so it counts as "no path".
+const PLACEHOLDER_ICON = /\/icon_missing(_|\.)/i;
+
 /** Game icon path found in a blob of text, as a .dds path, or '' when absent. */
 export function normalizeIconPath(value) {
-  const match = String(value || '').match(ICON_PATH_PATTERN);
-  if (!match) {
-    return '';
+  const text = String(value || '');
+
+  // Every occurrence, not just the first: a page can carry the placeholder and a
+  // real icon, and the order is not ours to rely on.
+  for (const match of text.matchAll(new RegExp(ICON_PATH_PATTERN.source, 'gi'))) {
+    if (!PLACEHOLDER_ICON.test(match[1])) {
+      return match[1].replace(/\.png$/i, '.dds');
+    }
   }
-  return match[1].replace(/\.png$/i, '.dds');
+
+  return '';
 }
 
 /**
