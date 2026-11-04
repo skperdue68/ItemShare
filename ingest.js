@@ -25,7 +25,6 @@ function groupByAccount(items) {
   }
   return groups;
 }
-
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -39,8 +38,9 @@ async function main() {
 
   const absolutePath = path.resolve(filePath);
   const fileText = await readFile(absolutePath, 'utf8');
-  const { guilds, accountGuilds, items, accounts } = extractShareData(fileText);
+  const { guilds, accountGuilds, items, alwaysShare, accounts } = extractShareData(fileText);
   const groups = groupByAccount(items);
+  const alwaysGroups = groupByAccount(alwaysShare);
 
   const totalQuantity = items.reduce((sum, item) => sum + item.itemCount, 0);
   const withGuild = items.filter((item) => item.guildIds.length > 0).length;
@@ -48,6 +48,7 @@ async function main() {
   console.log(`Read ${absolutePath}`);
   console.log(`  accounts: ${accounts.join(', ') || '(none)'}`);
   console.log(`  shared items: ${items.length} (${withGuild} linked to a guild), total quantity ${totalQuantity}`);
+  console.log(`  always shared: ${alwaysShare.length} (not counted as inventory)`);
   console.log(`  guilds: ${guilds.size}`);
   for (const [guildId, guildName] of guilds) {
     console.log(`    ${guildId} ${guildName || '(name not captured yet)'}`);
@@ -58,6 +59,10 @@ async function main() {
     console.log(
       `  ${accountName}: ${accountItems.length} items, guilds ${memberOf && memberOf.size ? [...memberOf.keys()].join(', ') : '(none)'}`
     );
+    const alwaysItems = alwaysGroups.get(accountName) || [];
+    if (alwaysItems.length) {
+      console.log(`    always shared: ${alwaysItems.map((entry) => entry.itemName).join(', ')}`);
+    }
   }
 
   if (dryRun) {
@@ -76,6 +81,7 @@ async function main() {
       accounts.map((accountName) => ({
         accountName,
         items: groups.get(accountName) || [],
+        alwaysShare: alwaysGroups.get(accountName) || [],
         guilds: accountGuilds.get(accountName) || new Map(),
       })),
       { sourceFile: path.basename(absolutePath) }
@@ -83,7 +89,7 @@ async function main() {
 
     for (const result of results) {
       console.log(
-        `  ${result.accountName}: replaced with ${result.itemCount} items, total quantity ${result.totalQuantity}, ${result.guildCount} guilds`
+        `  ${result.accountName}: replaced with ${result.itemCount} items, total quantity ${result.totalQuantity}, ${result.guildCount} guilds, ${result.alwaysShareCount} always shared`
       );
     }
     const iconResult = await cacheItemIcons(connection, items.map((item) => item.icon));
