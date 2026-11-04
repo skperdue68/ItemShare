@@ -1,0 +1,22 @@
+{
+  "name": "itemshare-db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ItemShare MariaDB ingest CLI and upload website",
+  "scripts": {
+    "start": "node server.js",
+    "ingest": "node ingest.js",
+    "check": "node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "multer": "^1.4.5-lts.2",
+    "mysql2": "^3.11.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
