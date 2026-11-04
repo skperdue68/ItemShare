@@ -12,6 +12,9 @@ local defaults = {
     sharedItems = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
+    characterGuilds = {},
+    knownGuilds = {},
+    guildsUpdatedAt = 0,
     spreadsheetUrl = "",
     listWindowState = {
         left = nil,
@@ -735,6 +738,68 @@ local function GetCurrentDisplayName()
 end
 
 
+local function GetCharacterGuilds()
+    local guilds = {}
+
+    if type(GetNumGuilds) ~= "function" or type(GetGuildId) ~= "function" then
+        return guilds
+    end
+
+    local numGuilds = tonumber(GetNumGuilds()) or 0
+    for guildIndex = 1, numGuilds do
+        local guildId = tonumber(GetGuildId(guildIndex)) or 0
+        if guildId > 0 then
+            local guildName = ""
+            if type(GetGuildName) == "function" then
+                guildName = GetNormalizedText(GetGuildName(guildId)) or ""
+            end
+
+            guilds[#guilds + 1] = {
+                guildId = guildId,
+                guildName = guildName,
+            }
+        end
+    end
+
+    return guilds
+end
+
+-- Guild membership has to travel with the exported data so a shared item can be
+-- attributed to the guilds its owner belongs to. IDs are stored next to names
+-- because guild names are not unique and can be renamed; the ID is the stable key.
+local function RefreshGuildSnapshot()
+    if not ItemShare.savedVars then
+        return {}
+    end
+
+    if type(ItemShare.savedVars.characterGuilds) ~= "table" then
+        ItemShare.savedVars.characterGuilds = {}
+    end
+    if type(ItemShare.savedVars.knownGuilds) ~= "table" then
+        ItemShare.savedVars.knownGuilds = {}
+    end
+
+    local guilds = GetCharacterGuilds()
+    local guildIds = {}
+
+    for _, guild in ipairs(guilds) do
+        guildIds[#guildIds + 1] = guild.guildId
+        if guild.guildName ~= "" then
+            ItemShare.savedVars.knownGuilds[tostring(guild.guildId)] = guild.guildName
+        end
+    end
+
+    local now = GetTimeStamp()
+    ItemShare.savedVars.characterGuilds[GetCurrentCharacterName()] = {
+        guildIds = guildIds,
+        guilds = guilds,
+        updatedAt = now,
+    }
+    ItemShare.savedVars.guildsUpdatedAt = now
+
+    return guilds
+end
+
 local function GetSelectedGuildBankLocationInfo()
     local guildId = 0
     if GetSelectedGuildBankId then
@@ -1249,8 +1314,19 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
     local entry = existing or {}
 
+    local guildIds = {}
+    local guildNames = {}
+    for _, guild in ipairs(GetCharacterGuilds()) do
+        guildIds[#guildIds + 1] = guild.guildId
+        guildNames[#guildNames + 1] = guild.guildName
+    end
+
     entry.itemKey = itemData.itemKey
     entry.accountName = GetCurrentAccountName()
+    entry.characterName = GetCurrentCharacterName()
+    entry.guildIds = guildIds
+    entry.guildNames = guildNames
+    entry.guildsCapturedAt = now
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
     entry.itemType = itemData.itemType
@@ -1784,6 +1860,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare debug     - Toggle debug messages on or off")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
+        dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
@@ -1806,6 +1883,20 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "debug" then
         ItemShare.savedVars.debugEnabled = not ItemShare.savedVars.debugEnabled
         d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
+    elseif lowerArg == "guilds" then
+        local guilds = RefreshGuildSnapshot()
+        if #guilds == 0 then
+            dmsg("No guilds detected for this character yet. Try again once the guild list has loaded.")
+        else
+            dmsg(string.format("Guilds for %s:", GetCurrentCharacterName()))
+            for _, guild in ipairs(guilds) do
+                dmsg(string.format(
+                    "  %s (id: %d)",
+                    guild.guildName ~= "" and guild.guildName or "Unknown guild",
+                    guild.guildId
+                ))
+            end
+        end
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
@@ -1847,6 +1938,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
+        dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
@@ -1865,6 +1957,11 @@ local function OnAddonLoaded(event, addonName)
         nil,
         defaults
     )
+
+    RefreshGuildSnapshot()
+    if zo_callLater then
+        zo_callLater(RefreshGuildSnapshot, 3000)
+    end
 
     RegisterContextMenus()
     HookInventoryRowCallbacks()
