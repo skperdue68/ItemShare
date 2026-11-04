@@ -103,6 +103,9 @@ signing in with Google. Unverified addresses are never used to merge people.
   account is replaced or, if anything fails, none of them are.
 - Item rows keep the account they came from (`itemshare_shared_items.account_name`),
   so a member who plays several ESO accounts can see which account holds each item.
+- ItemShare 1.4.0 also saves the item id and the game's icon path for each entry,
+  which is what feeds the thumbnails and the UESP links. Files from older versions
+  import fine; those rows simply carry no icon until they are uploaded again.
 - Every upload **fully replaces** the items stored for that account: the previous
   rows are deleted and rewritten in one transaction, so un-sharing items in game
   and re-uploading removes them here too.
@@ -123,12 +126,31 @@ character, quantity, item type, trait and the guilds it is visible through. Item
 held by any of the viewer's own accounts are tagged `You`, and the summary card
 shows each linked account with its own totals and guilds.
 
+Items are grouped by type (Weapon, Apparel, Furnishing, …) and alphabetical inside
+each group. A filter bar above the table narrows the list by item type, owner
+account and item name. Filters are ordinary query parameters
+(`/?type=Weapon&owner=@Name&q=sword`), so a filtered view can be bookmarked.
+
 The list refreshes automatically after an upload.
 
 Visibility joins three tables: the item's own guilds
 (`itemshare_shared_item_guilds`), the viewer's guilds
 (`itemshare_account_guilds`), and the guild names (`itemshare_guilds`). Nothing
 is readable without a guild overlap, so an account in no guilds sees nothing.
+
+## Item icons
+
+ItemShare 1.4.0 records the game's icon path for every shared item
+(`/esoui/art/icons/…dds`). Browsers cannot draw DDS textures, so after an upload
+the site fetches each *new* icon once from UESP's PNG mirror (`esoicons.uesp.net`)
+and stores the bytes in `itemshare_item_icons`. Pages then serve them from
+`/icons/<key>.png`, so browsing never contacts UESP and a later upload of the same
+item fetches nothing at all. Fetching is best effort: a failure is logged, that
+row simply shows no thumbnail, and the next upload retries it.
+
+Item names also link to `esoitem.uesp.net/itemLink.php?itemid=…` when the id is
+known. That link is a convenience only: type, quality, trait and icon all come
+from the addon, not from UESP.
 
 ## Command line equivalent
 
@@ -149,6 +171,7 @@ every account is replaced inside one transaction, each with its own guilds.
 | `itemshare_users` | One row per person: display name, email, verified flag |
 | `itemshare_user_identities` | `(provider, provider_user_id)` → person, for Discord and Google |
 | `itemshare_discord_users` | Legacy Discord profile table, superseded by `itemshare_users` |
+| `itemshare_item_icons` | Cached PNG bytes per icon path, fetched once from UESP |
 | `itemshare_guilds` | Guild ID → name, the stable identity for a guild |
 | `itemshare_shared_items` | One row per shared item per character |
 | `itemshare_shared_item_guilds` | Which guilds each shared item is offered to |
