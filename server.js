@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// ItemShare upload site: signs in with Discord (optional), accepts
-// ItemShareSavedVars.lua and replaces every shared item for the ESO account in
-// the file. Styling follows the GuildSync palette.
+// ItemShare upload site: signs in with Discord or Google (both optional),
+// accepts ItemShareSavedVars.lua and replaces every shared item for every ESO
+// account in the file. Styling follows the GuildSync palette.
 //
 //   npm start            (reads Database/.env)
 
@@ -19,19 +19,66 @@ import {
   getSharedItemsForViewer,
   getViewerAccounts,
   getViewerGuilds,
-  linkDiscordAccount,
+  linkAccountToUser,
   replaceAccounts,
-  upsertDiscordUser,
+  signInWithProvider,
 } from './lib/store.js';
 import { renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 3000);
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
-const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
-const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || `http://localhost:${PORT}/auth/discord/callback`;
-const discordConfigured = Boolean(DISCORD_CLIENT_ID && DISCORD_CLIENT_SECRET);
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+// Both providers speak OAuth2 authorization code, so one flow serves both. Only
+// the endpoints, scopes and profile fields differ.
+const PROVIDERS = {
+  discord: {
+    label: 'Discord',
+    clientId: process.env.DISCORD_CLIENT_ID || '',
+    clientSecret: process.env.DISCORD_CLIENT_SECRET || '',
+    redirectUri: process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/discord/callback`,
+    authorizeUrl: 'https://discord.com/oauth2/authorize',
+    tokenUrl: 'https://discord.com/api/oauth2/token',
+    profileUrl: 'https://discord.com/api/users/@me',
+    scope: 'identify email',
+    readProfile(profile) {
+      return {
+        providerUserId: String(profile.id),
+        username: profile.global_name || profile.username || String(profile.id),
+        email: typeof profile.email === 'string' ? profile.email : '',
+        emailVerified: profile.verified === true,
+      };
+    },
+  },
+  google: {
+    label: 'Google',
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/auth/google/callback`,
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    profileUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
+    scope: 'openid email profile',
+    readProfile(profile) {
+      return {
+        providerUserId: String(profile.sub),
+        username: profile.name || profile.email || String(profile.sub),
+        email: typeof profile.email === 'string' ? profile.email : '',
+        emailVerified: profile.email_verified === true,
+      };
+    },
+  },
+};
+
+for (const [key, provider] of Object.entries(PROVIDERS)) {
+  provider.key = key;
+  provider.configured = Boolean(provider.clientId && provider.clientSecret);
+}
+
+const enabledProviders = Object.values(PROVIDERS)
+  .filter((provider) => provider.configured)
+  .map(({ key, label }) => ({ key, label }));
 
 if (!process.env.SESSION_SECRET) {
   console.warn('SESSION_SECRET is not set; using an ephemeral secret. Sessions end when the server restarts.');
@@ -78,12 +125,12 @@ async function withDatabase(handler) {
 
 app.get('/', async (req, res) => {
   const user = req.session.user || null;
-  const base = { user, discordConfigured, accounts: [], sharedItems: [], dbError: null };
+  const base = { user, providers: enabledProviders, accounts: [], sharedItems: [], dbError: null };
 
   try {
     await withDatabase(async (connection) => {
-      // One Discord login can own several ESO accounts; every account linked to
-      // it contributes guilds, and the items stay labelled with their account.
+      // One person can own several ESO accounts; every account linked to them
+      // contributes guilds, and the items stay labelled with their account.
       let accountNames = [];
 
       if (user) {
@@ -116,88 +163,92 @@ app.get('/', async (req, res) => {
   res.type('html').send(renderPage(base));
 });
 
-app.get('/auth/discord', (req, res) => {
-  if (!discordConfigured) {
-    res.status(503).send('Discord sign-in is not configured on this server.');
+app.get('/auth/:provider', (req, res) => {
+  const provider = PROVIDERS[req.params.provider];
+
+  if (!provider || !provider.configured) {
+    res.status(503).send('That sign-in provider is not configured on this server.');
     return;
   }
 
   const params = new URLSearchParams({
-    client_id: DISCORD_CLIENT_ID,
-    redirect_uri: DISCORD_REDIRECT_URI,
+    client_id: provider.clientId,
+    redirect_uri: provider.redirectUri,
     response_type: 'code',
-    scope: 'identify email',
+    scope: provider.scope,
     state: req.sessionID,
   });
 
-  res.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
+  if (provider.key === 'google') {
+    params.set('prompt', 'select_account');
+  }
+
+  res.redirect(`${provider.authorizeUrl}?${params.toString()}`);
 });
 
-app.get('/auth/discord/callback', async (req, res) => {
+app.get('/auth/:provider/callback', async (req, res) => {
+  const provider = PROVIDERS[req.params.provider];
   const { code, error } = req.query;
 
-  if (!discordConfigured) {
-    res.status(503).send('Discord sign-in is not configured on this server.');
+  if (!provider || !provider.configured) {
+    res.status(503).send('That sign-in provider is not configured on this server.');
     return;
   }
   if (error || !code) {
-    res.status(400).send(`Discord sign-in was cancelled or failed: ${error || 'no code returned'}`);
+    res.status(400).send(`${provider.label} sign-in was cancelled or failed: ${error || 'no code returned'}`);
     return;
   }
 
   try {
-    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+    const tokenResponse = await fetch(provider.tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
       body: new URLSearchParams({
-        client_id: DISCORD_CLIENT_ID,
-        client_secret: DISCORD_CLIENT_SECRET,
+        client_id: provider.clientId,
+        client_secret: provider.clientSecret,
         grant_type: 'authorization_code',
         code: String(code),
-        redirect_uri: DISCORD_REDIRECT_URI,
+        redirect_uri: provider.redirectUri,
       }),
     });
 
-    if (!tokenResponse.ok) {
-      throw new Error(`Discord token exchange failed (${tokenResponse.status})`);
+    const token = await tokenResponse.json().catch(() => ({}));
+
+    if (!tokenResponse.ok || !token.access_token) {
+      throw new Error(`${provider.label} token exchange failed (${tokenResponse.status})`);
     }
 
-    const token = await tokenResponse.json();
-    const userResponse = await fetch('https://discord.com/api/users/@me', {
+    const userResponse = await fetch(provider.profileUrl, {
       headers: { Authorization: `Bearer ${token.access_token}` },
     });
 
     if (!userResponse.ok) {
-      throw new Error(`Discord user lookup failed (${userResponse.status})`);
+      throw new Error(`${provider.label} profile lookup failed (${userResponse.status})`);
     }
 
     const profile = await userResponse.json();
+    const identity = provider.readProfile(profile);
+
+    const signedIn = await withDatabase((connection) =>
+      signInWithProvider(connection, { provider: provider.key, ...identity })
+    );
+
     req.session.user = {
-      id: String(profile.id),
-      username: profile.global_name || profile.username || String(profile.id),
-      email: typeof profile.email === 'string' ? profile.email : '',
-      emailVerified: profile.verified === true,
+      id: signedIn.userId,
+      provider: provider.key,
+      providerLabel: provider.label,
+      username: identity.username,
+      email: identity.email,
+      emailVerified: identity.emailVerified,
     };
     req.session.accountNames = null;
 
-    // Best effort: a database problem must not block sign-in. The profile is
-    // stored again on upload, so nothing is lost while the database is down.
-    try {
-      await withDatabase((connection) =>
-        upsertDiscordUser(connection, {
-          id: req.session.user.id,
-          username: req.session.user.username,
-          email: req.session.user.email,
-          emailVerified: req.session.user.emailVerified,
-        })
-      );
-    } catch (error) {
-      console.warn(`Could not store the Discord profile: ${error.message}`);
-    }
-
     res.redirect('/');
   } catch (caught) {
-    res.status(502).send(`Could not complete Discord sign-in: ${caught.message}`);
+    res.status(502).send(`Could not complete sign-in: ${caught.message}`);
   }
 });
 
@@ -208,8 +259,8 @@ app.post('/logout', (req, res) => {
 app.post('/upload', upload.single('savedvars'), async (req, res) => {
   const user = req.session.user || null;
 
-  if (discordConfigured && !user) {
-    res.status(401).json({ error: 'Sign in with Discord before uploading.' });
+  if (enabledProviders.length > 0 && !user) {
+    res.status(401).json({ error: 'Sign in with Discord or Google before uploading.' });
     return;
   }
   if (!req.file) {
@@ -229,33 +280,23 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     res.status(400).json({ error: 'No ESO account was found in that file. Upload ItemShareSavedVars.lua, not another file.' });
     return;
   }
+
   try {
     const outcome = await withDatabase(async (connection) => {
       if (user) {
-        // Every ESO account in the file belongs to this Discord login. An
+        // Every ESO account in the file belongs to the signed-in person. An
         // account claimed by somebody else stops the whole upload.
         for (const accountName of parsed.accounts) {
-          const link = await linkDiscordAccount(connection, {
-            accountName,
-            discordUserId: user.id,
-            discordUsername: user.username,
-          });
+          const link = await linkAccountToUser(connection, { accountName, userId: user.id });
 
           if (link === 'conflict') {
             const conflict = new Error(
-              `The ESO account ${accountName} is already linked to a different Discord user.`
+              `The ESO account ${accountName} is already linked to a different person.`
             );
             conflict.statusCode = 409;
             throw conflict;
           }
         }
-
-        await upsertDiscordUser(connection, {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          emailVerified: user.emailVerified,
-        });
       }
 
       return replaceAccounts(
@@ -265,7 +306,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
           items: parsed.items.filter((item) => item.accountName === accountName),
           guilds: parsed.accountGuilds.get(accountName) || new Map(),
         })),
-        { sourceFile: req.file.originalname, discordUserId: user ? user.id : '' }
+        { sourceFile: req.file.originalname, userId: user ? user.id : null }
       );
     });
 
@@ -290,6 +331,10 @@ await prepareDatabase().catch((error) => {
 
 app.listen(PORT, () => {
   console.log(`ItemShare upload site listening on http://localhost:${PORT}`);
-  console.log(`Discord sign-in: ${discordConfigured ? 'enabled' : 'disabled (set DISCORD_* env vars)'}`);
+  console.log(
+    enabledProviders.length
+      ? `Sign-in providers: ${enabledProviders.map((provider) => provider.label).join(', ')}`
+      : 'Sign-in providers: none (set DISCORD_* or GOOGLE_* env vars)'
+  );
   console.log(`Database target: ${readConfig().database}`);
 });

@@ -52,12 +52,18 @@ default, so the site runs without a `.env` on a local root/no-password server.
 | `SESSION_SECRET` | random per boot | Signs the session cookie; set it so logins survive a restart |
 | `DISCORD_CLIENT_ID` | empty | Discord application ID |
 | `DISCORD_CLIENT_SECRET` | empty | Discord application secret |
-| `DISCORD_REDIRECT_URI` | `http://localhost:$PORT/auth/discord/callback` | Must match the Discord app's redirect |
+| `DISCORD_REDIRECT_URI` | `$BASE_URL/auth/discord/callback` | Must match the Discord app's redirect |
+| `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret |
+| `GOOGLE_REDIRECT_URI` | `$BASE_URL/auth/google/callback` | Must match the Google client's redirect URI |
+| `BASE_URL` | `http://localhost:$PORT` | Public address used to build the default redirect URIs |
 
 The MariaDB account needs CREATE privileges on first run (to create the database
 and `itemshare_*` tables). After that, ordinary read/write is enough.
 
-### Discord sign-in (optional)
+### Sign-in providers (optional, either or both)
+
+**Discord**
 
 1. Create an application at <https://discord.com/developers/applications>.
 2. Under **OAuth2**, add the redirect URL `http://localhost:3000/auth/discord/callback`
@@ -65,8 +71,29 @@ and `itemshare_*` tables). After that, ordinary read/write is enough.
 3. Copy the Client ID and Client Secret into `.env` as `DISCORD_CLIENT_ID` and
    `DISCORD_CLIENT_SECRET`, and set `DISCORD_REDIRECT_URI` to the same URL.
 
-Without those variables the site still accepts uploads, but nothing is linked to a
-Discord user and uploads are anonymous.
+**Google**
+
+1. Create an OAuth client at <https://console.cloud.google.com/apis/credentials>
+   (type *Web application*).
+2. Add `http://localhost:3000/auth/google/callback` under **Authorised redirect
+   URIs**.
+3. Copy the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET`, and set `GOOGLE_REDIRECT_URI` to the same URL.
+
+Google returns the person's name, email address and whether that address is
+verified, so it supplies everything the site stores for Discord. Both providers
+give a stable numeric/opaque subject id, which is what identifies the login.
+
+Each provider is independent: configuring one shows only that button, configuring
+both shows two. With neither, the site still accepts uploads, but nothing is
+linked to a person and uploads are anonymous.
+
+**One person, either button.** Identities live in `itemshare_user_identities` and
+point at a row in `itemshare_users`. When someone signs in with a provider for the
+first time and that provider reports a *verified* email already known to another
+identity, the new identity joins the existing person instead of creating a second
+empty one. That way the ESO accounts linked through Discord stay visible after
+signing in with Google. Unverified addresses are never used to merge people.
 
 ## How an upload behaves
 
@@ -81,15 +108,15 @@ Discord user and uploads are anonymous.
   and re-uploading removes them here too.
 - Quantity is stored per item in `item_count`, and the upload total in
   `itemshare_uploads.total_quantity`.
-- The first upload from a signed-in user links that Discord account to the ESO
+- The first upload from a signed-in person links their identity to the ESO
   account in `itemshare_accounts`. If the ESO account is already linked to a
-  different Discord user the upload is refused rather than silently reassigned.
+  different person the upload is refused rather than silently reassigned.
 - Guild membership is replaced in full as well (`itemshare_account_guilds`), so
   leaving a guild in game removes that guild's visibility after the next upload.
 
 ## Seeing shared items
 
-Any Discord account can sign in; it only establishes identity. Once one or more
+Any Discord or Google account can sign in; it only establishes identity. Once one or more
 ESO accounts are linked to it, the page lists every shared item offered to any
 guild any of those accounts belongs to, alphabetically, with the owning account,
 character, quantity, item type, trait and the guilds it is visible through. Items
@@ -117,8 +144,11 @@ every account is replaced inside one transaction, each with its own guilds.
 
 | Table | Purpose |
 | --- | --- |
-| `itemshare_uploads` | One row per import: account, file, item count, total quantity, Discord user |
-| `itemshare_accounts` | ESO account → Discord user link; several accounts may share one Discord user |
+| `itemshare_uploads` | One row per import: account, file, item count, total quantity, person |
+| `itemshare_accounts` | ESO account → person link; several accounts may belong to one person |
+| `itemshare_users` | One row per person: display name, email, verified flag |
+| `itemshare_user_identities` | `(provider, provider_user_id)` → person, for Discord and Google |
+| `itemshare_discord_users` | Legacy Discord profile table, superseded by `itemshare_users` |
 | `itemshare_guilds` | Guild ID → name, the stable identity for a guild |
 | `itemshare_shared_items` | One row per shared item per character |
 | `itemshare_shared_item_guilds` | Which guilds each shared item is offered to |
@@ -128,10 +158,10 @@ Names are display only, because names are neither unique nor stable.
 
 ## Email addresses
 
-Sign-in requests the Discord `identify` **and** `email` scopes, and the address is
-stored in `itemshare_discord_users` keyed by Discord user ID, along with whether
-Discord reports it verified. It is captured at login and refreshed on each upload,
-so it stays correct if someone changes their Discord email.
+Discord sign-in requests the `identify` and `email` scopes; Google sign-in
+requests `openid email profile`. Either way the address lands in
+`itemshare_users.email` together with the provider's own verified flag, and is
+refreshed at every sign-in, so it stays correct if someone changes it.
 
 The address is personal data and is only ever read server-side. It is shown back
 to its own owner on the page and is never included in item lists or any other
