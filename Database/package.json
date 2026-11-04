@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "ingest": "node ingest.js",
+    "backfill": "node backfillIcons.js",
     "check": "node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run"
   },
   "dependencies": {
