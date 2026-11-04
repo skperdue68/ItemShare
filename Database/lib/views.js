@@ -102,53 +102,80 @@ function emailLine(user) {
   return `<div><span class="meta-label">Discord email</span><span class="meta-value">${email}${verified ? ` <span class="meta-note">(${verified})</span>` : ''}</span></div>`;
 }
 
-function summaryCard(summary, guilds, user) {
-  if (!summary) {
+function accountsCard(accounts, user) {
+  if (!accounts || accounts.length === 0) {
     return `
       <section class="card">
-        <h2>Your ESO account</h2>
+        <h2>Your ESO accounts</h2>
         <p class="muted">
           No ESO account is linked to your Discord user yet. Upload your
-          <code>ItemShareSavedVars.lua</code> file below and your account and guilds
-          will be picked up from it.
+          <code>ItemShareSavedVars.lua</code> file below: every account in that file is
+          linked to this Discord login, and each account keeps its own items and guilds.
         </p>
         <div class="meta-row">${emailLine(user)}</div>
       </section>`;
   }
 
-  const lastUpload = summary.lastUpload
-    ? `${escapeHtml(summary.lastUpload.uploaded_at)} &middot; ${escapeHtml(summary.lastUpload.source_file || 'upload')}`
-    : 'never';
+  const totalItems = accounts.reduce((sum, account) => sum + Number(account.itemCount || 0), 0);
+  const totalQuantity = accounts.reduce((sum, account) => sum + Number(account.totalQuantity || 0), 0);
 
-  const linked = summary.link
-    ? escapeHtml(summary.link.discord_username || summary.link.discord_user_id)
-    : 'not linked yet';
+  const blocks = accounts
+    .map((account) => {
+      const lastUpload = account.lastUpload
+        ? `${escapeHtml(account.lastUpload.uploaded_at)} &middot; ${escapeHtml(account.lastUpload.source_file || 'upload')}`
+        : 'never';
+
+      const linked = account.link
+        ? escapeHtml(account.link.discord_username || account.link.discord_user_id)
+        : 'not linked yet';
+
+      return `
+      <div class="account-block">
+        <div class="meta-row">
+          <div><span class="meta-label">ESO account</span><span class="meta-value">${escapeHtml(account.accountName)}</span></div>
+          <div><span class="meta-label">Discord</span><span class="meta-value">${linked}</span></div>
+          <div><span class="meta-label">Last upload</span><span class="meta-value">${lastUpload}</span></div>
+          ${emailLine(user)}
+        </div>
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-value">${account.itemCount}</span><span class="stat-label">Items</span></div>
+          <div class="stat"><span class="stat-value">${account.totalQuantity}</span><span class="stat-label">Quantity</span></div>
+          <div class="stat"><span class="stat-value">${account.guildCount}</span><span class="stat-label">Guilds</span></div>
+        </div>
+        <div class="subsection">
+          <h3>Guilds</h3>
+          ${guildChips(account.guilds)}
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  const heading = accounts.length === 1 ? 'Your ESO account' : `Your ESO accounts (${accounts.length})`;
+  const note = accounts.length > 1
+    ? `<p class="muted">
+        All ${accounts.length} accounts are tied to this Discord login. Items stay listed
+        under the account that holds them, so you can tell which account has what.
+      </p>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-value">${totalItems}</span><span class="stat-label">Items, all accounts</span></div>
+        <div class="stat"><span class="stat-value">${totalQuantity}</span><span class="stat-label">Quantity, all accounts</span></div>
+      </div>`
+    : '';
 
   return `
     <section class="card">
-      <h2>Your ESO account</h2>
-      <div class="stat-grid">
-        <div class="stat"><span class="stat-value">${summary.itemCount}</span><span class="stat-label">Your items</span></div>
-        <div class="stat"><span class="stat-value">${summary.totalQuantity}</span><span class="stat-label">Your quantity</span></div>
-        <div class="stat"><span class="stat-value">${summary.guildCount}</span><span class="stat-label">Guilds</span></div>
-      </div>
-      <div class="meta-row">
-        <div><span class="meta-label">ESO account</span><span class="meta-value">${escapeHtml(summary.accountName)}</span></div>
-        <div><span class="meta-label">Discord</span><span class="meta-value">${linked}</span></div>
-        <div><span class="meta-label">Last upload</span><span class="meta-value">${lastUpload}</span></div>
-        ${emailLine(user)}
-      </div>
-      <div class="subsection">
-        <h3>Your guilds</h3>
-        ${guildChips(guilds)}
-      </div>
+      <h2>${heading}</h2>
+      ${note}
+      ${blocks}
     </section>`;
 }
 
-function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
-  if (!summary) {
+function sharedItemsCard({ accounts, sharedItems }) {
+  if (!accounts || accounts.length === 0) {
     return '';
   }
+
+  const myAccounts = new Set(accounts.map((account) => account.accountName));
 
   const heading = `
     <section class="card">
@@ -165,7 +192,7 @@ function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
 
   const rows = sharedItems
     .map((item) => {
-      const isMine = summary.accountName === item.account_name;
+      const isMine = myAccounts.has(item.account_name);
       return `
         <tr>
           <td>
@@ -197,7 +224,7 @@ function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
   </section>`;
 }
 
-export function renderPage({ user, discordConfigured, summary, guilds, sharedItems, dbError }) {
+export function renderPage({ user, discordConfigured, accounts, sharedItems, dbError }) {
   const canUpload = !dbError && (!discordConfigured || user);
 
   return `<!DOCTYPE html>
@@ -245,8 +272,8 @@ export function renderPage({ user, discordConfigured, summary, guilds, sharedIte
         : ''
     }
 
-    ${summaryCard(summary, guilds, user)}
-    ${sharedItemsCard({ summary, sharedItems, user, discordConfigured })}
+    ${accountsCard(accounts, user)}
+    ${sharedItemsCard({ accounts, sharedItems })}
   </main>
 
   <footer class="footer">

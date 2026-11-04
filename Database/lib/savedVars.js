@@ -41,10 +41,16 @@ function collectGuild(guilds, guildId, guildName) {
   }
 }
 
-function collectScopeGuilds(scope, guilds) {
+function collectScopeGuilds(scope, targets) {
+  const add = (guildId, guildName) => {
+    for (const guilds of targets) {
+      collectGuild(guilds, guildId, guildName);
+    }
+  };
+
   if (isPlainTable(scope.knownGuilds)) {
     for (const [guildId, guildName] of Object.entries(scope.knownGuilds)) {
-      collectGuild(guilds, guildId, guildName);
+      add(guildId, guildName);
     }
   }
 
@@ -52,11 +58,11 @@ function collectScopeGuilds(scope, guilds) {
     for (const character of Object.values(scope.characterGuilds)) {
       if (!isPlainTable(character)) continue;
       for (const guildId of listOf(character.guildIds)) {
-        collectGuild(guilds, guildId, '');
+        add(guildId, '');
       }
       for (const detail of listOf(character.guilds)) {
         if (isPlainTable(detail)) {
-          collectGuild(guilds, detail.guildId, detail.guildName);
+          add(detail.guildId, detail.guildName);
         }
       }
     }
@@ -111,24 +117,42 @@ function accountFromPath(path) {
 
 /**
  * @param {string} fileText raw contents of ItemShareSavedVars.lua
- * @returns {{ guilds: Map<number, string>, items: object[], accountCount: number }}
+ * @returns {{
+ *   guilds: Map<number, string>,
+ *   accountGuilds: Map<string, Map<number, string>>,
+ *   items: object[],
+ *   accounts: string[],
+ *   accountCount: number
+ * }}
  */
 export function extractShareData(fileText) {
   const root = parseLuaAssignment(fileText, 'ItemShareSavedVars');
   const guilds = new Map();
+  const accountGuilds = new Map();
   const items = [];
   const accounts = new Set();
+
+  // Guild membership is tracked twice: once for the whole file and once per ESO
+  // account, so a file holding several accounts does not give every account the
+  // guilds of the others.
+  const guildMapFor = (accountName) => {
+    if (!accountGuilds.has(accountName)) {
+      accountGuilds.set(accountName, new Map());
+    }
+    return accountGuilds.get(accountName);
+  };
 
   const walk = (node, path) => {
     if (!isPlainTable(node)) {
       return;
     }
 
-    collectScopeGuilds(node, guilds);
+    const pathAccount = accountFromPath(path);
+    collectScopeGuilds(node, [guilds, guildMapFor(pathAccount)]);
 
     const itemKey = ITEM_TABLE_KEYS.find((key) => isPlainTable(node[key]));
     if (itemKey) {
-      const accountName = accountFromPath(path);
+      const accountName = pathAccount;
       const scopeName = path[path.length - 1] ?? '';
       accounts.add(accountName);
 
@@ -146,5 +170,23 @@ export function extractShareData(fileText) {
 
   walk(root, []);
 
-  return { guilds, items, accounts: [...accounts], accountCount: accounts.size };
+  // An entry can name guilds the character snapshot never listed; keep the
+  // account's membership consistent so an owner always sees their own share.
+  for (const item of items) {
+    const memberOf = guildMapFor(item.accountName);
+    for (const guildId of item.guildIds) {
+      if (!memberOf.has(guildId)) {
+        memberOf.set(guildId, guilds.get(guildId) ?? '');
+      }
+    }
+  }
+
+  // Drop the wrapper keys (profile names) visited while walking the file.
+  for (const accountName of [...accountGuilds.keys()]) {
+    if (!accounts.has(accountName)) {
+      accountGuilds.delete(accountName);
+    }
+  }
+
+  return { guilds, accountGuilds, items, accounts: [...accounts], accountCount: accounts.size };
 }

@@ -92,41 +92,55 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
 }
 
 /**
- * Replaces every shared item and the guild membership for one ESO account.
- * @returns {Promise<{uploadId: number, itemCount: number, totalQuantity: number, guildCount: number}>}
+ * Replaces the shared items and guild membership of one ESO account. Runs inside
+ * the caller's transaction so every account in a file is replaced atomically.
  */
-export async function replaceAccountItems(connection, { accountName, items, guilds, sourceFile, discordUserId }) {
+async function replaceOneAccount(connection, { accountName, items, guilds, sourceFile, discordUserId }) {
   const totalQuantity = items.reduce((sum, item) => sum + (item.itemCount || 0), 0);
 
+  await upsertGuilds(connection, guilds);
+  await replaceAccountGuilds(connection, accountName, guilds);
+
+  const [upload] = await connection.execute(
+    `INSERT INTO itemshare_uploads
+       (account_name, character_name, source_file, item_count, total_quantity, guild_count, discord_user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [accountName, '*', sourceFile || '', items.length, totalQuantity, guilds.size, discordUserId || '']
+  );
+
+  const uploadId = upload.insertId;
+
+  await connection.execute('DELETE FROM itemshare_shared_items WHERE account_name = ?', [accountName]);
+
+  for (const item of items) {
+    const [inserted] = await connection.execute(INSERT_ITEM_SQL, itemValues(item, uploadId));
+    for (const guildId of item.guildIds) {
+      await connection.execute(
+        'INSERT IGNORE INTO itemshare_shared_item_guilds (item_id, guild_id) VALUES (?, ?)',
+        [inserted.insertId, guildId]
+      );
+    }
+  }
+
+  return { accountName, uploadId, itemCount: items.length, totalQuantity, guildCount: guilds.size };
+}
+
+/**
+ * Full replace for every ESO account in one saved variables file. Either all of
+ * the accounts are updated or, on any failure, none of them are.
+ * @param {Array<{accountName: string, items: object[], guilds: Map<number, string>}>} accounts
+ * @returns {Promise<Array<{accountName: string, uploadId: number, itemCount: number, totalQuantity: number, guildCount: number}>>}
+ */
+export async function replaceAccounts(connection, accounts, { sourceFile, discordUserId } = {}) {
   await connection.beginTransaction();
 
   try {
-    await upsertGuilds(connection, guilds);
-    await replaceAccountGuilds(connection, accountName, guilds);
-
-    const [upload] = await connection.execute(
-      `INSERT INTO itemshare_uploads
-         (account_name, character_name, source_file, item_count, total_quantity, guild_count, discord_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [accountName, '*', sourceFile || '', items.length, totalQuantity, guilds.size, discordUserId || '']
-    );
-
-    const uploadId = upload.insertId;
-
-    await connection.execute('DELETE FROM itemshare_shared_items WHERE account_name = ?', [accountName]);
-
-    for (const item of items) {
-      const [inserted] = await connection.execute(INSERT_ITEM_SQL, itemValues(item, uploadId));
-      for (const guildId of item.guildIds) {
-        await connection.execute(
-          'INSERT IGNORE INTO itemshare_shared_item_guilds (item_id, guild_id) VALUES (?, ?)',
-          [inserted.insertId, guildId]
-        );
-      }
+    const results = [];
+    for (const account of accounts) {
+      results.push(await replaceOneAccount(connection, { ...account, sourceFile, discordUserId }));
     }
-
     await connection.commit();
-    return { uploadId, itemCount: items.length, totalQuantity, guildCount: guilds.size };
+    return results;
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -200,15 +214,37 @@ export async function getAccountSummary(connection, accountName) {
   };
 }
 
-/** Guilds the given ESO account belongs to, newest membership snapshot. */
-export async function getViewerGuilds(connection, accountName) {
+/** Every ESO account linked to one Discord login, oldest link first. */
+export async function getViewerAccounts(connection, discordUserId) {
+  const [rows] = await connection.execute(
+    `SELECT eso_account_name, discord_user_id, discord_username, linked_at
+       FROM itemshare_accounts
+      WHERE discord_user_id = ?
+      ORDER BY linked_at ASC, eso_account_name ASC`,
+    [String(discordUserId)]
+  );
+  return rows;
+}
+
+function viewerAccountNames(accountNames) {
+  return [...new Set((accountNames || []).map((name) => String(name || '').trim()).filter(Boolean))];
+}
+
+/** Guilds any of the viewer's ESO accounts belongs to. */
+export async function getViewerGuilds(connection, accountNames) {
+  const names = viewerAccountNames(accountNames);
+  if (names.length === 0) {
+    return [];
+  }
+
   const [rows] = await connection.execute(
     `SELECT ag.guild_id, COALESCE(g.guild_name, '') AS guild_name
        FROM itemshare_account_guilds ag
        LEFT JOIN itemshare_guilds g ON g.guild_id = ag.guild_id
-      WHERE ag.account_name = ?
+      WHERE ag.account_name IN (${names.map(() => '?').join(', ')})
+      GROUP BY ag.guild_id, g.guild_name
       ORDER BY guild_name ASC, ag.guild_id ASC`,
-    [accountName]
+    names
   );
   return rows;
 }
@@ -217,7 +253,12 @@ export async function getViewerGuilds(connection, accountName) {
  * Shared items offered to any guild the viewer belongs to, alphabetical.
  * Ownership comes from the item's own account, visibility from the guild overlap.
  */
-export async function getSharedItemsForViewer(connection, accountName, limit = 500) {
+export async function getSharedItemsForViewer(connection, accountNames, limit = 500) {
+  const names = viewerAccountNames(accountNames);
+  if (names.length === 0) {
+    return [];
+  }
+
   const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
 
   const [rows] = await connection.execute(
@@ -234,13 +275,14 @@ export async function getSharedItemsForViewer(connection, accountName, limit = 5
        FROM itemshare_shared_items i
        JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
        JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ig.guild_id AND viewer.account_name = ?
+            ON viewer.guild_id = ig.guild_id
+           AND viewer.account_name IN (${names.map(() => '?').join(', ')})
        LEFT JOIN itemshare_guilds g ON g.guild_id = ig.guild_id
       GROUP BY i.id, i.item_name, i.item_count, i.quality, i.quality_name,
                i.item_type_name, i.trait, i.account_name, i.character_name
       ORDER BY i.item_name ASC, i.account_name ASC
       LIMIT ${safeLimit}`,
-    [accountName]
+    names
   );
 
   return rows;
