@@ -27,6 +27,40 @@ function itemIdFromLink(itemLink) {
   return match ? integer(match[1]) : 0;
 }
 
+// The addon stores each raw getter result as a packed table, for example
+// esoDetails.GetItemLinkSetInfo = { true, "Briarheart", 5, 3, 5 }. Turn that
+// into plain JSON so detail the site does not render yet survives the upload.
+function plainValue(value) {
+  if (!isPlainTable(value)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    return null;
+  }
+
+  const keys = Object.keys(value);
+  const isList = keys.length > 0 && keys.every((key) => /^\d+$/.test(key));
+  const ordered = keys.sort((a, b) => (isList ? Number(a) - Number(b) : a.localeCompare(b)));
+
+  if (isList) {
+    return ordered.map((key) => plainValue(value[key]));
+  }
+
+  const result = {};
+  for (const key of ordered) {
+    result[key] = plainValue(value[key]);
+  }
+  return result;
+}
+
+function esoDetailsJson(details) {
+  const plain = plainValue(details);
+  if (!plain || typeof plain !== 'object' || Array.isArray(plain)) {
+    return null;
+  }
+  return Object.keys(plain).length ? JSON.stringify(plain) : null;
+}
+
 function listOf(table) {
   if (!isPlainTable(table)) {
     return [];
@@ -105,6 +139,13 @@ function buildItem({ accountName, scopeName, itemKey, entry, guilds }) {
     weaponType: text(entry.weaponType),
     weaponHandedness: text(entry.weaponHandedness),
     furnitureDataId: integer(entry.furnitureDataId),
+    setName: text(entry.setName),
+    enchantName: text(entry.enchantName),
+    styleName: text(entry.styleName),
+    requiredLevel: integer(entry.requiredLevel),
+    requiredCp: integer(entry.requiredCp),
+    flavorText: text(entry.flavorText),
+    esoData: esoDetailsJson(entry.esoDetails),
     locationKey: text(entry.locationKey),
     locationLabel: text(entry.sharedFrom),
     itemCount: integer(entry.count),

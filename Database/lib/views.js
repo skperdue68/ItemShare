@@ -277,9 +277,14 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
             : name;
 
         const details = [
+          item.set_name,
           item.quality_name,
           item.weapon_type || item.armor_type || item.apparel_slot || item.equip_type,
           item.trait,
+          item.enchant_name ? `Enchant: ${item.enchant_name}` : '',
+          Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
+          Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
+          item.style_name,
           item.location_label ? `in ${item.location_label}` : '',
           seenDate(item.last_dumped_at) ? `seen ${seenDate(item.last_dumped_at)}` : '',
         ]

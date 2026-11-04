@@ -205,3 +205,28 @@ the item list.
 Item icons are not shown. ESO icon art is keyed by icon name rather than the item
 ID in the link, so quality colour, type and trait are displayed instead of
 guessing at a texture.
+
+## What is captured from the game
+
+Addon 1.5.0 records everything the running client will answer for a shared item:
+name, item id, icon path, type, quality, trait, apparel slot, equip type, armour
+and weapon type, handedness, furniture data id, location, **set name,
+enchantment, crafting style, required level and champion points, and flavour
+text**.
+
+Every getter is probed through `pcall` and its results are type-checked, so a
+field the current API does not expose is simply absent instead of raising an
+error while an item is being added to the list. That also means the same build
+keeps working when ZeniMax renames or reshapes one of these functions.
+
+Each probe's raw scalar results are stored with the item and end up in the
+`eso_data` JSON column, keyed by getter name:
+
+```json
+{"GetItemLinkSetInfo": [true, "Briarheart", 5, 3, 5], "GetItemLinkRequiredLevel": [50]}
+```
+
+So detail the site does not render yet is already in the database and can be
+surfaced later without asking anyone to upload again. UESP enrichment is then
+only used for what the client left empty — the icon PNG mirror is the existing
+example.
