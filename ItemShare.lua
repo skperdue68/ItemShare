@@ -111,9 +111,6 @@ local function GetSortedSharedEntries()
 end
 
 
-local ITEM_SHARE_CHAT_LINK_TYPE = "itemshare"
-local ITEM_SHARE_CHAT_LINK_TOKEN = "sheet"
-
 local function GetStoredSpreadsheetUrl()
     if not ItemShare.savedVars then
         return ""
@@ -134,10 +131,6 @@ local function SetStoredSpreadsheetUrl(url)
     end
 
     ItemShare.savedVars.spreadsheetUrl = zo_strtrim(tostring(url or ""))
-end
-
-local function BuildSpreadsheetChatLink()
-    return GetStoredSpreadsheetUrl()
 end
 
 local function BuildSpreadsheetChatMessage()
@@ -202,10 +195,6 @@ local function RefreshSpreadsheetControls()
         end
         button:SetAlpha(url ~= "" and 1 or 0.45)
     end
-end
-
-local function InstallItemShareLinkHandler()
-    return
 end
 
 local function CreateShareListWindow()
@@ -828,11 +817,6 @@ local function GetBagLocationInfo(bagId)
     return string.format("bag:%s", tostring(bagId)), string.format("Bag %s", tostring(bagId))
 end
 
-local function GetBagLocationLabel(bagId)
-    local _, locationLabel = GetBagLocationInfo(bagId)
-    return locationLabel
-end
-
 local function BuildSharedItemKey(itemLink, locationKey)
     return string.format("%s||%s", tostring(itemLink or ""), tostring(locationKey or ""))
 end
@@ -874,22 +858,6 @@ local function JoinSortedLocations(locationSet)
 
     table.sort(locations)
     return table.concat(locations, ", ")
-end
-
-local function MergeLocationStrings(...)
-    local merged = {}
-    for i = 1, select("#", ...) do
-        local locationText = select(i, ...)
-        if locationText and locationText ~= "" then
-            for part in string.gmatch(locationText, "([^,]+)") do
-                local trimmed = zo_strtrim and zo_strtrim(part) or part:gsub("^%s+", ""):gsub("%s+$", "")
-                if trimmed ~= "" then
-                    merged[trimmed] = true
-                end
-            end
-        end
-    end
-    return JoinSortedLocations(merged)
 end
 
 local function GetLocalizedStringByPrefix(prefix, value, fallback)
@@ -1009,22 +977,6 @@ end
 
 local function IsEntryFurnishing(entry)
     return entry and tonumber(entry.itemType or 0) == tonumber(ITEMTYPE_FURNISHING or -1)
-end
-
-local function GetCurrentHouseLocationLabel()
-    local houseName = nil
-    if GetCurrentZoneHouseId and GetHouseDescription then
-        local houseId = GetCurrentZoneHouseId()
-        if houseId and houseId > 0 then
-            houseName = select(1, GetHouseDescription(houseId))
-        end
-    end
-
-    if houseName and houseName ~= "" then
-        return string.format("Placed Furnishing (%s)", zo_strformat("<<t:1>>", houseName))
-    end
-
-    return "Placed Furnishing"
 end
 
 local function GetItemDataFromBagSlot(bagId, slotIndex)
@@ -1479,52 +1431,6 @@ local function GetTrackedBagIds()
     return bagIds
 end
 
-local function BuildPlacedFurnitureIndex()
-    local placedCountsByFurnitureDataId = {}
-    local placedCountsByName = {}
-    local placedLocationsByFurnitureDataId = {}
-    local placedLocationsByName = {}
-
-    if not GetNextPlacedHousingFurnitureId or not GetPlacedHousingFurnitureInfo then
-        return placedCountsByFurnitureDataId, placedCountsByName, placedLocationsByFurnitureDataId, placedLocationsByName
-    end
-
-    local canInspectPlacedFurniture = true
-    if HasAnyEditingPermissionsForCurrentHouse then
-        canInspectPlacedFurniture = HasAnyEditingPermissionsForCurrentHouse()
-    elseif IsOwnerOfCurrentHouse then
-        canInspectPlacedFurniture = IsOwnerOfCurrentHouse()
-    end
-
-    if not canInspectPlacedFurniture then
-        return placedCountsByFurnitureDataId, placedCountsByName, placedLocationsByFurnitureDataId, placedLocationsByName
-    end
-
-    local placedLocation = GetCurrentHouseLocationLabel()
-    local furnitureId = GetNextPlacedHousingFurnitureId(nil)
-
-    while furnitureId do
-        local itemName, _, furnitureDataId = GetPlacedHousingFurnitureInfo(furnitureId)
-        if itemName and itemName ~= "" then
-            local normalizedName = zo_strformat("<<t:1>>", itemName)
-            placedCountsByName[normalizedName] = (placedCountsByName[normalizedName] or 0) + 1
-            placedLocationsByName[normalizedName] = placedLocationsByName[normalizedName] or {}
-            placedLocationsByName[normalizedName][placedLocation] = true
-        end
-
-        furnitureDataId = tonumber(furnitureDataId) or 0
-        if furnitureDataId > 0 then
-            placedCountsByFurnitureDataId[furnitureDataId] = (placedCountsByFurnitureDataId[furnitureDataId] or 0) + 1
-            placedLocationsByFurnitureDataId[furnitureDataId] = placedLocationsByFurnitureDataId[furnitureDataId] or {}
-            placedLocationsByFurnitureDataId[furnitureDataId][placedLocation] = true
-        end
-
-        furnitureId = GetNextPlacedHousingFurnitureId(furnitureId)
-    end
-
-    return placedCountsByFurnitureDataId, placedCountsByName, placedLocationsByFurnitureDataId, placedLocationsByName
-end
-
 local function BuildActualInventoryIndex()
     local countsByEntryKey = {}
     local countsByLink = {}
@@ -1898,7 +1804,7 @@ local function OnSlashCommand(arg)
         SyncSharedItemsWithInventory()
         ConfirmReloadUI()
     elseif lowerArg == "debug" then
-        ItemShare.savedVars.debugEnabled = not not ItemShare.savedVars.debugEnabled and false or true
+        ItemShare.savedVars.debugEnabled = not ItemShare.savedVars.debugEnabled
         d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
@@ -1960,7 +1866,6 @@ local function OnAddonLoaded(event, addonName)
         defaults
     )
 
-    InstallItemShareLinkHandler()
     RegisterContextMenus()
     HookInventoryRowCallbacks()
     if zo_callLater then
