@@ -222,6 +222,70 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
  *
  * @returns {Promise<number>} how many entries were given a path
  */
+/**
+ * Item ids that still have no icon path on any row, for the repair pass. Ids that
+ * already have a path somewhere are excluded: those rows are filled from that
+ * path by the next upload, and a known id never needs UESP again.
+ *
+ * @returns {Promise<number[]>}
+ */
+export async function getItemIdsMissingIcons(connection, limit = 20) {
+  // The batch is inlined rather than bound: LIMIT placeholders are not portable
+  // across the MySQL and MariaDB drivers this site runs against.
+  const batch = Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 200);
+
+  const [rows] = await connection.execute(
+    `SELECT item_id FROM (
+       SELECT item_id FROM itemshare_shared_items WHERE item_id > 0 AND (icon IS NULL OR icon = '')
+       UNION
+       SELECT item_id FROM itemshare_always_share WHERE item_id > 0 AND (icon IS NULL OR icon = '')
+     ) AS missing
+     WHERE item_id NOT IN (
+       SELECT item_id FROM itemshare_shared_items WHERE item_id > 0 AND icon IS NOT NULL AND icon <> ''
+       UNION
+       SELECT item_id FROM itemshare_always_share WHERE item_id > 0 AND icon IS NOT NULL AND icon <> ''
+     )
+     ORDER BY item_id
+     LIMIT ${batch}`
+  );
+
+  return rows
+    .map((row) => Number(row.item_id))
+    .filter((itemId) => Number.isFinite(itemId) && itemId > 0);
+}
+
+/**
+ * Writes recovered icon paths onto every row that is still blank for those item
+ * ids, in both tables. Guards the rows that already have a path, so a concurrent
+ * upload is never overwritten with an older answer.
+ *
+ * @returns {Promise<number>} rows touched
+ */
+export async function fillIconsByItemId(connection, iconByItemId) {
+  let rows = 0;
+
+  for (const [itemId, icon] of iconByItemId || []) {
+    const path = String(icon || '');
+
+    if (!path) {
+      continue;
+    }
+
+    const iconKey = iconCacheKey(path);
+
+    for (const table of ['itemshare_shared_items', 'itemshare_always_share']) {
+      const [result] = await connection.execute(
+        `UPDATE ${table} SET icon = ?, icon_key = ?
+          WHERE item_id = ? AND (icon IS NULL OR icon = '')`,
+        [path, iconKey, itemId]
+      );
+      rows += result.affectedRows || 0;
+    }
+  }
+
+  return rows;
+}
+
 export async function fillKnownIcons(connection, entries) {
   const missing = new Map();
 
