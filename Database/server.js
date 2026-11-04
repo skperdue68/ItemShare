@@ -15,8 +15,10 @@ import dotenv from 'dotenv';
 
 import { extractShareData } from './lib/savedVars.js';
 import { describeConnectionFailure, openDatabase, readConfig } from './lib/database.js';
-import { cacheItemIcons, getCachedIcon } from './lib/icons.js';
+import { cacheItemIcons, getCachedIcon, resolveMissingIconPaths } from './lib/icons.js';
+import { backfillItemIcons } from './lib/iconBackfill.js';
 import {
+  fillKnownIcons,
   getAccountSummary,
   getAlwaysShareForViewer,
   getSharedItemsForViewer,
@@ -346,6 +348,33 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     return;
   }
 
+  // Icons are resolved before the replace and outside its transaction: the
+  // database may already know the path from an earlier upload, and anything it
+  // does not is looked up once by item id on UESP. Holding the replace open
+  // across those requests would be wrong, and an icon is never worth failing an
+  // upload over.
+  const iconEntries = [...parsed.items, ...parsed.alwaysShare];
+
+  try {
+    await withDatabase((connection) => fillKnownIcons(connection, iconEntries));
+  } catch (error) {
+    console.warn(`Could not reuse stored icon paths: ${error.message}`);
+  }
+
+  let iconLookup = { resolved: 0, attempted: 0, missing: 0 };
+
+  try {
+    iconLookup = await resolveMissingIconPaths(iconEntries);
+
+    if (iconLookup.attempted) {
+      console.log(
+        `Icons: resolved ${iconLookup.resolved} of ${iconLookup.missing} missing paths on UESP`
+      );
+    }
+  } catch (error) {
+    console.warn(`Could not look up icon paths on UESP: ${error.message}`);
+  }
+
   try {
     const outcome = await withDatabase(async (connection) => {
       if (user) {
@@ -400,6 +429,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       alwaysShareCount: outcome.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
       totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
       guildCount: parsed.guilds.size,
+      iconLookup,
       icons,
       link: user ? 'linked' : 'skipped',
     });
@@ -407,6 +437,40 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
+
+// Icons that an upload could not resolve are retried here, because nothing else
+// ever asks again: a blank path stays blank for ever otherwise. A bounded batch
+// runs shortly after boot and then on an interval; 0 turns the pass off entirely
+// for anyone who would rather not have the server calling out on its own.
+const ICON_BACKFILL_INTERVAL_MS = Number(process.env.ICON_BACKFILL_INTERVAL_MS ?? 1000 * 60 * 30);
+const ICON_BACKFILL_BATCH = Number(process.env.ICON_BACKFILL_BATCH || 20);
+
+let iconBackfillRunning = false;
+
+async function backfillIcons(reason) {
+  if (iconBackfillRunning) {
+    return;
+  }
+
+  iconBackfillRunning = true;
+
+  try {
+    const result = await withDatabase((connection) =>
+      backfillItemIcons(connection, { limit: ICON_BACKFILL_BATCH })
+    );
+
+    if (result.itemIds) {
+      console.log(
+        `Icons: ${reason} backfill looked up ${result.itemIds}, resolved ${result.resolved}, ` +
+          `filled ${result.rows} rows, fetched ${result.icons.fetched} images`
+      );
+    }
+  } catch (error) {
+    console.warn(`Could not backfill item icons: ${error.message}`);
+  } finally {
+    iconBackfillRunning = false;
+  }
+}
 
 await prepareDatabase().catch((error) => {
   let config = {};
@@ -427,4 +491,19 @@ app.listen(PORT, () => {
   );
   console.log(`Env file: ${hasEnvFile ? envPath : `${envPath} not found - copy .env.example to .env`}`);
   console.log(`Database target: ${readConfig().database}`);
+
+  if (ICON_BACKFILL_INTERVAL_MS > 0) {
+    console.log(
+      `Icon backfill: up to ${ICON_BACKFILL_BATCH} missing items every ${Math.round(
+        ICON_BACKFILL_INTERVAL_MS / 60000
+      )} minutes (ICON_BACKFILL_INTERVAL_MS=0 disables)`
+    );
+
+    // Not unref'd: the server is the process, so the pass should live as long as
+    // it does. The first run waits a minute so a restart loop cannot hammer UESP.
+    setTimeout(() => backfillIcons('startup'), 60 * 1000);
+    setInterval(() => backfillIcons('scheduled'), ICON_BACKFILL_INTERVAL_MS);
+  } else {
+    console.log('Icon backfill: disabled (ICON_BACKFILL_INTERVAL_MS=0)');
+  }
 });

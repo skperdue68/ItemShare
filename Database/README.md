@@ -146,7 +146,19 @@ the site fetches each *new* icon once from UESP's PNG mirror (`esoicons.uesp.net
 and stores the bytes in `itemshare_item_icons`. Pages then serve them from
 `/icons/<key>.png`, so browsing never contacts UESP and a later upload of the same
 item fetches nothing at all. Fetching is best effort: a failure is logged, that
-row simply shows no thumbnail, and the next upload retries it.
+row simply shows no thumbnail, and it is retried later.
+
+When the client records no icon path at all - a share written before 1.5.0, or a
+client without `GetItemIcon` - the item id is used instead: one request to
+`esoitem.uesp.net/itemLink.php?itemid=...` yields the same icon path, which then
+travels the ordinary cache route, so nothing downstream knows the difference.
+
+Both steps run at upload and again on a timer, because a blank icon never repairs
+itself otherwise. `ICON_BACKFILL_INTERVAL_MS` (default 30 minutes) sets how often
+the retry pass runs and `ICON_BACKFILL_BATCH` (default 20) how many item ids one
+pass may look up; `ICON_BACKFILL_INTERVAL_MS=0` turns the pass off. A pass looks
+only at ids that have no path anywhere, so an item UESP is still refusing simply
+stays queued for the next one.
 
 Item names also link to `esoitem.uesp.net/itemLink.php?itemid=…` when the id is
 known. That link is a convenience only: type, quality, trait and icon all come

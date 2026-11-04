@@ -12,8 +12,8 @@ import 'dotenv/config';
 
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
-import { cacheItemIcons } from './lib/icons.js';
-import { replaceAccounts } from './lib/store.js';
+import { cacheItemIcons, resolveMissingIconPaths } from './lib/icons.js';
+import { fillKnownIcons, replaceAccounts } from './lib/store.js';
 
 function groupByAccount(items) {
   const groups = new Map();
@@ -80,6 +80,18 @@ async function main() {
   const { connection, migrations } = await openDatabase(config);
 
   try {
+    // Recover icon paths before the rows are written: from the database first,
+    // then from UESP by item id for anything still blank.
+    const iconEntries = [...items, ...alwaysShare];
+    await fillKnownIcons(connection, iconEntries).catch(() => {});
+
+    const iconLookup = await resolveMissingIconPaths(iconEntries).catch(() => ({ resolved: 0, attempted: 0, missing: 0 }));
+    if (iconLookup.attempted) {
+      console.log(
+        `  icons: resolved ${iconLookup.resolved} of ${iconLookup.missing} missing paths from UESP`
+      );
+    }
+
     const results = await replaceAccounts(
       connection,
       accounts.map((accountName) => ({
