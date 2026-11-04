@@ -18,26 +18,44 @@ function qualityColor(quality) {
   return QUALITY_COLORS[Number.isFinite(index) ? Math.max(0, Math.min(5, index)) : 0];
 }
 
-function discordButton(user, discordConfigured) {
-  if (!discordConfigured) {
+function seenDate(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
     return '';
   }
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+}
 
+function authArea(user, providers) {
   if (user) {
     return `
       <form method="post" action="/logout" class="user-area">
-        <span class="user-name">${escapeHtml(user.username)}</span>
+        <span class="user-name">
+          ${escapeHtml(user.username)}
+          <span class="provider-note">via ${escapeHtml(user.providerLabel || user.provider || 'sign-in')}</span>
+        </span>
         <button class="discord-button discord-button-secondary" type="submit">Sign out</button>
       </form>`;
   }
 
-  return `
-      <a class="discord-button" href="/auth/discord">
-        <span class="discord-mark">&#9670;</span> Sign in with Discord
-      </a>`;
+  if (!providers || providers.length === 0) {
+    return '';
+  }
+
+  const buttons = providers
+    .map(
+      (provider) => `
+      <a class="discord-button auth-button-${escapeHtml(provider.key)}" href="/auth/${escapeHtml(provider.key)}">
+        <span class="discord-mark">${provider.key === 'google' ? 'G' : '&#9670;'}</span> Sign in with ${escapeHtml(provider.label)}
+      </a>`
+    )
+    .join('');
+
+  return `<div class="auth-buttons">${buttons}</div>`;
 }
 
-function statusCard({ dbError, discordConfigured, user }) {
+function statusCard({ dbError, providers, user }) {
   if (dbError) {
     return `
       <section class="card card-error">
@@ -47,14 +65,15 @@ function statusCard({ dbError, discordConfigured, user }) {
       </section>`;
   }
 
-  if (!discordConfigured) {
+  if (!providers || providers.length === 0) {
     return `
       <section class="card card-notice">
-        <h2>Discord sign-in is not configured</h2>
+        <h2>Sign-in is not configured</h2>
         <p class="muted">
-          Uploads work, but they will not be linked to a Discord user. Set
-          <code>DISCORD_CLIENT_ID</code>, <code>DISCORD_CLIENT_SECRET</code> and
-          <code>DISCORD_REDIRECT_URI</code> in <code>Database/.env</code> to enable it.
+          Uploads work, but they will not be linked to a person. Set
+          <code>DISCORD_CLIENT_ID</code> / <code>DISCORD_CLIENT_SECRET</code> or
+          <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code> in
+          <code>Database/.env</code> to enable sign-in.
         </p>
       </section>`;
   }
@@ -64,8 +83,8 @@ function statusCard({ dbError, discordConfigured, user }) {
       <section class="card card-notice">
         <h2>Sign in to see and share items</h2>
         <p class="muted">
-          Any Discord account can sign in; it is only used to connect your uploads to
-          your ESO account. Once your account is linked, you will see every shared item
+          Sign in with Discord or Google; it is only used to connect your uploads to
+          your ESO accounts. Once an account is linked, you will see every shared item
           from the guilds you belong to.
         </p>
       </section>`;
@@ -99,54 +118,124 @@ function emailLine(user) {
 
   const email = user.email ? escapeHtml(user.email) : 'not shared with this site';
   const verified = user.email ? (user.emailVerified ? 'verified' : 'unverified') : '';
-  return `<div><span class="meta-label">Discord email</span><span class="meta-value">${email}${verified ? ` <span class="meta-note">(${verified})</span>` : ''}</span></div>`;
+  return `<div><span class="meta-label">Sign-in email</span><span class="meta-value">${email}${verified ? ` <span class="meta-note">(${verified})</span>` : ''}</span></div>`;
 }
 
-function summaryCard(summary, guilds, user) {
-  if (!summary) {
+function accountsCard(accounts, user) {
+  if (!accounts || accounts.length === 0) {
     return `
       <section class="card">
-        <h2>Your ESO account</h2>
+        <h2>Your ESO accounts</h2>
         <p class="muted">
           No ESO account is linked to your Discord user yet. Upload your
-          <code>ItemShareSavedVars.lua</code> file below and your account and guilds
-          will be picked up from it.
+          <code>ItemShareSavedVars.lua</code> file below: every account in that file is
+          linked to this Discord login, and each account keeps its own items and guilds.
         </p>
         <div class="meta-row">${emailLine(user)}</div>
       </section>`;
   }
 
-  const lastUpload = summary.lastUpload
-    ? `${escapeHtml(summary.lastUpload.uploaded_at)} &middot; ${escapeHtml(summary.lastUpload.source_file || 'upload')}`
-    : 'never';
+  const totalItems = accounts.reduce((sum, account) => sum + Number(account.itemCount || 0), 0);
+  const totalQuantity = accounts.reduce((sum, account) => sum + Number(account.totalQuantity || 0), 0);
 
-  const linked = summary.link
-    ? escapeHtml(summary.link.discord_username || summary.link.discord_user_id)
-    : 'not linked yet';
+  const blocks = accounts
+    .map((account) => {
+      const lastUpload = account.lastUpload
+        ? `${escapeHtml(account.lastUpload.uploaded_at)} &middot; ${escapeHtml(account.lastUpload.source_file || 'upload')}`
+        : 'never';
+
+      const linked = account.link && account.link.user_id
+        ? escapeHtml(account.link.display_name || `user #${account.link.user_id}`)
+        : 'not linked yet';
+
+      return `
+      <div class="account-block">
+        <div class="meta-row">
+          <div><span class="meta-label">ESO account</span><span class="meta-value">${escapeHtml(account.accountName)}</span></div>
+          <div><span class="meta-label">Linked by</span><span class="meta-value">${linked}</span></div>
+          <div><span class="meta-label">Last upload</span><span class="meta-value">${lastUpload}</span></div>
+          ${emailLine(user)}
+        </div>
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-value">${account.itemCount}</span><span class="stat-label">Items</span></div>
+          <div class="stat"><span class="stat-value">${account.totalQuantity}</span><span class="stat-label">Quantity</span></div>
+          <div class="stat"><span class="stat-value">${account.guildCount}</span><span class="stat-label">Guilds</span></div>
+        </div>
+        <div class="subsection">
+          <h3>Guilds</h3>
+          ${guildChips(account.guilds)}
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  const heading = accounts.length === 1 ? 'Your ESO account' : `Your ESO accounts (${accounts.length})`;
+  const note = accounts.length > 1
+    ? `<p class="muted">
+        All ${accounts.length} accounts are tied to this Discord login. Items stay listed
+        under the account that holds them, so you can tell which account has what.
+      </p>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-value">${totalItems}</span><span class="stat-label">Items, all accounts</span></div>
+        <div class="stat"><span class="stat-value">${totalQuantity}</span><span class="stat-label">Quantity, all accounts</span></div>
+      </div>`
+    : '';
 
   return `
     <section class="card">
-      <h2>Your ESO account</h2>
-      <div class="stat-grid">
-        <div class="stat"><span class="stat-value">${summary.itemCount}</span><span class="stat-label">Your items</span></div>
-        <div class="stat"><span class="stat-value">${summary.totalQuantity}</span><span class="stat-label">Your quantity</span></div>
-        <div class="stat"><span class="stat-value">${summary.guildCount}</span><span class="stat-label">Guilds</span></div>
-      </div>
-      <div class="meta-row">
-        <div><span class="meta-label">ESO account</span><span class="meta-value">${escapeHtml(summary.accountName)}</span></div>
-        <div><span class="meta-label">Discord</span><span class="meta-value">${linked}</span></div>
-        <div><span class="meta-label">Last upload</span><span class="meta-value">${lastUpload}</span></div>
-        ${emailLine(user)}
-      </div>
-      <div class="subsection">
-        <h3>Your guilds</h3>
-        ${guildChips(guilds)}
-      </div>
+      <h2>${heading}</h2>
+      ${note}
+      ${blocks}
     </section>`;
 }
 
-function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
-  if (!summary) {
+function filterBar(facets, filters) {
+  const types = facets?.types || [];
+  const owners = facets?.owners || [];
+
+  if (types.length === 0 && owners.length === 0) {
+    return '';
+  }
+
+  const typeOptions = types
+    .map(
+      (entry) => `
+            <option value="${escapeHtml(entry.name)}"${filters.type === entry.name ? ' selected' : ''}>${escapeHtml(entry.name)} (${entry.total})</option>`
+    )
+    .join('');
+
+  const ownerOptions = owners
+    .map(
+      (owner) => `
+            <option value="${escapeHtml(owner)}"${filters.owner === owner ? ' selected' : ''}>${escapeHtml(owner)}</option>`
+    )
+    .join('');
+
+  return `
+    <form class="filters" method="get" action="/">
+      <label class="filter">
+        <span class="filter-label">Type</span>
+        <select name="type">
+          <option value="">All types</option>${typeOptions}
+        </select>
+      </label>
+      <label class="filter">
+        <span class="filter-label">Owner</span>
+        <select name="owner">
+          <option value="">Anyone</option>${ownerOptions}
+        </select>
+      </label>
+      <label class="filter filter-search">
+        <span class="filter-label">Item name</span>
+        <input type="search" name="q" value="${escapeHtml(filters.search)}" placeholder="sword, ring, motif...">
+      </label>
+      <button class="primary-button filter-button" type="submit">Filter</button>
+      <a class="filter-clear" href="/">Clear</a>
+    </form>`;
+}
+
+function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
+  if (!accounts || accounts.length === 0) {
     return '';
   }
 
@@ -154,23 +243,66 @@ function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
     <section class="card">
       <h2>Shared items in your guilds</h2>`;
 
+  const activeFilters = Boolean(filters?.type || filters?.owner || filters?.search);
+  const bar = filterBar(facets, filters || { type: '', owner: '', search: '' });
+
   if (!sharedItems || sharedItems.length === 0) {
     return `${heading}
+      ${bar}
       <p class="muted">
-        Nothing is shared with your guilds yet. If you expected items here, check that
-        both you and the owner uploaded a file from ItemShare 1.3.0+ while in the same guild.
+        ${
+          activeFilters
+            ? 'No items match those filters. Clear them to see everything your guilds share.'
+            : 'Nothing is shared with your guilds yet. If you expected items here, check that both you and the owner uploaded a file from ItemShare 1.3.0+ while in the same guild.'
+        }
       </p>
     </section>`;
   }
 
-  const rows = sharedItems
-    .map((item) => {
-      const isMine = summary.accountName === item.account_name;
-      return `
+  const myAccounts = new Set(accounts.map((account) => account.accountName));
+
+  const rowsFor = (items) =>
+    items
+      .map((item) => {
+        const isMine = myAccounts.has(item.account_name);
+        const icon =
+          Number(item.has_icon) === 1
+            ? `<img class="item-icon" src="/icons/${escapeHtml(item.icon_key)}.png" alt="" width="24" height="24" loading="lazy">`
+            : `<span class="item-icon item-icon-empty" aria-hidden="true"></span>`;
+
+        const name = escapeHtml(item.item_name);
+        const linkedName =
+          Number(item.item_id) > 0
+            ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
+            : name;
+
+        const details = [
+          item.set_name,
+          item.quality_name,
+          item.weapon_type || item.armor_type || item.apparel_slot || item.equip_type,
+          item.trait,
+          item.enchant_name ? `Enchant: ${item.enchant_name}` : '',
+          Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
+          Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
+          item.style_name,
+          item.location_label ? `in ${item.location_label}` : '',
+          seenDate(item.last_dumped_at) ? `seen ${seenDate(item.last_dumped_at)}` : '',
+        ]
+          .filter(Boolean)
+          .map((part) => escapeHtml(part))
+          .join(' &middot; ');
+
+        return `
         <tr>
           <td>
-            <span class="item-name" style="color:${qualityColor(item.quality)}">${escapeHtml(item.item_name)}</span>
-            ${isMine ? '<span class="own-tag">You</span>' : ''}
+            <div class="item-cell">
+              ${icon}
+              <div class="item-cell-text">
+                <span class="item-name" style="color:${qualityColor(item.quality)}">${linkedName}</span>
+                ${isMine ? '<span class="own-tag">You</span>' : ''}
+                ${details ? `<span class="item-meta">${details}</span>` : ''}
+              </div>
+            </div>
           </td>
           <td class="num">${Number(item.item_count) || 0}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
@@ -181,24 +313,48 @@ function sharedItemsCard({ summary, sharedItems, user, discordConfigured }) {
             <span class="owner-character">${escapeHtml(item.character_name || '')}</span>
           </td>
         </tr>`;
-    })
+      })
+      .join('');
+
+  const groups = new Map();
+  for (const item of sharedItems) {
+    const typeName = item.item_type_name || 'Other';
+    if (!groups.has(typeName)) {
+      groups.set(typeName, []);
+    }
+    groups.get(typeName).push(item);
+  }
+
+  const body = [...groups.entries()]
+    .map(
+      ([typeName, items]) => `
+        <tr class="type-row">
+          <td colspan="6">${escapeHtml(typeName)} <span class="type-count">${items.length}</span></td>
+        </tr>
+        ${rowsFor(items)}`
+    )
     .join('');
 
   return `${heading}
-    <p class="muted">${sharedItems.length} item${sharedItems.length === 1 ? '' : 's'}, alphabetical. Quantities are what each owner last reported.</p>
+    <p class="muted">
+      ${sharedItems.length} item${sharedItems.length === 1 ? '' : 's'} across ${groups.size}
+      type${groups.size === 1 ? '' : 's'}, grouped by type and alphabetical inside each group.
+      Quantities are what each owner last reported.
+    </p>
+    ${bar}
     <div class="table-shell">
       <table>
         <thead>
           <tr><th>Item</th><th class="num">Qty</th><th>Type</th><th>Trait</th><th>Guilds</th><th>Owner</th></tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${body}</tbody>
       </table>
     </div>
   </section>`;
 }
 
-export function renderPage({ user, discordConfigured, summary, guilds, sharedItems, dbError }) {
-  const canUpload = !dbError && (!discordConfigured || user);
+export function renderPage({ user, providers, accounts, sharedItems, facets, filters, dbError }) {
+  const canUpload = !dbError && (!providers || providers.length === 0 || user);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -217,11 +373,11 @@ export function renderPage({ user, discordConfigured, summary, guilds, sharedIte
         <span class="brand-subtitle">Shared items across your guilds</span>
       </div>
     </div>
-    ${discordButton(user, discordConfigured)}
+    ${authArea(user, providers)}
   </header>
 
   <main class="surface">
-    ${statusCard({ dbError, discordConfigured, user })}
+    ${statusCard({ dbError, providers, user })}
 
     ${
       canUpload
@@ -245,8 +401,8 @@ export function renderPage({ user, discordConfigured, summary, guilds, sharedIte
         : ''
     }
 
-    ${summaryCard(summary, guilds, user)}
-    ${sharedItemsCard({ summary, sharedItems, user, discordConfigured })}
+    ${accountsCard(accounts, user)}
+    ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
   </main>
 
   <footer class="footer">

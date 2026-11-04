@@ -47,7 +47,7 @@ if (uploadButton) {
     }
 
     uploadButton.disabled = true;
-    setStatus('Uploading and replacing your items...', '');
+    setStatus('Uploading and replacing every account in the file...', '');
 
     try {
       const body = new FormData();
@@ -60,13 +60,19 @@ if (uploadButton) {
         throw new Error(result.error || `Upload failed with status ${response.status}`);
       }
 
+      const summaryLines = (result.accounts || []).map(
+        (account) =>
+          `${account.accountName}: ${account.itemCount} items, quantity ${account.totalQuantity}, ${account.guildCount} guilds`
+      );
+
+      const fetchedIcons = result.icons ? Number(result.icons.fetched) || 0 : 0;
+
       setStatus(
         [
-          `Uploaded for ${result.accountName}.`,
-          `Items replaced: ${result.itemCount}`,
-          `Total quantity: ${result.totalQuantity}`,
-          `Guilds: ${result.guildCount}`,
-          result.link === 'linked' ? 'Discord account linked.' : '',
+          `Saved ${summaryLines.length} ESO account${summaryLines.length === 1 ? '' : 's'}.`,
+          ...summaryLines,
+          fetchedIcons > 0 ? `Cached ${fetchedIcons} item icon${fetchedIcons === 1 ? '' : 's'} for local display.` : '',
+          result.link === 'linked' ? 'Linked to your Discord user.' : '',
         ]
           .filter(Boolean)
           .join('\n'),

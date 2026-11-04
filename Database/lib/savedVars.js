@@ -21,6 +21,46 @@ function integer(value) {
   return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
+// Older addon versions did not save the item id separately; the link still has it.
+function itemIdFromLink(itemLink) {
+  const match = String(itemLink || '').match(/item:(\d+)/);
+  return match ? integer(match[1]) : 0;
+}
+
+// The addon stores each raw getter result as a packed table, for example
+// esoDetails.GetItemLinkSetInfo = { true, "Briarheart", 5, 3, 5 }. Turn that
+// into plain JSON so detail the site does not render yet survives the upload.
+function plainValue(value) {
+  if (!isPlainTable(value)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    return null;
+  }
+
+  const keys = Object.keys(value);
+  const isList = keys.length > 0 && keys.every((key) => /^\d+$/.test(key));
+  const ordered = keys.sort((a, b) => (isList ? Number(a) - Number(b) : a.localeCompare(b)));
+
+  if (isList) {
+    return ordered.map((key) => plainValue(value[key]));
+  }
+
+  const result = {};
+  for (const key of ordered) {
+    result[key] = plainValue(value[key]);
+  }
+  return result;
+}
+
+function esoDetailsJson(details) {
+  const plain = plainValue(details);
+  if (!plain || typeof plain !== 'object' || Array.isArray(plain)) {
+    return null;
+  }
+  return Object.keys(plain).length ? JSON.stringify(plain) : null;
+}
+
 function listOf(table) {
   if (!isPlainTable(table)) {
     return [];
@@ -41,10 +81,16 @@ function collectGuild(guilds, guildId, guildName) {
   }
 }
 
-function collectScopeGuilds(scope, guilds) {
+function collectScopeGuilds(scope, targets) {
+  const add = (guildId, guildName) => {
+    for (const guilds of targets) {
+      collectGuild(guilds, guildId, guildName);
+    }
+  };
+
   if (isPlainTable(scope.knownGuilds)) {
     for (const [guildId, guildName] of Object.entries(scope.knownGuilds)) {
-      collectGuild(guilds, guildId, guildName);
+      add(guildId, guildName);
     }
   }
 
@@ -52,11 +98,11 @@ function collectScopeGuilds(scope, guilds) {
     for (const character of Object.values(scope.characterGuilds)) {
       if (!isPlainTable(character)) continue;
       for (const guildId of listOf(character.guildIds)) {
-        collectGuild(guilds, guildId, '');
+        add(guildId, '');
       }
       for (const detail of listOf(character.guilds)) {
         if (isPlainTable(detail)) {
-          collectGuild(guilds, detail.guildId, detail.guildName);
+          add(detail.guildId, detail.guildName);
         }
       }
     }
@@ -77,6 +123,8 @@ function buildItem({ accountName, scopeName, itemKey, entry, guilds }) {
     characterName,
     itemKey: text(itemKey),
     itemLink: text(entry.itemLink),
+    itemId: integer(entry.itemId) || itemIdFromLink(entry.itemLink),
+    icon: text(entry.icon),
     itemName: text(entry.itemName) || text(itemKey),
     itemType: integer(entry.itemType),
     itemTypeName: text(entry.itemTypeName),
@@ -91,6 +139,13 @@ function buildItem({ accountName, scopeName, itemKey, entry, guilds }) {
     weaponType: text(entry.weaponType),
     weaponHandedness: text(entry.weaponHandedness),
     furnitureDataId: integer(entry.furnitureDataId),
+    setName: text(entry.setName),
+    enchantName: text(entry.enchantName),
+    styleName: text(entry.styleName),
+    requiredLevel: integer(entry.requiredLevel),
+    requiredCp: integer(entry.requiredCp),
+    flavorText: text(entry.flavorText),
+    esoData: esoDetailsJson(entry.esoDetails),
     locationKey: text(entry.locationKey),
     locationLabel: text(entry.sharedFrom),
     itemCount: integer(entry.count),
@@ -111,24 +166,42 @@ function accountFromPath(path) {
 
 /**
  * @param {string} fileText raw contents of ItemShareSavedVars.lua
- * @returns {{ guilds: Map<number, string>, items: object[], accountCount: number }}
+ * @returns {{
+ *   guilds: Map<number, string>,
+ *   accountGuilds: Map<string, Map<number, string>>,
+ *   items: object[],
+ *   accounts: string[],
+ *   accountCount: number
+ * }}
  */
 export function extractShareData(fileText) {
   const root = parseLuaAssignment(fileText, 'ItemShareSavedVars');
   const guilds = new Map();
+  const accountGuilds = new Map();
   const items = [];
   const accounts = new Set();
+
+  // Guild membership is tracked twice: once for the whole file and once per ESO
+  // account, so a file holding several accounts does not give every account the
+  // guilds of the others.
+  const guildMapFor = (accountName) => {
+    if (!accountGuilds.has(accountName)) {
+      accountGuilds.set(accountName, new Map());
+    }
+    return accountGuilds.get(accountName);
+  };
 
   const walk = (node, path) => {
     if (!isPlainTable(node)) {
       return;
     }
 
-    collectScopeGuilds(node, guilds);
+    const pathAccount = accountFromPath(path);
+    collectScopeGuilds(node, [guilds, guildMapFor(pathAccount)]);
 
     const itemKey = ITEM_TABLE_KEYS.find((key) => isPlainTable(node[key]));
     if (itemKey) {
-      const accountName = accountFromPath(path);
+      const accountName = pathAccount;
       const scopeName = path[path.length - 1] ?? '';
       accounts.add(accountName);
 
@@ -146,5 +219,23 @@ export function extractShareData(fileText) {
 
   walk(root, []);
 
-  return { guilds, items, accounts: [...accounts], accountCount: accounts.size };
+  // An entry can name guilds the character snapshot never listed; keep the
+  // account's membership consistent so an owner always sees their own share.
+  for (const item of items) {
+    const memberOf = guildMapFor(item.accountName);
+    for (const guildId of item.guildIds) {
+      if (!memberOf.has(guildId)) {
+        memberOf.set(guildId, guilds.get(guildId) ?? '');
+      }
+    }
+  }
+
+  // Drop the wrapper keys (profile names) visited while walking the file.
+  for (const accountName of [...accountGuilds.keys()]) {
+    if (!accounts.has(accountName)) {
+      accountGuilds.delete(accountName);
+    }
+  }
+
+  return { guilds, accountGuilds, items, accounts: [...accounts], accountCount: accounts.size };
 }

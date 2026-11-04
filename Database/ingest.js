@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Stage one importer: reads ItemShareSavedVars.lua and stores its contents in
 // the ItemShare MariaDB database. This is the command line equivalent of the
-// website upload: each run fully replaces the items for that ESO account.
+// website upload: each run fully replaces the items and guilds of every ESO
+// account found in the file, inside one transaction.
 //
 //   node ingest.js <path to ItemShareSavedVars.lua> [--dry-run]
 
@@ -11,7 +12,8 @@ import 'dotenv/config';
 
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
-import { replaceAccountItems } from './lib/store.js';
+import { cacheItemIcons } from './lib/icons.js';
+import { replaceAccounts } from './lib/store.js';
 
 function groupByAccount(items) {
   const groups = new Map();
@@ -37,7 +39,7 @@ async function main() {
 
   const absolutePath = path.resolve(filePath);
   const fileText = await readFile(absolutePath, 'utf8');
-  const { guilds, items, accounts } = extractShareData(fileText);
+  const { guilds, accountGuilds, items, accounts } = extractShareData(fileText);
   const groups = groupByAccount(items);
 
   const totalQuantity = items.reduce((sum, item) => sum + item.itemCount, 0);
@@ -49,6 +51,13 @@ async function main() {
   console.log(`  guilds: ${guilds.size}`);
   for (const [guildId, guildName] of guilds) {
     console.log(`    ${guildId} ${guildName || '(name not captured yet)'}`);
+  }
+  for (const accountName of accounts) {
+    const memberOf = accountGuilds.get(accountName);
+    const accountItems = groups.get(accountName) || [];
+    console.log(
+      `  ${accountName}: ${accountItems.length} items, guilds ${memberOf && memberOf.size ? [...memberOf.keys()].join(', ') : '(none)'}`
+    );
   }
 
   if (dryRun) {
@@ -62,17 +71,25 @@ async function main() {
   const { connection, migrations } = await openDatabase(config);
 
   try {
-    for (const [accountName, accountItems] of groups) {
-      const result = await replaceAccountItems(connection, {
+    const results = await replaceAccounts(
+      connection,
+      accounts.map((accountName) => ({
         accountName,
-        items: accountItems,
-        guilds,
-        sourceFile: path.basename(absolutePath),
-      });
+        items: groups.get(accountName) || [],
+        guilds: accountGuilds.get(accountName) || new Map(),
+      })),
+      { sourceFile: path.basename(absolutePath) }
+    );
+
+    for (const result of results) {
       console.log(
-        `  ${accountName}: replaced with ${result.itemCount} items, total quantity ${result.totalQuantity}`
+        `  ${result.accountName}: replaced with ${result.itemCount} items, total quantity ${result.totalQuantity}, ${result.guildCount} guilds`
       );
     }
+    const iconResult = await cacheItemIcons(connection, items.map((item) => item.icon));
+    console.log(
+      `  icons: fetched ${iconResult.fetched}, already stored ${iconResult.skipped}, failed ${iconResult.failed}`
+    );
     console.log(`Applied migrations: ${migrations.join(', ')}`);
   } finally {
     await connection.end();

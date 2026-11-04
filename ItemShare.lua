@@ -1040,6 +1040,142 @@ local function GetItemFurnitureDataIdSafe(bagId, slotIndex)
     return tonumber(GetItemFurnitureDataId(bagId, slotIndex)) or 0
 end
 
+local function GetItemIconPathSafe(bagId, slotIndex)
+    if not GetItemIcon then
+        return ""
+    end
+    return tostring(GetItemIcon(bagId, slotIndex) or "")
+end
+
+-- The item id lives inside the link: |H0:item:43532:370:50:...|h|h
+local function GetItemIdFromLink(itemLink)
+    local id = string.match(tostring(itemLink or ""), "item:(%d+)")
+    return tonumber(id) or 0
+end
+
+-- ESO exposes item detail through global getters whose signatures move between
+-- API versions, and calling one with the wrong arguments raises a Lua error.
+-- Every probe below is pcall'd and type-checked, so a getter the client does not
+-- have, or one whose shape changed, costs that field and nothing else: adding an
+-- item to the share list must never fail because of a capture attempt.
+local ITEM_LINK_GETTERS = {
+    "GetItemLinkDisplayQuality",
+    "GetItemLinkItemType",
+    "GetItemLinkEquipType",
+    "GetItemLinkArmorType",
+    "GetItemLinkWeaponType",
+    "GetItemLinkTraitType",
+    "GetItemLinkItemId",
+    "GetItemLinkItemLevel",
+    "GetItemLinkRequiredLevel",
+    "GetItemLinkRequiredChampionPoints",
+    "GetItemLinkFlavorText",
+    "GetItemLinkEnchantInfo",
+    "GetItemLinkItemStyle",
+    "GetItemLinkMaxStackSize",
+    "GetItemLinkStolen",
+}
+
+local ITEM_SLOT_GETTERS = {
+    "GetItemRequiredLevel",
+    "GetItemRequiredChampionPoints",
+    "GetItemArmorRating",
+    "GetItemWeaponDamage",
+    "GetItemMaxStack",
+    "GetItemStolen",
+}
+
+local function PackItemScalars(...)
+    local packed = {}
+    for index = 1, select("#", ...) do
+        local value = select(index, ...)
+        local valueType = type(value)
+        if valueType == "number" or valueType == "boolean" or (valueType == "string" and value ~= "") then
+            packed[#packed + 1] = value
+        end
+    end
+    return packed
+end
+
+-- Runs one getter if the running client has it and keeps whatever scalar values
+-- it returned. The packed results are stored verbatim with the item as well, so
+-- detail this version of the addon does not display yet survives an upload and
+-- can be used by the website later without a new game capture.
+local function ProbeItemApi(raw, name, ...)
+    local getter = _G[name]
+    if type(getter) ~= "function" then
+        return nil
+    end
+
+    local results = { pcall(getter, ...) }
+    if results[1] ~= true then
+        return nil
+    end
+
+    local packed = PackItemScalars(unpack(results, 2, #results))
+    if #packed > 0 then
+        raw[name] = packed
+        return packed
+    end
+    return nil
+end
+
+local function FirstItemString(values)
+    for _, value in ipairs(values or {}) do
+        if type(value) == "string" and value ~= "" then
+            return value
+        end
+    end
+    return ""
+end
+
+local function FirstItemNumber(values)
+    for _, value in ipairs(values or {}) do
+        if type(value) == "number" and value > 0 then
+            return value
+        end
+    end
+    return 0
+end
+
+local function CaptureItemDetails(itemLink, bagId, slotIndex)
+    local raw = {}
+    local details = { esoDetails = raw }
+
+    if itemLink and itemLink ~= "" then
+        for _, getterName in ipairs(ITEM_LINK_GETTERS) do
+            ProbeItemApi(raw, getterName, itemLink)
+        end
+
+        -- The set name is picked out by type rather than by position: its result
+        -- is mostly numbers, and the order has changed between API versions, so
+        -- reading position one as the name could store a bonus count instead.
+        local setInfo = ProbeItemApi(raw, "GetItemLinkSetInfo", itemLink, false)
+        details.setName = FirstItemString(setInfo)
+        details.enchantName = FirstItemString(raw.GetItemLinkEnchantInfo)
+        details.styleName = FirstItemString(raw.GetItemLinkItemStyle)
+        details.flavorText = FirstItemString(raw.GetItemLinkFlavorText)
+    end
+
+    if bagId ~= nil and slotIndex ~= nil then
+        for _, getterName in ipairs(ITEM_SLOT_GETTERS) do
+            ProbeItemApi(raw, getterName, bagId, slotIndex)
+        end
+    end
+
+    details.requiredLevel = FirstItemNumber(raw.GetItemLinkRequiredLevel)
+    if details.requiredLevel == 0 then
+        details.requiredLevel = FirstItemNumber(raw.GetItemRequiredLevel)
+    end
+
+    details.requiredCp = FirstItemNumber(raw.GetItemLinkRequiredChampionPoints)
+    if details.requiredCp == 0 then
+        details.requiredCp = FirstItemNumber(raw.GetItemRequiredChampionPoints)
+    end
+
+    return details
+end
+
 local function IsEntryFurnishing(entry)
     return entry and tonumber(entry.itemType or 0) == tonumber(ITEMTYPE_FURNISHING or -1)
 end
@@ -1058,11 +1194,14 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     local weaponTypeName, weaponType, weaponHandedness = GetItemWeaponTypeInfo(bagId, slotIndex)
     local furnitureDataId = GetItemFurnitureDataIdSafe(bagId, slotIndex)
     local locationKey, sharedFrom = GetBagLocationInfo(bagId)
+    local details = CaptureItemDetails(itemLink, bagId, slotIndex)
 
     return {
         itemKey = BuildSharedItemKey(itemLink, locationKey),
         itemName = itemName,
         itemLink = itemLink,
+        itemId = GetItemIdFromLink(itemLink),
+        icon = GetItemIconPathSafe(bagId, slotIndex),
         itemType = itemType,
         itemTypeName = itemTypeName,
         quality = quality,
@@ -1077,6 +1216,13 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         weaponHandedness = weaponHandedness,
         weaponTypeId = weaponType,
         furnitureDataId = furnitureDataId,
+        setName = details.setName or "",
+        enchantName = details.enchantName or "",
+        styleName = details.styleName or "",
+        requiredLevel = details.requiredLevel or 0,
+        requiredCp = details.requiredCp or 0,
+        flavorText = details.flavorText or "",
+        esoDetails = details.esoDetails or {},
         bagId = bagId,
         slotIndex = slotIndex,
         locationKey = locationKey,
@@ -1329,6 +1475,8 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.guildsCapturedAt = now
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
+    entry.itemId = tonumber(itemData.itemId or 0) or 0
+    entry.icon = itemData.icon or ""
     entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
@@ -1343,6 +1491,13 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.weaponHandedness = itemData.weaponHandedness
     entry.weaponTypeId = itemData.weaponTypeId
     entry.furnitureDataId = itemData.furnitureDataId
+    entry.setName = itemData.setName or ""
+    entry.enchantName = itemData.enchantName or ""
+    entry.styleName = itemData.styleName or ""
+    entry.requiredLevel = tonumber(itemData.requiredLevel or 0) or 0
+    entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
+    entry.flavorText = itemData.flavorText or ""
+    entry.esoDetails = itemData.esoDetails or {}
     entry.bagId = itemData.bagId
     entry.slotIndex = itemData.slotIndex
     entry.locationKey = itemData.locationKey
@@ -1373,6 +1528,8 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         itemKey = BuildSharedItemKey(entry.itemLink, locationKey),
         itemName = entry.itemName,
         itemLink = entry.itemLink,
+        itemId = entry.itemId,
+        icon = entry.icon,
         itemType = entry.itemType,
         itemTypeName = entry.itemTypeName,
         quality = entry.quality,
@@ -1387,6 +1544,13 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         weaponHandedness = entry.weaponHandedness,
         weaponTypeId = entry.weaponTypeId,
         furnitureDataId = entry.furnitureDataId,
+        setName = entry.setName,
+        enchantName = entry.enchantName,
+        styleName = entry.styleName,
+        requiredLevel = entry.requiredLevel,
+        requiredCp = entry.requiredCp,
+        flavorText = entry.flavorText,
+        esoDetails = entry.esoDetails,
         bagId = entry.bagId,
         slotIndex = entry.slotIndex,
         locationKey = locationKey,
