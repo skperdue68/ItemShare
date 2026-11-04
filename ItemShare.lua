@@ -1677,10 +1677,17 @@ local function BuildActualInventoryIndex()
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
+    local observableLocationKeys = {}
 
     for _, bagId in ipairs(GetTrackedBagIds()) do
         local locationKey, locationLabel = GetBagLocationInfo(bagId)
         local bagSize = GetBagSize(bagId) or 0
+        if bagSize > 0 then
+            -- A bag we can actually read is a bag we are allowed to judge. An
+            -- unopened bank or guild bank reports size 0, and shares filed there
+            -- must survive a reconcile that could not see them.
+            observableLocationKeys[locationKey] = true
+        end
         for slotIndex = 0, bagSize - 1 do
             local slotItemName = GetItemName(bagId, slotIndex)
             if slotItemName and slotItemName ~= "" then
@@ -1743,6 +1750,7 @@ local function BuildActualInventoryIndex()
     end
 
     return {
+        observableLocationKeys = observableLocationKeys,
         countsByEntryKey = countsByEntryKey,
         countsByLink = countsByLink,
         bagCountsByFurnitureDataId = bagCountsByFurnitureDataId,
@@ -1792,7 +1800,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     return nil
 end
 
-local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     local summary = string.format(
         "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
         tostring(actionName or "Sync"),
@@ -1803,11 +1811,13 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
     )
 
     d("[ItemShare] " .. summary)
-    d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    if not quiet then
+        d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    end
     dmsg(summary)
 end
 
-SyncSharedItemsWithInventory = function()
+SyncSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
@@ -1851,15 +1861,26 @@ SyncSharedItemsWithInventory = function()
             end
         end
 
+        local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+        local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
+
         if actualCount <= 0 then
             if isFurnishing then
                 furnishingProtectedCount = furnishingProtectedCount + 1
                 unchangedCount = unchangedCount + 1
-                dmsg(string.format("Kept furnishing share entry (unverified instead of removing): %s", itemName))
+                if not quiet then
+                    dmsg(string.format("Kept furnishing share entry (unverified instead of removing): %s", itemName))
+                end
+            elseif not canVerify then
+                -- That bag could not be read this session, so "not found" proves
+                -- nothing about the item. Keep the share rather than delete blind.
+                unchangedCount = unchangedCount + 1
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
-                dmsg(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                end
             end
         else
             local previousCount = tonumber(entry.count or 0) or 0
@@ -1886,18 +1907,20 @@ SyncSharedItemsWithInventory = function()
                 or previousItemKey ~= targetItemKey
                 or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
-                dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
+                if not quiet then
+                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
+                end
             else
                 unchangedCount = unchangedCount + 1
             end
         end
     end
 
-    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
 
-RebuildSharedItemsWithInventory = function()
+RebuildSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
@@ -1943,15 +1966,25 @@ RebuildSharedItemsWithInventory = function()
             end
         end
 
+        local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+        local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
+
         if actualCount <= 0 then
             if isFurnishing then
                 furnishingProtectedCount = furnishingProtectedCount + 1
                 unchangedCount = unchangedCount + 1
-                dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+                if not quiet then
+                    dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+                end
+            elseif not canVerify then
+                -- Unreadable bag: keep the share until a session can see it.
+                unchangedCount = unchangedCount + 1
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
-                dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                end
             end
         else
             local previousCount = tonumber(entry.count or 0) or 0
@@ -2000,15 +2033,43 @@ RebuildSharedItemsWithInventory = function()
                 or previousApparelWeight ~= tostring(entry.apparelWeight or "")
                 or previousWeaponType ~= tostring(entry.weaponType or "") then
                 updatedCount = updatedCount + 1
-                dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+                end
             else
                 unchangedCount = unchangedCount + 1
             end
         end
     end
 
-    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     RefreshShareListWindowIfVisible()
+end
+
+-- The saved file is meant to be a snapshot of what the account owns right now, so
+-- the addon refreshes it without being asked: once when a character loads, and
+-- again when a bank opens or closes. Every entry it can see is rewritten from live
+-- data (item id, icon, guild ids, set, enchant, style, level, CP, flavour text),
+-- and entries whose location was readable but no longer holds the item are
+-- dropped. Locations that could not be read are left alone.
+local autoReconcilePending = false
+
+local function ScheduleAutoReconcile(reason)
+    if autoReconcilePending or not ItemShare.savedVars or not zo_callLater then
+        return
+    end
+
+    autoReconcilePending = true
+    zo_callLater(function()
+        autoReconcilePending = false
+        if not ItemShare.savedVars then
+            return
+        end
+
+        RefreshGuildSnapshot()
+        RebuildSharedItemsWithInventory(true)
+        d(string.format("[ItemShare] Shared items refreshed after %s.", tostring(reason or "login")))
+    end, 4000)
 end
 
 local function OnSlashCommand(arg)
@@ -2019,8 +2080,8 @@ local function OnSlashCommand(arg)
         dmsg("Commands:")
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
-        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
+        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare debug     - Toggle debug messages on or off")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
@@ -2042,7 +2103,7 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "rebuild" then
         RebuildSharedItemsWithInventory()
     elseif lowerArg == "save" then
-        SyncSharedItemsWithInventory()
+        RebuildSharedItemsWithInventory()
         ConfirmReloadUI()
     elseif lowerArg == "debug" then
         ItemShare.savedVars.debugEnabled = not ItemShare.savedVars.debugEnabled
@@ -2098,8 +2159,8 @@ local function OnSlashCommand(arg)
         dmsg("Commands:")
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
-        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
+        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare guilds    - Show the guilds captured for this character")
@@ -2127,6 +2188,22 @@ local function OnAddonLoaded(event, addonName)
         zo_callLater(RefreshGuildSnapshot, 3000)
     end
 
+    if EVENT_PLAYER_ACTIVATED then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_ACTIVATED, function()
+            ScheduleAutoReconcile("login")
+        end)
+    end
+    if EVENT_OPEN_BANK then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
+            ScheduleAutoReconcile("the bank opening")
+        end)
+    end
+    if EVENT_CLOSE_BANK then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
+            ScheduleAutoReconcile("the bank closing")
+        end)
+    end
+
     RegisterContextMenus()
     HookInventoryRowCallbacks()
     if zo_callLater then
@@ -2142,7 +2219,7 @@ local function OnAddonLoaded(event, addonName)
         CreateShareListWindow()
     end
 
-    dmsg("Loaded.")
+    dmsg("Loaded. Shared items refresh from your bags on login and when you open the bank.")
 end
 
 EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoaded)
