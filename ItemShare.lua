@@ -10,6 +10,7 @@ local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
     sharedItems = {},
+    alwaysShare = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
     characterGuilds = {},
@@ -1614,6 +1615,163 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
     return SaveSharedEntry(itemData, entry.count, entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
 end
 
+-- "Always share" is a standing offer rather than an inventory entry: it says "if
+-- I ever have this again, offer it". It lives in its own table so the rebuild
+-- pass, which prunes anything missing from a readable bag, can never delete it.
+local function GetAlwaysShareTable()
+    if not ItemShare.savedVars then
+        return {}
+    end
+    if type(ItemShare.savedVars.alwaysShare) ~= "table" then
+        ItemShare.savedVars.alwaysShare = {}
+    end
+    return ItemShare.savedVars.alwaysShare
+end
+
+-- Keyed by item link, not by the inventory key: the offer is about the item, and
+-- it has to survive the item being in a different bag or in no bag at all.
+local function GetAlwaysShareKey(itemLink)
+    return tostring(itemLink or "")
+end
+
+local function SaveAlwaysShareEntry(itemData)
+    if not itemData or not itemData.itemLink or itemData.itemLink == "" then
+        return nil
+    end
+
+    local alwaysShare = GetAlwaysShareTable()
+    local key = GetAlwaysShareKey(itemData.itemLink)
+    local now = GetTimeStamp()
+    local entry = alwaysShare[key] or {}
+
+    local guildIds = {}
+    local guildNames = {}
+    for _, guild in ipairs(GetCharacterGuilds()) do
+        guildIds[#guildIds + 1] = guild.guildId
+        guildNames[#guildNames + 1] = guild.guildName
+    end
+
+    entry.itemKey = key
+    entry.accountName = GetCurrentAccountName()
+    entry.characterName = GetCurrentCharacterName()
+    entry.guildIds = guildIds
+    entry.guildNames = guildNames
+    entry.guildsCapturedAt = now
+    entry.itemName = itemData.itemName
+    entry.itemLink = itemData.itemLink
+    entry.itemId = tonumber(itemData.itemId or 0) or 0
+    entry.icon = itemData.icon or ""
+    entry.itemType = itemData.itemType
+    entry.itemTypeName = itemData.itemTypeName
+    entry.quality = itemData.quality
+    entry.qualityName = itemData.qualityName
+    entry.trait = itemData.trait
+    entry.traitType = itemData.traitType
+    entry.apparelSlot = itemData.apparelSlot
+    entry.equipType = itemData.equipType
+    entry.apparelWeight = itemData.apparelWeight
+    entry.armorType = itemData.armorType
+    entry.weaponType = itemData.weaponType
+    entry.weaponHandedness = itemData.weaponHandedness
+    entry.weaponTypeId = itemData.weaponTypeId
+    entry.furnitureDataId = itemData.furnitureDataId
+    entry.setName = itemData.setName or ""
+    entry.enchantName = itemData.enchantName or ""
+    entry.styleName = itemData.styleName or ""
+    entry.requiredLevel = tonumber(itemData.requiredLevel or 0) or 0
+    entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
+    entry.flavorText = itemData.flavorText or ""
+    entry.esoDetails = itemData.esoDetails or {}
+    entry.firstAddedAt = entry.firstAddedAt or now
+    entry.lastUpdatedAt = now
+
+    alwaysShare[key] = entry
+    return entry
+end
+
+local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
+    local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
+    if not isEligible then
+        dmsg(string.format("Cannot always share that item: %s", tostring(reason)))
+        return
+    end
+
+    local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
+    if not itemData then
+        dmsg("Could not determine item data.")
+        return
+    end
+
+    local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
+    SaveAlwaysShareEntry(itemData)
+    dmsg(string.format(
+        "%s always shared item %s. It stays offered even when you do not have one.",
+        existing and "Updated" or "Added",
+        itemData.itemName
+    ))
+end
+
+local function PrintAlwaysShareItems()
+    local alwaysShare = GetAlwaysShareTable()
+    local entries = {}
+
+    for _, entry in pairs(alwaysShare) do
+        entries[#entries + 1] = entry
+    end
+
+    if #entries == 0 then
+        dmsg("Nothing is always shared yet. Right-click an item and choose \"Always Share This Item\".")
+        return
+    end
+
+    table.sort(entries, function(left, right)
+        return zo_strlower(tostring(left.itemName or "")) < zo_strlower(tostring(right.itemName or ""))
+    end)
+
+    dmsg(string.format("Always shared (%d):", #entries))
+    for index, entry in ipairs(entries) do
+        dmsg(string.format("  %d. %s", index, tostring(entry.itemName or entry.itemKey or "Unknown item")))
+    end
+    dmsg("Remove one with /itemshare noalways <part of the name>.")
+end
+
+local function RemoveAlwaysShareByName(searchText)
+    local needle = zo_strlower(zo_strtrim(tostring(searchText or "")))
+    if needle == "" then
+        dmsg("Usage: /itemshare noalways <part of the item name>")
+        return
+    end
+
+    local alwaysShare = GetAlwaysShareTable()
+    local matches = {}
+
+    for key, entry in pairs(alwaysShare) do
+        local name = zo_strlower(tostring(entry.itemName or ""))
+        if name ~= "" and string.find(name, needle, 1, true) then
+            matches[#matches + 1] = key
+        end
+    end
+
+    if #matches == 0 then
+        dmsg(string.format("No always-shared item matches \"%s\".", tostring(searchText)))
+        return
+    end
+
+    if #matches > 1 then
+        dmsg(string.format(
+            "%d always-shared items match \"%s\"; use more of the name.",
+            #matches,
+            tostring(searchText)
+        ))
+        return
+    end
+
+    local key = matches[1]
+    local entry = alwaysShare[key]
+    alwaysShare[key] = nil
+    dmsg(string.format("Stopped always sharing %s.", tostring(entry and entry.itemName or key)))
+end
+
 local function RemoveItemFromShareFromBagSlot(bagId, slotIndex)
     local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
     if not itemData or not itemData.itemLink or not itemData.itemName then
@@ -1647,21 +1805,36 @@ local function AddInventoryContextMenu(slot)
     end
 
     local sharedEntryKey = FindSharedEntryKeyForBagSlot(bagId, slotIndex)
+    local isEligible = IsItemEligibleForShare(bagId, slotIndex)
+
     if sharedEntryKey then
         AddCustomMenuItem("Remove from Shared List", function()
             RemoveItemFromShareFromBagSlot(bagId, slotIndex)
         end, MENU_ADD_OPTION_LABEL)
-        return
+    elseif isEligible then
+        AddCustomMenuItem("Add to Share", function()
+            AddItemToShareFromBagSlot(bagId, slotIndex)
+        end, MENU_ADD_OPTION_LABEL)
     end
 
-    local isEligible = IsItemEligibleForShare(bagId, slotIndex)
-    if not isEligible then
-        return
+    -- The standing offer is independent of this copy: an item can be shared right
+    -- now and marked to always share at the same time, so it gets its own entry
+    -- rather than replacing the one above.
+    local alwaysKey = GetAlwaysShareKey(itemLink)
+    if GetAlwaysShareTable()[alwaysKey] then
+        AddCustomMenuItem("Stop Always Sharing", function()
+            local entry = GetAlwaysShareTable()[alwaysKey]
+            GetAlwaysShareTable()[alwaysKey] = nil
+            dmsg(string.format(
+                "Stopped always sharing %s.",
+                tostring(entry and entry.itemName or itemName)
+            ))
+        end, MENU_ADD_OPTION_LABEL)
+    elseif isEligible then
+        AddCustomMenuItem("Always Share This Item", function()
+            AddAlwaysShareFromBagSlot(bagId, slotIndex)
+        end, MENU_ADD_OPTION_LABEL)
     end
-
-    AddCustomMenuItem("Add to Share", function()
-        AddItemToShareFromBagSlot(bagId, slotIndex)
-    end, MENU_ADD_OPTION_LABEL)
 end
 
 local function RegisterContextMenus()
@@ -2147,6 +2320,8 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
+        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -2182,6 +2357,10 @@ local function OnSlashCommand(arg)
                 ))
             end
         end
+    elseif lowerArg == "always" then
+        PrintAlwaysShareItems()
+    elseif string.match(lowerArg, "^noalways%s+") then
+        RemoveAlwaysShareByName(zo_strtrim(rawArg:sub(9)))
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
@@ -2225,6 +2404,8 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
+        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
 end
@@ -2242,6 +2423,9 @@ local function OnAddonLoaded(event, addonName)
         nil,
         defaults
     )
+
+    -- Files written before this version have no alwaysShare table yet.
+    GetAlwaysShareTable()
 
     RefreshGuildSnapshot()
     if zo_callLater then

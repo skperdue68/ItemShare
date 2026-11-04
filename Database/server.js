@@ -18,6 +18,7 @@ import { describeConnectionFailure, openDatabase, readConfig } from './lib/datab
 import { cacheItemIcons, getCachedIcon } from './lib/icons.js';
 import {
   getAccountSummary,
+  getAlwaysShareForViewer,
   getSharedItemsForViewer,
   getViewerAccounts,
   getViewerFacets,
@@ -156,6 +157,7 @@ app.get('/', async (req, res) => {
     providers: enabledProviders,
     accounts: [],
     sharedItems: [],
+    alwaysShare: [],
     facets: { types: [], owners: [] },
     filters,
     dbError: null,
@@ -190,6 +192,7 @@ app.get('/', async (req, res) => {
 
       base.facets = await getViewerFacets(connection, accountNames);
       base.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
+      base.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
     });
   } catch (error) {
     base.dbError = error.message;
@@ -366,6 +369,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
         parsed.accounts.map((accountName) => ({
           accountName,
           items: parsed.items.filter((item) => item.accountName === accountName),
+          alwaysShare: parsed.alwaysShare.filter((entry) => entry.accountName === accountName),
           guilds: parsed.accountGuilds.get(accountName) || new Map(),
         })),
         { sourceFile: req.file.originalname, userId: user ? user.id : null }
@@ -392,6 +396,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       accounts: outcome,
       accountCount: outcome.length,
       itemCount: outcome.reduce((sum, entry) => sum + entry.itemCount, 0),
+      alwaysShareCount: outcome.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
       totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
       guildCount: parsed.guilds.size,
       icons,

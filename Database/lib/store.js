@@ -102,6 +102,90 @@ function itemValues(item, uploadId) {
   return values;
 }
 
+const ALWAYS_COLUMNS = [
+  'account_name',
+  'character_name',
+  'item_key',
+  'item_key_hash',
+  'item_link',
+  'item_name',
+  'item_id',
+  'icon',
+  'icon_key',
+  'item_type',
+  'item_type_name',
+  'quality',
+  'quality_name',
+  'trait',
+  'trait_type',
+  'apparel_slot',
+  'equip_type',
+  'apparel_weight',
+  'armor_type',
+  'weapon_type',
+  'weapon_handedness',
+  'set_name',
+  'enchant_name',
+  'style_name',
+  'required_level',
+  'required_cp',
+  'flavor_text',
+  'eso_data',
+  'furniture_data_id',
+  'first_added_at',
+  'last_updated_at',
+  'upload_id',
+];
+
+const INSERT_ALWAYS_SHARE_SQL = `
+INSERT INTO itemshare_always_share (${ALWAYS_COLUMNS.join(', ')})
+VALUES (${ALWAYS_COLUMNS.map(() => '?').join(', ')})`;
+
+function alwaysShareValues(entry, uploadId) {
+  const values = [
+    entry.accountName,
+    entry.characterName || '',
+    entry.itemKey,
+    hashItemKey(entry.itemKey),
+    entry.itemLink || '',
+    entry.itemName || '',
+    entry.itemId || 0,
+    entry.icon || '',
+    iconCacheKey(entry.icon),
+    entry.itemType || 0,
+    entry.itemTypeName || '',
+    entry.quality || 0,
+    entry.qualityName || '',
+    entry.trait || '',
+    entry.traitType || '',
+    entry.apparelSlot || '',
+    entry.equipType || '',
+    entry.apparelWeight || '',
+    entry.armorType || '',
+    entry.weaponType || '',
+    entry.weaponHandedness || '',
+    entry.setName || '',
+    entry.enchantName || '',
+    entry.styleName || '',
+    entry.requiredLevel || 0,
+    entry.requiredCp || 0,
+    entry.flavorText || null,
+    entry.esoData || null,
+    entry.furnitureDataId || 0,
+    entry.firstAddedAt || 0,
+    entry.lastUpdatedAt || 0,
+    uploadId,
+  ];
+
+  if (values.length !== ALWAYS_COLUMNS.length) {
+    throw new Error(
+      `Always share column mismatch: ${values.length} values for ${ALWAYS_COLUMNS.length} columns`
+    );
+  }
+
+  return values;
+}
+
 async function upsertGuilds(connection, guilds) {
   for (const [guildId, guildName] of guilds) {
     await connection.execute(
@@ -127,7 +211,10 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
  * Replaces the shared items and guild membership of one ESO account. Runs inside
  * the caller's transaction so every account in a file is replaced atomically.
  */
-async function replaceOneAccount(connection, { accountName, items, guilds, sourceFile, userId }) {
+async function replaceOneAccount(
+  connection,
+  { accountName, items, alwaysShare = [], guilds, sourceFile, userId }
+) {
   const totalQuantity = items.reduce((sum, item) => sum + (item.itemCount || 0), 0);
 
   await upsertGuilds(connection, guilds);
@@ -154,7 +241,32 @@ async function replaceOneAccount(connection, { accountName, items, guilds, sourc
     }
   }
 
-  return { accountName, uploadId, itemCount: items.length, totalQuantity, guildCount: guilds.size };
+  // Rewritten in full from the same file, but kept in their own table: a
+  // standing offer has no count and no location, and must survive the item
+  // leaving every bag.
+  await connection.execute('DELETE FROM itemshare_always_share WHERE account_name = ?', [accountName]);
+
+  for (const offered of alwaysShare) {
+    const [inserted] = await connection.execute(
+      INSERT_ALWAYS_SHARE_SQL,
+      alwaysShareValues(offered, uploadId)
+    );
+    for (const guildId of offered.guildIds) {
+      await connection.execute(
+        'INSERT IGNORE INTO itemshare_always_share_guilds (always_share_id, guild_id) VALUES (?, ?)',
+        [inserted.insertId, guildId]
+      );
+    }
+  }
+
+  return {
+    accountName,
+    uploadId,
+    itemCount: items.length,
+    totalQuantity,
+    guildCount: guilds.size,
+    alwaysShareCount: alwaysShare.length,
+  };
 }
 
 /**
@@ -461,6 +573,79 @@ export async function getSharedItemsForViewer(
                i.apparel_slot, i.equip_type, i.location_label, i.last_dumped_at,
                i.account_name, i.character_name, icon.icon_key
       ORDER BY i.item_type_name ASC, i.item_name ASC, i.account_name ASC
+      LIMIT ${safeLimit}`,
+    params
+  );
+
+  return rows;
+}
+
+/**
+ * Standing offers visible to the viewer: joined through the guilds the item is
+ * offered to, exactly like the inventory list. `in_inventory` says whether an
+ * owned copy exists right now, which is the one thing the offer itself cannot
+ * know — the owner may have none at all.
+ */
+export async function getAlwaysShareForViewer(
+  connection,
+  accountNames,
+  { type = '', owner = '', search = '', limit = 500 } = {}
+) {
+  const names = viewerAccountNames(accountNames);
+  if (names.length === 0) {
+    return [];
+  }
+
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
+  const filters = [];
+  const params = [...names];
+
+  if (type) {
+    filters.push('a.item_type_name = ?');
+    params.push(type);
+  }
+  if (owner) {
+    filters.push('a.account_name = ?');
+    params.push(owner);
+  }
+  if (search) {
+    filters.push('a.item_name LIKE ?');
+    params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
+  }
+
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+  const [rows] = await connection.execute(
+    `SELECT a.id,
+            a.item_name,
+            a.item_id,
+            a.icon_key,
+            a.quality,
+            a.item_type_name,
+            a.trait,
+            a.set_name,
+            a.first_added_at,
+            a.account_name,
+            a.character_name,
+            (icon.icon_key IS NOT NULL) AS has_icon,
+            (SELECT COUNT(*)
+               FROM itemshare_shared_items own
+              WHERE own.account_name = a.account_name
+                AND a.item_id > 0
+                AND own.item_id = a.item_id) > 0 AS in_inventory,
+            GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
+       FROM itemshare_always_share a
+       JOIN itemshare_always_share_guilds ag ON ag.always_share_id = a.id
+       JOIN itemshare_account_guilds viewer
+            ON viewer.guild_id = ag.guild_id
+           AND viewer.account_name IN (${inClause(names)})
+       LEFT JOIN itemshare_guilds g ON g.guild_id = ag.guild_id
+       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = a.icon_key
+       ${where}
+      GROUP BY a.id, a.item_name, a.item_id, a.icon_key, a.quality, a.item_type_name,
+               a.trait, a.set_name, a.first_added_at, a.account_name, a.character_name,
+               icon.icon_key
+      ORDER BY a.item_name ASC, a.account_name ASC
       LIMIT ${safeLimit}`,
     params
   );
