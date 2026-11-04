@@ -16,6 +16,7 @@ import dotenv from 'dotenv';
 import { extractShareData } from './lib/savedVars.js';
 import { describeConnectionFailure, openDatabase, readConfig } from './lib/database.js';
 import { cacheItemIcons, getCachedIcon, resolveMissingIconPaths } from './lib/icons.js';
+import { backfillItemIcons } from './lib/iconBackfill.js';
 import {
   fillKnownIcons,
   getAccountSummary,
@@ -437,6 +438,40 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
   }
 });
 
+// Icons that an upload could not resolve are retried here, because nothing else
+// ever asks again: a blank path stays blank for ever otherwise. A bounded batch
+// runs shortly after boot and then on an interval; 0 turns the pass off entirely
+// for anyone who would rather not have the server calling out on its own.
+const ICON_BACKFILL_INTERVAL_MS = Number(process.env.ICON_BACKFILL_INTERVAL_MS ?? 1000 * 60 * 30);
+const ICON_BACKFILL_BATCH = Number(process.env.ICON_BACKFILL_BATCH || 20);
+
+let iconBackfillRunning = false;
+
+async function backfillIcons(reason) {
+  if (iconBackfillRunning) {
+    return;
+  }
+
+  iconBackfillRunning = true;
+
+  try {
+    const result = await withDatabase((connection) =>
+      backfillItemIcons(connection, { limit: ICON_BACKFILL_BATCH })
+    );
+
+    if (result.itemIds) {
+      console.log(
+        `Icons: ${reason} backfill looked up ${result.itemIds}, resolved ${result.resolved}, ` +
+          `filled ${result.rows} rows, fetched ${result.icons.fetched} images`
+      );
+    }
+  } catch (error) {
+    console.warn(`Could not backfill item icons: ${error.message}`);
+  } finally {
+    iconBackfillRunning = false;
+  }
+}
+
 await prepareDatabase().catch((error) => {
   let config = {};
   try {
@@ -456,4 +491,19 @@ app.listen(PORT, () => {
   );
   console.log(`Env file: ${hasEnvFile ? envPath : `${envPath} not found - copy .env.example to .env`}`);
   console.log(`Database target: ${readConfig().database}`);
+
+  if (ICON_BACKFILL_INTERVAL_MS > 0) {
+    console.log(
+      `Icon backfill: up to ${ICON_BACKFILL_BATCH} missing items every ${Math.round(
+        ICON_BACKFILL_INTERVAL_MS / 60000
+      )} minutes (ICON_BACKFILL_INTERVAL_MS=0 disables)`
+    );
+
+    // Not unref'd: the server is the process, so the pass should live as long as
+    // it does. The first run waits a minute so a restart loop cannot hammer UESP.
+    setTimeout(() => backfillIcons('startup'), 60 * 1000);
+    setInterval(() => backfillIcons('scheduled'), ICON_BACKFILL_INTERVAL_MS);
+  } else {
+    console.log('Icon backfill: disabled (ICON_BACKFILL_INTERVAL_MS=0)');
+  }
 });
