@@ -117,6 +117,23 @@ node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse o
 Guild IDs come from the addon (1.3.0+; `/ishare guilds` shows what was captured).
 Names are display only, because names are neither unique nor stable.
 
+## Email addresses
+
+Sign-in requests the Discord `identify` **and** `email` scopes, and the address is
+stored in `itemshare_discord_users` keyed by Discord user ID, along with whether
+Discord reports it verified. It is captured at login and refreshed on each upload,
+so it stays correct if someone changes their Discord email.
+
+The address is personal data and is only ever read server-side. It is shown back
+to its own owner on the page and is never included in item lists or any other
+member's view. `getOwnerNotificationEmail(connection, accountName)` is the single
+server-side helper for finding an owner's address when a request needs to notify
+them.
+
+Sending mail is not wired up yet, because the request flow does not exist. When it
+lands it will need mail credentials in `.env` (SMTP or an API key); nothing about
+the capture side needs to change.
+
 ## Not done yet (next step)
 
 Requesting items is out of scope. The schema is shaped for it: a request would

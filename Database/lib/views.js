@@ -92,7 +92,17 @@ function guildChips(guilds) {
   return `<div class="chips">${chips}</div>`;
 }
 
-function summaryCard(summary, guilds) {
+function emailLine(user) {
+  if (!user) {
+    return '';
+  }
+
+  const email = user.email ? escapeHtml(user.email) : 'not shared with this site';
+  const verified = user.email ? (user.emailVerified ? 'verified' : 'unverified') : '';
+  return `<div><span class="meta-label">Discord email</span><span class="meta-value">${email}${verified ? ` <span class="meta-note">(${verified})</span>` : ''}</span></div>`;
+}
+
+function summaryCard(summary, guilds, user) {
   if (!summary) {
     return `
       <section class="card">
@@ -102,6 +112,7 @@ function summaryCard(summary, guilds) {
           <code>ItemShareSavedVars.lua</code> file below and your account and guilds
           will be picked up from it.
         </p>
+        <div class="meta-row">${emailLine(user)}</div>
       </section>`;
   }
 
@@ -125,6 +136,7 @@ function summaryCard(summary, guilds) {
         <div><span class="meta-label">ESO account</span><span class="meta-value">${escapeHtml(summary.accountName)}</span></div>
         <div><span class="meta-label">Discord</span><span class="meta-value">${linked}</span></div>
         <div><span class="meta-label">Last upload</span><span class="meta-value">${lastUpload}</span></div>
+        ${emailLine(user)}
       </div>
       <div class="subsection">
         <h3>Your guilds</h3>
@@ -233,7 +245,7 @@ export function renderPage({ user, discordConfigured, summary, guilds, sharedIte
         : ''
     }
 
-    ${summaryCard(summary, guilds)}
+    ${summaryCard(summary, guilds, user)}
     ${sharedItemsCard({ summary, sharedItems, user, discordConfigured })}
   </main>
 

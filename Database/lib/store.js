@@ -133,6 +133,40 @@ export async function replaceAccountItems(connection, { accountName, items, guil
   }
 }
 
+/**
+ * Records or refreshes the Discord profile captured at sign-in. The email is
+ * stored so a later item request can notify the owner without asking again.
+ */
+export async function upsertDiscordUser(connection, { id, username, email, emailVerified }) {
+  await connection.execute(
+    `INSERT INTO itemshare_discord_users
+       (discord_user_id, discord_username, discord_email, email_verified)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       discord_username = VALUES(discord_username),
+       discord_email = IF(VALUES(discord_email) = '', discord_email, VALUES(discord_email)),
+       email_verified = VALUES(email_verified)`,
+    [String(id), username || '', email || '', emailVerified ? 1 : 0]
+  );
+}
+
+/** Email for an ESO account's linked Discord user, for request notifications. */
+export async function getOwnerNotificationEmail(connection, accountName) {
+  const [rows] = await connection.execute(
+    `SELECT u.discord_email, u.email_verified
+       FROM itemshare_accounts a
+       JOIN itemshare_discord_users u ON u.discord_user_id = a.discord_user_id
+      WHERE a.eso_account_name = ?`,
+    [accountName]
+  );
+
+  const row = rows[0];
+  if (!row || !row.discord_email) {
+    return null;
+  }
+  return { email: row.discord_email, verified: Number(row.email_verified) === 1 };
+}
+
 export async function getAccountSummary(connection, accountName) {
   const [[items]] = await connection.execute(
     `SELECT COUNT(*) AS itemCount, COALESCE(SUM(item_count), 0) AS totalQuantity

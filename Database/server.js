@@ -14,7 +14,14 @@ import 'dotenv/config';
 
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
-import { getAccountSummary, getSharedItemsForViewer, getViewerGuilds, linkDiscordAccount, replaceAccountItems } from './lib/store.js';
+import {
+  getAccountSummary,
+  getSharedItemsForViewer,
+  getViewerGuilds,
+  linkDiscordAccount,
+  replaceAccountItems,
+  upsertDiscordUser,
+} from './lib/store.js';
 import { renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,7 +116,7 @@ app.get('/auth/discord', (req, res) => {
     client_id: DISCORD_CLIENT_ID,
     redirect_uri: DISCORD_REDIRECT_URI,
     response_type: 'code',
-    scope: 'identify',
+    scope: 'identify email',
     state: req.sessionID,
   });
 
@@ -158,8 +165,25 @@ app.get('/auth/discord/callback', async (req, res) => {
     req.session.user = {
       id: String(profile.id),
       username: profile.global_name || profile.username || String(profile.id),
+      email: typeof profile.email === 'string' ? profile.email : '',
+      emailVerified: profile.verified === true,
     };
     req.session.accountName = null;
+
+    // Best effort: a database problem must not block sign-in. The profile is
+    // stored again on upload, so nothing is lost while the database is down.
+    try {
+      await withDatabase((connection) =>
+        upsertDiscordUser(connection, {
+          id: req.session.user.id,
+          username: req.session.user.username,
+          email: req.session.user.email,
+          emailVerified: req.session.user.emailVerified,
+        })
+      );
+    } catch (error) {
+      console.warn(`Could not store the Discord profile: ${error.message}`);
+    }
 
     res.redirect('/');
   } catch (caught) {
@@ -213,6 +237,13 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
           accountName,
           discordUserId: user.id,
           discordUsername: user.username,
+        });
+
+        await upsertDiscordUser(connection, {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          emailVerified: user.emailVerified,
         });
 
         if (link === 'conflict') {
