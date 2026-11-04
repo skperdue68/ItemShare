@@ -29,6 +29,7 @@ import {
   replaceAccounts,
   signInWithProvider,
 } from './lib/store.js';
+import { MariaDbSessionStore } from './lib/sessionStore.js';
 import { renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -104,14 +105,26 @@ if (!process.env.SESSION_SECRET) {
 }
 const SESSION_SECRET = process.env.SESSION_SECRET || `itemshare-${Math.random().toString(36).slice(2)}`;
 
+// Staying signed in is the default, not a trick: sessions are kept in MariaDB so a
+// restart no longer signs everyone out, and the cookie lasts a month rather than
+// half a day. `rolling` renews it on each visit, so an active member never sees a
+// login screen for no reason. Log out from the avatar menu is the only way out
+// short of clearing cookies, and SESSION_TTL_DAYS=0 is not a thing - one day is
+// the floor.
+const SESSION_TTL_DAYS = Math.max(Number(process.env.SESSION_TTL_DAYS || 30) || 30, 1);
+const SESSION_TTL_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
+const sessionStore = new MariaDbSessionStore({ withConnection: withDatabase, ttlMs: SESSION_TTL_MS });
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(
   session({
     secret: SESSION_SECRET,
+    store: sessionStore,
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', secure: false, maxAge: 1000 * 60 * 60 * 12 },
+    rolling: true,
+    cookie: { httpOnly: true, sameSite: 'lax', secure: false, maxAge: SESSION_TTL_MS },
   })
 );
 app.use(express.static(path.join(__dirname, 'public')));
@@ -319,8 +332,21 @@ app.get('/auth/:provider/callback', async (req, res) => {
   }
 });
 
+// Log out is the only way to end a session that is not cookie expiry, so it has to
+// actually delete the row as well as the cookie: leaving either behind means the
+// next request walks straight back in.
 app.post('/logout', (req, res) => {
-  req.session.destroy(() => res.redirect('/'));
+  const finish = () => {
+    res.clearCookie('connect.sid');
+    res.redirect('/');
+  };
+
+  if (req.session) {
+    req.session.destroy(() => finish());
+    return;
+  }
+
+  finish();
 });
 
 app.post('/upload', upload.single('savedvars'), async (req, res) => {
@@ -482,6 +508,21 @@ await prepareDatabase().catch((error) => {
   console.warn(describeConnectionFailure(error, config));
 });
 
+// Expired rows are invisible to every query, so this is housekeeping rather than
+// correctness: once at startup, then twice a day.
+sessionStore
+  .prune()
+  .then((removed) => {
+    if (removed) {
+      console.log(`Sessions: removed ${removed} expired row${removed === 1 ? '' : 's'}`);
+    }
+  })
+  .catch((error) => console.warn(`Could not prune expired sessions: ${error.message}`));
+
+setInterval(() => {
+  sessionStore.prune().catch(() => {});
+}, 1000 * 60 * 60 * 12);
+
 app.listen(PORT, () => {
   console.log(`ItemShare upload site listening on http://localhost:${PORT}`);
   console.log(
@@ -490,6 +531,7 @@ app.listen(PORT, () => {
       : 'Sign-in providers: none (set DISCORD_* or GOOGLE_* env vars)'
   );
   console.log(`Env file: ${hasEnvFile ? envPath : `${envPath} not found - copy .env.example to .env`}`);
+  console.log(`Sign-in stays active for ${SESSION_TTL_DAYS} days (SESSION_TTL_DAYS), stored in MariaDB`);
   console.log(`Database target: ${readConfig().database}`);
 
   if (ICON_BACKFILL_INTERVAL_MS > 0) {
