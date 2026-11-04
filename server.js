@@ -15,8 +15,9 @@ import dotenv from 'dotenv';
 
 import { extractShareData } from './lib/savedVars.js';
 import { describeConnectionFailure, openDatabase, readConfig } from './lib/database.js';
-import { cacheItemIcons, getCachedIcon } from './lib/icons.js';
+import { cacheItemIcons, getCachedIcon, resolveMissingIconPaths } from './lib/icons.js';
 import {
+  fillKnownIcons,
   getAccountSummary,
   getAlwaysShareForViewer,
   getSharedItemsForViewer,
@@ -346,6 +347,33 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     return;
   }
 
+  // Icons are resolved before the replace and outside its transaction: the
+  // database may already know the path from an earlier upload, and anything it
+  // does not is looked up once by item id on UESP. Holding the replace open
+  // across those requests would be wrong, and an icon is never worth failing an
+  // upload over.
+  const iconEntries = [...parsed.items, ...parsed.alwaysShare];
+
+  try {
+    await withDatabase((connection) => fillKnownIcons(connection, iconEntries));
+  } catch (error) {
+    console.warn(`Could not reuse stored icon paths: ${error.message}`);
+  }
+
+  let iconLookup = { resolved: 0, attempted: 0, missing: 0 };
+
+  try {
+    iconLookup = await resolveMissingIconPaths(iconEntries);
+
+    if (iconLookup.attempted) {
+      console.log(
+        `Icons: resolved ${iconLookup.resolved} of ${iconLookup.missing} missing paths on UESP`
+      );
+    }
+  } catch (error) {
+    console.warn(`Could not look up icon paths on UESP: ${error.message}`);
+  }
+
   try {
     const outcome = await withDatabase(async (connection) => {
       if (user) {
@@ -400,6 +428,7 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       alwaysShareCount: outcome.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
       totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
       guildCount: parsed.guilds.size,
+      iconLookup,
       icons,
       link: user ? 'linked' : 'skipped',
     });
