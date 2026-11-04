@@ -30,7 +30,7 @@ import {
   signInWithProvider,
 } from './lib/store.js';
 import { MariaDbSessionStore } from './lib/sessionStore.js';
-import { renderPage } from './lib/views.js';
+import { renderMessagePage, renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,6 +136,21 @@ const upload = multer({
 
 function readParam(value) {
   return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+}
+
+// Every page the site can end up on uses the same shell, so a cancelled sign-in or
+// a wrong address looks like ItemShare rather than a line of unstyled text.
+function sendPage(req, res, status, options) {
+  res
+    .status(status)
+    .type('html')
+    .send(
+      renderMessagePage({
+        ...options,
+        user: req.session ? req.session.user || null : null,
+        providers: enabledProviders,
+      })
+    );
 }
 
 // Migrations run once at startup; request connections just use the database.
@@ -247,7 +262,11 @@ app.get('/auth/:provider', (req, res) => {
   const provider = PROVIDERS[req.params.provider];
 
   if (!provider || !provider.configured) {
-    res.status(503).send('That sign-in provider is not configured on this server.');
+    sendPage(req, res, 503, {
+      heading: 'That sign-in option is not set up',
+      message: 'This site has no client configured for that provider yet, so there is nothing to sign in with.',
+      details: 'Set the provider client id and secret in Database/.env and restart the site.',
+    });
     return;
   }
 
@@ -271,11 +290,22 @@ app.get('/auth/:provider/callback', async (req, res) => {
   const { code, error } = req.query;
 
   if (!provider || !provider.configured) {
-    res.status(503).send('That sign-in provider is not configured on this server.');
+    sendPage(req, res, 503, {
+      heading: 'That sign-in option is not set up',
+      message: 'This site has no client configured for that provider yet, so there is nothing to sign in with.',
+      details: 'Set the provider client id and secret in Database/.env and restart the site.',
+    });
     return;
   }
   if (error || !code) {
-    res.status(400).send(`${provider.label} sign-in was cancelled or failed: ${error || 'no code returned'}`);
+    sendPage(req, res, 400, {
+      heading: `${provider.label} sign-in did not finish`,
+      message: error
+        ? 'The provider sent us back without permission, or the prompt was cancelled.'
+        : 'The provider sent us back without a code, so there was nothing to verify.',
+      details: 'Nothing was changed. You can try again from the header.',
+      tone: 'error',
+    });
     return;
   }
 
@@ -328,7 +358,12 @@ app.get('/auth/:provider/callback', async (req, res) => {
 
     res.redirect('/');
   } catch (caught) {
-    res.status(502).send(`Could not complete sign-in: ${caught.message}`);
+    sendPage(req, res, 502, {
+      heading: 'Sign-in could not be completed',
+      message: 'The provider accepted the request, but the account could not be looked up or saved.',
+      details: caught.message,
+      tone: 'error',
+    });
   }
 });
 
@@ -497,6 +532,58 @@ async function backfillIcons(reason) {
     iconBackfillRunning = false;
   }
 }
+
+// Everything that is not a page we serve, including a mistyped address, still gets
+// the site's own layout. Icons are images, so they get an empty 404 instead.
+app.use((req, res) => {
+  if (req.path.startsWith('/icons/')) {
+    res.status(404).end();
+    return;
+  }
+
+  if (req.path === '/favicon.ico') {
+    res.status(204).end();
+    return;
+  }
+
+  sendPage(req, res, 404, {
+    heading: 'Page not found',
+    message: 'That address is not part of ItemShare. The shared item list is on the home page.',
+    details: `No route for ${req.method} ${req.path}`,
+  });
+});
+
+// Uploads are answered in JSON because the page reads them with fetch; anything
+// else that throws gets a styled page. Multer's own errors land here too, which is
+// how an oversized file stops being an Express stack trace.
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+
+  const status = error.statusCode || (error.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
+  const message = error.message || 'Something went wrong.';
+  const wantsJson =
+    req.path === '/upload' ||
+    req.xhr ||
+    String(req.get('accept') || '').includes('application/json');
+
+  console.warn(`${req.method} ${req.path} failed (${status}): ${message}`);
+
+  if (wantsJson) {
+    res.status(status).json({ error: message });
+    return;
+  }
+
+  sendPage(req, res, status, {
+    heading: status === 413 ? 'That file is too large' : 'Something went wrong',
+    message,
+    details:
+      status === 413 ? 'ItemShareSavedVars.lua should be well under 12 MB, so check you picked the right file.' : '',
+    tone: 'error',
+  });
+});
 
 await prepareDatabase().catch((error) => {
   let config = {};
