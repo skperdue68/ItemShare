@@ -428,6 +428,11 @@ th.num {
   color: var(--muted);
 }
 
+.meta-note {
+  font-weight: 500;
+  color: var(--muted);
+}
+
 .item-name {
   font-weight: 700;
 }
