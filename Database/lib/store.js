@@ -102,6 +102,90 @@ function itemValues(item, uploadId) {
   return values;
 }
 
+const ALWAYS_COLUMNS = [
+  'account_name',
+  'character_name',
+  'item_key',
+  'item_key_hash',
+  'item_link',
+  'item_name',
+  'item_id',
+  'icon',
+  'icon_key',
+  'item_type',
+  'item_type_name',
+  'quality',
+  'quality_name',
+  'trait',
+  'trait_type',
+  'apparel_slot',
+  'equip_type',
+  'apparel_weight',
+  'armor_type',
+  'weapon_type',
+  'weapon_handedness',
+  'set_name',
+  'enchant_name',
+  'style_name',
+  'required_level',
+  'required_cp',
+  'flavor_text',
+  'eso_data',
+  'furniture_data_id',
+  'first_added_at',
+  'last_updated_at',
+  'upload_id',
+];
+
+const INSERT_ALWAYS_SHARE_SQL = `
+INSERT INTO itemshare_always_share (${ALWAYS_COLUMNS.join(', ')})
+VALUES (${ALWAYS_COLUMNS.map(() => '?').join(', ')})`;
+
+function alwaysShareValues(entry, uploadId) {
+  const values = [
+    entry.accountName,
+    entry.characterName || '',
+    entry.itemKey,
+    hashItemKey(entry.itemKey),
+    entry.itemLink || '',
+    entry.itemName || '',
+    entry.itemId || 0,
+    entry.icon || '',
+    iconCacheKey(entry.icon),
+    entry.itemType || 0,
+    entry.itemTypeName || '',
+    entry.quality || 0,
+    entry.qualityName || '',
+    entry.trait || '',
+    entry.traitType || '',
+    entry.apparelSlot || '',
+    entry.equipType || '',
+    entry.apparelWeight || '',
+    entry.armorType || '',
+    entry.weaponType || '',
+    entry.weaponHandedness || '',
+    entry.setName || '',
+    entry.enchantName || '',
+    entry.styleName || '',
+    entry.requiredLevel || 0,
+    entry.requiredCp || 0,
+    entry.flavorText || null,
+    entry.esoData || null,
+    entry.furnitureDataId || 0,
+    entry.firstAddedAt || 0,
+    entry.lastUpdatedAt || 0,
+    uploadId,
+  ];
+
+  if (values.length !== ALWAYS_COLUMNS.length) {
+    throw new Error(
+      `Always share column mismatch: ${values.length} values for ${ALWAYS_COLUMNS.length} columns`
+    );
+  }
+
+  return values;
+}
+
 async function upsertGuilds(connection, guilds) {
   for (const [guildId, guildName] of guilds) {
     await connection.execute(
@@ -127,7 +211,77 @@ async function replaceAccountGuilds(connection, accountName, guilds) {
  * Replaces the shared items and guild membership of one ESO account. Runs inside
  * the caller's transaction so every account in a file is replaced atomically.
  */
-async function replaceOneAccount(connection, { accountName, items, guilds, sourceFile, userId }) {
+/**
+ * Fills in an icon path for items that arrived without one, using the path a
+ * previous upload already recorded for the same item id.
+ *
+ * The addon cannot always answer with an icon (some bags, some client versions),
+ * and an upload used to overwrite the row with an empty path, which then erased
+ * the only copy of it. Reusing the known path costs one query per upload and
+ * means an item seen once with an icon keeps its image.
+ *
+ * @returns {Promise<number>} how many entries were given a path
+ */
+async function reuseKnownIcons(connection, entries) {
+  const missing = new Map();
+
+  for (const entry of entries) {
+    if (entry.icon || !entry.itemId) {
+      continue;
+    }
+    if (!missing.has(entry.itemId)) {
+      missing.set(entry.itemId, []);
+    }
+    missing.get(entry.itemId).push(entry);
+  }
+
+  if (missing.size === 0) {
+    return 0;
+  }
+
+  const ids = [...missing.keys()];
+  const known = new Map();
+
+  for (let start = 0; start < ids.length; start += 250) {
+    const chunk = ids.slice(start, start + 250);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const [rows] = await connection.execute(
+      `SELECT item_id, icon FROM itemshare_shared_items
+        WHERE item_id IN (${placeholders}) AND icon <> ''
+        UNION
+       SELECT item_id, icon FROM itemshare_always_share
+        WHERE item_id IN (${placeholders}) AND icon <> ''`,
+      [...chunk, ...chunk]
+    );
+
+    for (const row of rows) {
+      const itemId = Number(row.item_id);
+      if (!known.has(itemId)) {
+        known.set(itemId, row.icon);
+      }
+    }
+  }
+
+  let filled = 0;
+
+  for (const [itemId, waiting] of missing) {
+    const icon = known.get(itemId);
+    if (!icon) {
+      continue;
+    }
+    for (const entry of waiting) {
+      entry.icon = icon;
+      filled += 1;
+    }
+  }
+
+  return filled;
+}
+
+async function replaceOneAccount(
+  connection,
+  { accountName, items, alwaysShare = [], guilds, sourceFile, addonVersion = '', userId }
+) {
   const totalQuantity = items.reduce((sum, item) => sum + (item.itemCount || 0), 0);
 
   await upsertGuilds(connection, guilds);
@@ -135,9 +289,18 @@ async function replaceOneAccount(connection, { accountName, items, guilds, sourc
 
   const [upload] = await connection.execute(
     `INSERT INTO itemshare_uploads
-       (account_name, character_name, source_file, item_count, total_quantity, guild_count, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [accountName, '*', sourceFile || '', items.length, totalQuantity, guilds.size, userId || null]
+       (account_name, character_name, source_file, addon_version, item_count, total_quantity, guild_count, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      accountName,
+      '*',
+      sourceFile || '',
+      addonVersion || '',
+      items.length,
+      totalQuantity,
+      guilds.size,
+      userId || null,
+    ]
   );
 
   const uploadId = upload.insertId;
@@ -154,7 +317,32 @@ async function replaceOneAccount(connection, { accountName, items, guilds, sourc
     }
   }
 
-  return { accountName, uploadId, itemCount: items.length, totalQuantity, guildCount: guilds.size };
+  // Rewritten in full from the same file, but kept in their own table: a
+  // standing offer has no count and no location, and must survive the item
+  // leaving every bag.
+  await connection.execute('DELETE FROM itemshare_always_share WHERE account_name = ?', [accountName]);
+
+  for (const offered of alwaysShare) {
+    const [inserted] = await connection.execute(
+      INSERT_ALWAYS_SHARE_SQL,
+      alwaysShareValues(offered, uploadId)
+    );
+    for (const guildId of offered.guildIds) {
+      await connection.execute(
+        'INSERT IGNORE INTO itemshare_always_share_guilds (always_share_id, guild_id) VALUES (?, ?)',
+        [inserted.insertId, guildId]
+      );
+    }
+  }
+
+  return {
+    accountName,
+    uploadId,
+    itemCount: items.length,
+    totalQuantity,
+    guildCount: guilds.size,
+    alwaysShareCount: alwaysShare.length,
+  };
 }
 
 /**
@@ -163,13 +351,33 @@ async function replaceOneAccount(connection, { accountName, items, guilds, sourc
  * @param {Array<{accountName: string, items: object[], guilds: Map<number, string>}>} accounts
  * @returns {Promise<Array<{accountName: string, uploadId: number, itemCount: number, totalQuantity: number, guildCount: number}>>}
  */
-export async function replaceAccounts(connection, accounts, { sourceFile, userId } = {}) {
+export async function replaceAccounts(
+  connection,
+  accounts,
+  { sourceFile, userId, addonVersion = '' } = {}
+) {
   await connection.beginTransaction();
 
   try {
+    // Before anything is deleted: recover icon paths from the rows this upload is
+    // about to replace, so a missing getter does not cost the image.
+    await reuseKnownIcons(connection, [
+      ...accounts.flatMap((account) => account.items || []),
+      ...accounts.flatMap((account) => account.alwaysShare || []),
+    ]);
+
     const results = [];
     for (const account of accounts) {
-      results.push(await replaceOneAccount(connection, { ...account, sourceFile, userId }));
+      // A file can name a different addon version per account; the option is the
+      // fallback for callers that pass one value for the whole upload.
+      results.push(
+        await replaceOneAccount(connection, {
+          ...account,
+          sourceFile,
+          userId,
+          addonVersion: account.addonVersion || addonVersion,
+        })
+      );
     }
     await connection.commit();
     return results;
@@ -286,7 +494,7 @@ export async function getAccountSummary(connection, accountName) {
   );
 
   const [[lastUpload]] = await connection.execute(
-    `SELECT uploaded_at, item_count, total_quantity, source_file
+    `SELECT uploaded_at, item_count, total_quantity, source_file, addon_version
        FROM itemshare_uploads WHERE account_name = ?
       ORDER BY id DESC LIMIT 1`,
     [accountName]
@@ -349,12 +557,47 @@ export async function getViewerGuilds(connection, accountNames) {
   return rows;
 }
 
-const VISIBLE_ITEMS_FROM = `
+/**
+ * Items the viewer may see: the ones offered to a guild they belong to, plus —
+ * for the owner only — their own items with no guild link at all.
+ *
+ * Without the second branch an unstamped share is invisible to everybody,
+ * including the person who shared it, which is exactly what happened to 27 of one
+ * owner's 28 items. The extra branch leaks nothing: it is keyed on the viewer's
+ * own account names, so an unlinked item still never reaches anyone else.
+ */
+function visibleItemsFrom(names) {
+  return `
        FROM itemshare_shared_items i
-       JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
-       JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ig.guild_id
-           AND viewer.account_name IN`;
+       LEFT JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
+       LEFT JOIN itemshare_account_guilds viewer
+              ON viewer.guild_id = ig.guild_id
+             AND viewer.account_name IN (${inClause(names)})
+       LEFT JOIN itemshare_guilds g ON g.guild_id = ig.guild_id
+       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = i.icon_key`;
+}
+
+/** Guild overlap, or the owner's own entry that has no guild overlap to find. */
+function itemsVisibilityClause(names) {
+  return `(viewer.account_name IS NOT NULL
+           OR (ig.guild_id IS NULL AND i.account_name IN (${inClause(names)})))`;
+}
+
+function visibleAlwaysShareFrom(names) {
+  return `
+       FROM itemshare_always_share a
+       LEFT JOIN itemshare_always_share_guilds ag ON ag.always_share_id = a.id
+       LEFT JOIN itemshare_account_guilds viewer
+              ON viewer.guild_id = ag.guild_id
+             AND viewer.account_name IN (${inClause(names)})
+       LEFT JOIN itemshare_guilds g ON g.guild_id = ag.guild_id
+       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = a.icon_key`;
+}
+
+function alwaysShareVisibilityClause(names) {
+  return `(viewer.account_name IS NOT NULL
+           OR (ag.guild_id IS NULL AND a.account_name IN (${inClause(names)})))`;
+}
 
 /**
  * Item types and owner accounts present in what the viewer can see, used to fill
@@ -366,20 +609,23 @@ export async function getViewerFacets(connection, accountNames) {
     return { types: [], owners: [] };
   }
 
+  // The facets have to follow the same visibility rule as the grid, or a type
+  // that only appears on an unattributed entry cannot be filtered to.
   const [types] = await connection.execute(
-    `SELECT i.item_type_name AS name, COUNT(*) AS total
-     ${VISIBLE_ITEMS_FROM} (${inClause(names)})
-      WHERE i.item_type_name <> ''
+    `SELECT i.item_type_name AS name, COUNT(DISTINCT i.id) AS total
+     ${visibleItemsFrom(names)}
+      WHERE i.item_type_name <> '' AND ${itemsVisibilityClause(names)}
       GROUP BY i.item_type_name
       ORDER BY i.item_type_name ASC`,
-    names
+    [...names, ...names]
   );
 
   const [owners] = await connection.execute(
     `SELECT DISTINCT i.account_name AS name
-     ${VISIBLE_ITEMS_FROM} (${inClause(names)})
+     ${visibleItemsFrom(names)}
+      WHERE ${itemsVisibilityClause(names)}
       ORDER BY i.account_name ASC`,
-    names
+    [...names, ...names]
   );
 
   return {
@@ -404,8 +650,8 @@ export async function getSharedItemsForViewer(
   }
 
   const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
-  const filters = [];
-  const params = [...names];
+  const filters = [itemsVisibilityClause(names)];
+  const params = [...names, ...names];
 
   if (type) {
     filters.push('i.item_type_name = ?');
@@ -420,7 +666,8 @@ export async function getSharedItemsForViewer(
     params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
   }
 
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  // Always present: visibility is not optional, only the filters are.
+  const where = `WHERE ${filters.join(' AND ')}`;
 
   const [rows] = await connection.execute(
     `SELECT i.id,
@@ -447,13 +694,7 @@ export async function getSharedItemsForViewer(
             i.character_name,
             (icon.icon_key IS NOT NULL) AS has_icon,
             GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
-       FROM itemshare_shared_items i
-       JOIN itemshare_shared_item_guilds ig ON ig.item_id = i.id
-       JOIN itemshare_account_guilds viewer
-            ON viewer.guild_id = ig.guild_id
-           AND viewer.account_name IN (${inClause(names)})
-       LEFT JOIN itemshare_guilds g ON g.guild_id = ig.guild_id
-       LEFT JOIN itemshare_item_icons icon ON icon.icon_key = i.icon_key
+       ${visibleItemsFrom(names)}
        ${where}
       GROUP BY i.id, i.item_name, i.item_id, i.icon_key, i.item_count, i.quality,
                i.quality_name, i.item_type_name, i.trait, i.set_name, i.enchant_name,
@@ -461,6 +702,73 @@ export async function getSharedItemsForViewer(
                i.apparel_slot, i.equip_type, i.location_label, i.last_dumped_at,
                i.account_name, i.character_name, icon.icon_key
       ORDER BY i.item_type_name ASC, i.item_name ASC, i.account_name ASC
+      LIMIT ${safeLimit}`,
+    params
+  );
+
+  return rows;
+}
+
+/**
+ * Standing offers visible to the viewer: joined through the guilds the item is
+ * offered to, exactly like the inventory list. `in_inventory` says whether an
+ * owned copy exists right now, which is the one thing the offer itself cannot
+ * know — the owner may have none at all.
+ */
+export async function getAlwaysShareForViewer(
+  connection,
+  accountNames,
+  { type = '', owner = '', search = '', limit = 500 } = {}
+) {
+  const names = viewerAccountNames(accountNames);
+  if (names.length === 0) {
+    return [];
+  }
+
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
+  const filters = [alwaysShareVisibilityClause(names)];
+  const params = [...names, ...names];
+
+  if (type) {
+    filters.push('a.item_type_name = ?');
+    params.push(type);
+  }
+  if (owner) {
+    filters.push('a.account_name = ?');
+    params.push(owner);
+  }
+  if (search) {
+    filters.push('a.item_name LIKE ?');
+    params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
+  }
+
+  const where = `WHERE ${filters.join(' AND ')}`;
+
+  const [rows] = await connection.execute(
+    `SELECT a.id,
+            a.item_name,
+            a.item_id,
+            a.icon_key,
+            a.quality,
+            a.item_type_name,
+            a.trait,
+            a.set_name,
+            a.first_added_at,
+            a.account_name,
+            a.character_name,
+            (icon.icon_key IS NOT NULL) AS has_icon,
+            (SELECT COUNT(*)
+               FROM itemshare_shared_items own
+              WHERE own.account_name = a.account_name
+                AND a.item_id > 0
+                AND own.item_id = a.item_id) > 0 AS in_inventory,
+            GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
+       ${visibleAlwaysShareFrom(names)}
+       ${where}
+      GROUP BY a.id, a.item_name, a.item_id, a.icon_key, a.quality, a.item_type_name,
+               a.trait, a.set_name, a.first_added_at, a.account_name, a.character_name,
+               icon.icon_key
+      ORDER BY a.item_name ASC, a.account_name ASC
       LIMIT ${safeLimit}`,
     params
   );

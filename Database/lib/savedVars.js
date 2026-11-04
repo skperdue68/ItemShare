@@ -9,6 +9,10 @@
 import { isPlainTable, parseLuaAssignment } from './luaTable.js';
 
 const ITEM_TABLE_KEYS = ['sharedItems', 'dumpedItems'];
+// Standing offers ("if I ever have this again, I will offer it") are stored apart
+// from the inventory list on purpose: they carry no count and no location, so
+// nothing that prunes the inventory list can remove them.
+const ALWAYS_TABLE_KEYS = ['alwaysShare'];
 
 function text(value) {
   if (typeof value === 'string') return value;
@@ -155,6 +159,49 @@ function buildItem({ accountName, scopeName, itemKey, entry, guilds }) {
   };
 }
 
+function buildAlwaysShare({ accountName, scopeName, itemKey, entry, guilds }) {
+  const guildIds = listOf(entry.guildIds).map(integer).filter((id) => id > 0);
+  const guildNames = listOf(entry.guildNames).map(text);
+  guildIds.forEach((guildId, index) => collectGuild(guilds, guildId, guildNames[index] ?? ''));
+
+  const resolvedAccount = text(entry.accountName) || accountName;
+  const characterName = text(entry.characterName)
+    || (scopeName.startsWith('$') || scopeName === '' ? 'AccountWide' : scopeName);
+
+  return {
+    accountName: resolvedAccount,
+    characterName,
+    itemKey: text(entry.itemKey) || text(itemKey),
+    itemLink: text(entry.itemLink),
+    itemId: integer(entry.itemId) || itemIdFromLink(entry.itemLink),
+    icon: text(entry.icon),
+    itemName: text(entry.itemName) || text(itemKey),
+    itemType: integer(entry.itemType),
+    itemTypeName: text(entry.itemTypeName),
+    quality: integer(entry.quality),
+    qualityName: text(entry.qualityName),
+    trait: text(entry.trait),
+    traitType: text(entry.traitType),
+    apparelSlot: text(entry.apparelSlot),
+    equipType: text(entry.equipType),
+    apparelWeight: text(entry.apparelWeight),
+    armorType: text(entry.armorType),
+    weaponType: text(entry.weaponType),
+    weaponHandedness: text(entry.weaponHandedness),
+    furnitureDataId: integer(entry.furnitureDataId),
+    setName: text(entry.setName),
+    enchantName: text(entry.enchantName),
+    styleName: text(entry.styleName),
+    requiredLevel: integer(entry.requiredLevel),
+    requiredCp: integer(entry.requiredCp),
+    flavorText: text(entry.flavorText),
+    esoData: esoDetailsJson(entry.esoDetails),
+    firstAddedAt: integer(entry.firstAddedAt),
+    lastUpdatedAt: integer(entry.lastUpdatedAt),
+    guildIds,
+  };
+}
+
 function accountFromPath(path) {
   for (let index = path.length - 1; index >= 0; index -= 1) {
     if (path[index].startsWith('@')) {
@@ -170,6 +217,8 @@ function accountFromPath(path) {
  *   guilds: Map<number, string>,
  *   accountGuilds: Map<string, Map<number, string>>,
  *   items: object[],
+ *   alwaysShare: object[],
+ *   addonVersions: Map<string, string>,
  *   accounts: string[],
  *   accountCount: number
  * }}
@@ -179,6 +228,11 @@ export function extractShareData(fileText) {
   const guilds = new Map();
   const accountGuilds = new Map();
   const items = [];
+  const alwaysShare = [];
+  // 1.8.1+ writes the addon version it ran as into each account scope, so an
+  // upload can say which addon produced it instead of guessing from missing
+  // fields.
+  const addonVersions = new Map();
   const accounts = new Set();
 
   // Guild membership is tracked twice: once for the whole file and once per ESO
@@ -199,6 +253,10 @@ export function extractShareData(fileText) {
     const pathAccount = accountFromPath(path);
     collectScopeGuilds(node, [guilds, guildMapFor(pathAccount)]);
 
+    if (typeof node.addonVersion === 'string' && node.addonVersion !== '') {
+      addonVersions.set(pathAccount, node.addonVersion);
+    }
+
     const itemKey = ITEM_TABLE_KEYS.find((key) => isPlainTable(node[key]));
     if (itemKey) {
       const accountName = pathAccount;
@@ -211,8 +269,20 @@ export function extractShareData(fileText) {
       }
     }
 
+    const alwaysKey = ALWAYS_TABLE_KEYS.find((key) => isPlainTable(node[key]));
+    if (alwaysKey) {
+      const accountName = pathAccount;
+      const scopeName = path[path.length - 1] ?? '';
+      accounts.add(accountName);
+
+      for (const [entryKey, entry] of Object.entries(node[alwaysKey])) {
+        if (!isPlainTable(entry)) continue;
+        alwaysShare.push(buildAlwaysShare({ accountName, scopeName, itemKey: entryKey, entry, guilds }));
+      }
+    }
+
     for (const [key, value] of Object.entries(node)) {
-      if (ITEM_TABLE_KEYS.includes(key)) continue;
+      if (ITEM_TABLE_KEYS.includes(key) || ALWAYS_TABLE_KEYS.includes(key)) continue;
       walk(value, [...path, key]);
     }
   };
@@ -230,6 +300,17 @@ export function extractShareData(fileText) {
     }
   }
 
+  // A standing offer is equally useless if the guild it is offered to vanishes
+  // from the membership list, so it gets the same treatment.
+  for (const offered of alwaysShare) {
+    const memberOf = guildMapFor(offered.accountName);
+    for (const guildId of offered.guildIds) {
+      if (!memberOf.has(guildId)) {
+        memberOf.set(guildId, guilds.get(guildId) ?? '');
+      }
+    }
+  }
+
   // Drop the wrapper keys (profile names) visited while walking the file.
   for (const accountName of [...accountGuilds.keys()]) {
     if (!accounts.has(accountName)) {
@@ -237,5 +318,13 @@ export function extractShareData(fileText) {
     }
   }
 
-  return { guilds, accountGuilds, items, accounts: [...accounts], accountCount: accounts.size };
+  return {
+    guilds,
+    accountGuilds,
+    items,
+    alwaysShare,
+    addonVersions,
+    accounts: [...accounts],
+    accountCount: accounts.size,
+  };
 }

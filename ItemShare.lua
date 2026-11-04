@@ -1,5 +1,9 @@
 local ItemShare = {}
 ItemShare.name = "ItemShare"
+-- Kept in step with ## Version in ItemShare.txt. Written into the saved
+-- variables so an uploaded file says which addon produced it, which is the only
+-- reliable way to answer "am I actually running the new version?".
+local ADDON_VERSION = "1.8.2"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -10,6 +14,7 @@ local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
     sharedItems = {},
+    alwaysShare = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
     characterGuilds = {},
@@ -800,6 +805,104 @@ local function RefreshGuildSnapshot()
     return guilds
 end
 
+-- Shares written before the addon recorded guilds carry no guildIds, so the
+-- site has no item->guild link for them and they are invisible to everyone,
+-- owner included. Guild membership belongs to the account rather than to the
+-- item, so these can be stamped without the item being visible at all — which is
+-- what makes it work for shares sitting in a bag this session cannot read.
+local function GetGuildStampForCharacter(characterName)
+    local guildIds = {}
+    local guildNames = {}
+
+    local characterGuilds = ItemShare.savedVars and ItemShare.savedVars.characterGuilds
+    local snapshot = type(characterGuilds) == "table" and characterGuilds[characterName] or nil
+
+    if type(snapshot) == "table" and type(snapshot.guilds) == "table" then
+        for _, guild in ipairs(snapshot.guilds) do
+            local guildId = type(guild) == "table" and tonumber(guild.guildId) or nil
+            if guildId and guildId > 0 then
+                guildIds[#guildIds + 1] = guildId
+                guildNames[#guildNames + 1] = tostring(guild.guildName or "")
+            end
+        end
+    end
+
+    -- Older snapshots kept only the ids, so fall back to those and recover the
+    -- names from knownGuilds.
+    if #guildIds == 0 and type(snapshot) == "table" and type(snapshot.guildIds) == "table" then
+        for _, rawGuildId in ipairs(snapshot.guildIds) do
+            local guildId = tonumber(rawGuildId)
+            if guildId and guildId > 0 then
+                guildIds[#guildIds + 1] = guildId
+                local knownGuilds = ItemShare.savedVars and ItemShare.savedVars.knownGuilds
+                local knownName = type(knownGuilds) == "table" and knownGuilds[tostring(guildId)] or nil
+                guildNames[#guildNames + 1] = tostring(knownName or "")
+            end
+        end
+    end
+
+    return guildIds, guildNames
+end
+
+local function StampMissingGuilds()
+    local stampedCount = 0
+    if not ItemShare.savedVars then
+        return stampedCount
+    end
+
+    local tables = {}
+    if type(ItemShare.savedVars.sharedItems) == "table" then
+        tables[#tables + 1] = ItemShare.savedVars.sharedItems
+    end
+    if type(ItemShare.savedVars.alwaysShare) == "table" then
+        tables[#tables + 1] = ItemShare.savedVars.alwaysShare
+    end
+
+    local currentCharacter = GetCurrentCharacterName()
+
+    for _, entries in ipairs(tables) do
+        for _, entry in pairs(entries) do
+            if type(entry) == "table" then
+                local existingIds = entry.guildIds
+                local alreadyStamped = type(existingIds) == "table" and #existingIds > 0
+
+                if not alreadyStamped then
+                    local characterName = tostring(entry.characterName or "")
+                    if characterName == "" then
+                        characterName = currentCharacter
+                    end
+
+                    local guildIds, guildNames = GetGuildStampForCharacter(characterName)
+                    if #guildIds == 0 and characterName ~= currentCharacter then
+                        characterName = currentCharacter
+                        guildIds, guildNames = GetGuildStampForCharacter(characterName)
+                    end
+                    if #guildIds == 0 then
+                        -- The per-character snapshot can be stale or absent; the
+                        -- guilds in front of us right now are the better answer.
+                        for _, guild in ipairs(GetCharacterGuilds()) do
+                            guildIds[#guildIds + 1] = guild.guildId
+                            guildNames[#guildNames + 1] = guild.guildName
+                        end
+                    end
+
+                    if #guildIds > 0 then
+                        entry.guildIds = guildIds
+                        entry.guildNames = guildNames
+                        entry.guildsCapturedAt = GetTimeStamp()
+                        if tostring(entry.characterName or "") == "" then
+                            entry.characterName = characterName
+                        end
+                        stampedCount = stampedCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return stampedCount
+end
+
 local function GetSelectedGuildBankLocationInfo()
     local guildId = 0
     if GetSelectedGuildBankId then
@@ -852,6 +955,54 @@ local function GetDisplaySharedItemName(itemName)
     return string.format("%s %s", SHARE_LIST_ICON, tostring(itemName or ""))
 end
 
+-- The ten home storage chests are separate bags, so they are worth naming one
+-- by one: indices are kept explicit because a missing constant would otherwise
+-- shift every later chest by one.
+local HOUSE_STORAGE_BAGS = {
+    [1] = BAG_HOUSE_BANK_ONE,
+    [2] = BAG_HOUSE_BANK_TWO,
+    [3] = BAG_HOUSE_BANK_THREE,
+    [4] = BAG_HOUSE_BANK_FOUR,
+    [5] = BAG_HOUSE_BANK_FIVE,
+    [6] = BAG_HOUSE_BANK_SIX,
+    [7] = BAG_HOUSE_BANK_SEVEN,
+    [8] = BAG_HOUSE_BANK_EIGHT,
+    [9] = BAG_HOUSE_BANK_NINE,
+    [10] = BAG_HOUSE_BANK_TEN,
+}
+
+local function GetHouseStorageChestIndex(bagId)
+    for index = 1, 10 do
+        local candidate = HOUSE_STORAGE_BAGS[index]
+        if candidate and bagId == candidate then
+            return index
+        end
+    end
+    return 0
+end
+
+-- Best effort, and deliberately pcall'd: the zone name is the house name while
+-- the player is inside a home, which is the difference between "the furnishing
+-- vault" and "the furnishing vault in Mournoth Keep".
+local function GetCurrentZoneDisplayName()
+    if not GetUnitZone then
+        return ""
+    end
+    local ok, zoneName = pcall(GetUnitZone, "player")
+    if not ok or type(zoneName) ~= "string" then
+        return ""
+    end
+    return GetNormalizedText(zoneName) or ""
+end
+
+local function GetPlacedFurnitureLocationInfo()
+    local zoneName = GetCurrentZoneDisplayName()
+    if zoneName ~= "" then
+        return "placedfurniture", string.format("Placed Furniture (%s)", zoneName)
+    end
+    return "placedfurniture", "Placed Furniture"
+end
+
 local function GetBagLocationInfo(bagId)
     if bagId == BAG_BACKPACK then
         local characterName = GetCurrentCharacterName()
@@ -864,18 +1015,18 @@ local function GetBagLocationInfo(bagId)
         return GetSelectedGuildBankLocationInfo()
     elseif BAG_VIRTUAL and bagId == BAG_VIRTUAL then
         return "craftbag", "Craft Bag"
-    elseif (BAG_HOUSE_BANK_ONE and bagId == BAG_HOUSE_BANK_ONE)
-        or (BAG_HOUSE_BANK_TWO and bagId == BAG_HOUSE_BANK_TWO)
-        or (BAG_HOUSE_BANK_THREE and bagId == BAG_HOUSE_BANK_THREE)
-        or (BAG_HOUSE_BANK_FOUR and bagId == BAG_HOUSE_BANK_FOUR)
-        or (BAG_HOUSE_BANK_FIVE and bagId == BAG_HOUSE_BANK_FIVE)
-        or (BAG_HOUSE_BANK_SIX and bagId == BAG_HOUSE_BANK_SIX)
-        or (BAG_HOUSE_BANK_SEVEN and bagId == BAG_HOUSE_BANK_SEVEN)
-        or (BAG_HOUSE_BANK_EIGHT and bagId == BAG_HOUSE_BANK_EIGHT)
-        or (BAG_HOUSE_BANK_NINE and bagId == BAG_HOUSE_BANK_NINE)
-        or (BAG_HOUSE_BANK_TEN and bagId == BAG_HOUSE_BANK_TEN) then
-        return "housestorage", "House Storage"
-    elseif BAG_FURNITURE_VAULT and bagId == BAG_FURNITURE_VAULT then
+    end
+
+    local chestIndex = GetHouseStorageChestIndex(bagId)
+    if chestIndex > 0 then
+        return string.format("housestorage:%d", chestIndex), string.format("House Storage %d", chestIndex)
+    end
+
+    if BAG_FURNITURE_VAULT and bagId == BAG_FURNITURE_VAULT then
+        local zoneName = GetCurrentZoneDisplayName()
+        if zoneName ~= "" then
+            return "furnishingvault", string.format("Furnishing Vault (%s)", zoneName)
+        end
         return "furnishingvault", "Furnishing Vault"
     end
 
@@ -895,10 +1046,16 @@ local function BuildLocationKeyFromSharedFrom(sharedFrom)
         return "bank"
     elseif value == "craft bag" then
         return "craftbag"
-    elseif value == "house storage" then
+    elseif string.find(value, "house storage", 1, true) == 1 then
+        local chestNumber = string.match(value, "^house storage (%d+)")
+        if chestNumber then
+            return "housestorage:" .. chestNumber
+        end
         return "housestorage"
-    elseif value == "furnishing vault" then
+    elseif string.find(value, "furnishing vault", 1, true) == 1 then
         return "furnishingvault"
+    elseif string.find(value, "placed furniture", 1, true) == 1 then
+        return "placedfurniture"
     elseif string.find(value, "inventory %(", 1, true) == 1 then
         local characterName = string.match(tostring(sharedFrom or ""), "^Inventory %((.*)%)$")
         if characterName and characterName ~= "" then
@@ -1040,11 +1197,32 @@ local function GetItemFurnitureDataIdSafe(bagId, slotIndex)
     return tonumber(GetItemFurnitureDataId(bagId, slotIndex)) or 0
 end
 
+-- The icon path is the only thing that lets the site cache an image, so it is
+-- worth asking more than one getter: GetItemIcon is not exposed on every client,
+-- and GetItemInfo still returns the icon file as its second value. A getter that
+-- answers with something that is not a texture path counts as no answer.
+local function LooksLikeIconPath(value)
+    return type(value) == "string"
+        and value ~= ""
+        and string.find(value, "/", 1, true) ~= nil
+end
+
 local function GetItemIconPathSafe(bagId, slotIndex)
-    if not GetItemIcon then
-        return ""
+    if type(GetItemIcon) == "function" then
+        local ok, icon = pcall(GetItemIcon, bagId, slotIndex)
+        if ok and LooksLikeIconPath(icon) then
+            return tostring(icon)
+        end
     end
-    return tostring(GetItemIcon(bagId, slotIndex) or "")
+
+    if type(GetItemInfo) == "function" then
+        local ok, _, icon = pcall(GetItemInfo, bagId, slotIndex)
+        if ok and LooksLikeIconPath(icon) then
+            return tostring(icon)
+        end
+    end
+
+    return ""
 end
 
 -- The item id lives inside the link: |H0:item:43532:370:50:...|h|h
@@ -1476,7 +1654,9 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
     entry.itemId = tonumber(itemData.itemId or 0) or 0
-    entry.icon = itemData.icon or ""
+    -- A getter that answers nothing must not erase an icon captured earlier: the
+    -- path is what the site caches the image from, and it does not change.
+    entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
     entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
@@ -1560,6 +1740,165 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
     return SaveSharedEntry(itemData, entry.count, entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
 end
 
+-- "Always share" is a standing offer rather than an inventory entry: it says "if
+-- I ever have this again, offer it". It lives in its own table so the rebuild
+-- pass, which prunes anything missing from a readable bag, can never delete it.
+local function GetAlwaysShareTable()
+    if not ItemShare.savedVars then
+        return {}
+    end
+    if type(ItemShare.savedVars.alwaysShare) ~= "table" then
+        ItemShare.savedVars.alwaysShare = {}
+    end
+    return ItemShare.savedVars.alwaysShare
+end
+
+-- Keyed by item link, not by the inventory key: the offer is about the item, and
+-- it has to survive the item being in a different bag or in no bag at all.
+local function GetAlwaysShareKey(itemLink)
+    return tostring(itemLink or "")
+end
+
+local function SaveAlwaysShareEntry(itemData)
+    if not itemData or not itemData.itemLink or itemData.itemLink == "" then
+        return nil
+    end
+
+    local alwaysShare = GetAlwaysShareTable()
+    local key = GetAlwaysShareKey(itemData.itemLink)
+    local now = GetTimeStamp()
+    local entry = alwaysShare[key] or {}
+
+    local guildIds = {}
+    local guildNames = {}
+    for _, guild in ipairs(GetCharacterGuilds()) do
+        guildIds[#guildIds + 1] = guild.guildId
+        guildNames[#guildNames + 1] = guild.guildName
+    end
+
+    entry.itemKey = key
+    entry.accountName = GetCurrentAccountName()
+    entry.characterName = GetCurrentCharacterName()
+    entry.guildIds = guildIds
+    entry.guildNames = guildNames
+    entry.guildsCapturedAt = now
+    entry.itemName = itemData.itemName
+    entry.itemLink = itemData.itemLink
+    entry.itemId = tonumber(itemData.itemId or 0) or 0
+    -- A getter that answers nothing must not erase an icon captured earlier: the
+    -- path is what the site caches the image from, and it does not change.
+    entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
+    entry.itemType = itemData.itemType
+    entry.itemTypeName = itemData.itemTypeName
+    entry.quality = itemData.quality
+    entry.qualityName = itemData.qualityName
+    entry.trait = itemData.trait
+    entry.traitType = itemData.traitType
+    entry.apparelSlot = itemData.apparelSlot
+    entry.equipType = itemData.equipType
+    entry.apparelWeight = itemData.apparelWeight
+    entry.armorType = itemData.armorType
+    entry.weaponType = itemData.weaponType
+    entry.weaponHandedness = itemData.weaponHandedness
+    entry.weaponTypeId = itemData.weaponTypeId
+    entry.furnitureDataId = itemData.furnitureDataId
+    entry.setName = itemData.setName or ""
+    entry.enchantName = itemData.enchantName or ""
+    entry.styleName = itemData.styleName or ""
+    entry.requiredLevel = tonumber(itemData.requiredLevel or 0) or 0
+    entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
+    entry.flavorText = itemData.flavorText or ""
+    entry.esoDetails = itemData.esoDetails or {}
+    entry.firstAddedAt = entry.firstAddedAt or now
+    entry.lastUpdatedAt = now
+
+    alwaysShare[key] = entry
+    return entry
+end
+
+local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
+    local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
+    if not isEligible then
+        dmsg(string.format("Cannot always share that item: %s", tostring(reason)))
+        return
+    end
+
+    local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
+    if not itemData then
+        dmsg("Could not determine item data.")
+        return
+    end
+
+    local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
+    SaveAlwaysShareEntry(itemData)
+    dmsg(string.format(
+        "%s always shared item %s. It stays offered even when you do not have one.",
+        existing and "Updated" or "Added",
+        itemData.itemName
+    ))
+end
+
+local function PrintAlwaysShareItems()
+    local alwaysShare = GetAlwaysShareTable()
+    local entries = {}
+
+    for _, entry in pairs(alwaysShare) do
+        entries[#entries + 1] = entry
+    end
+
+    if #entries == 0 then
+        dmsg("Nothing is always shared yet. Right-click an item and choose \"Always Share This Item\".")
+        return
+    end
+
+    table.sort(entries, function(left, right)
+        return zo_strlower(tostring(left.itemName or "")) < zo_strlower(tostring(right.itemName or ""))
+    end)
+
+    dmsg(string.format("Always shared (%d):", #entries))
+    for index, entry in ipairs(entries) do
+        dmsg(string.format("  %d. %s", index, tostring(entry.itemName or entry.itemKey or "Unknown item")))
+    end
+    dmsg("Remove one with /itemshare noalways <part of the name>.")
+end
+
+local function RemoveAlwaysShareByName(searchText)
+    local needle = zo_strlower(zo_strtrim(tostring(searchText or "")))
+    if needle == "" then
+        dmsg("Usage: /itemshare noalways <part of the item name>")
+        return
+    end
+
+    local alwaysShare = GetAlwaysShareTable()
+    local matches = {}
+
+    for key, entry in pairs(alwaysShare) do
+        local name = zo_strlower(tostring(entry.itemName or ""))
+        if name ~= "" and string.find(name, needle, 1, true) then
+            matches[#matches + 1] = key
+        end
+    end
+
+    if #matches == 0 then
+        dmsg(string.format("No always-shared item matches \"%s\".", tostring(searchText)))
+        return
+    end
+
+    if #matches > 1 then
+        dmsg(string.format(
+            "%d always-shared items match \"%s\"; use more of the name.",
+            #matches,
+            tostring(searchText)
+        ))
+        return
+    end
+
+    local key = matches[1]
+    local entry = alwaysShare[key]
+    alwaysShare[key] = nil
+    dmsg(string.format("Stopped always sharing %s.", tostring(entry and entry.itemName or key)))
+end
+
 local function RemoveItemFromShareFromBagSlot(bagId, slotIndex)
     local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
     if not itemData or not itemData.itemLink or not itemData.itemName then
@@ -1593,21 +1932,36 @@ local function AddInventoryContextMenu(slot)
     end
 
     local sharedEntryKey = FindSharedEntryKeyForBagSlot(bagId, slotIndex)
+    local isEligible = IsItemEligibleForShare(bagId, slotIndex)
+
     if sharedEntryKey then
         AddCustomMenuItem("Remove from Shared List", function()
             RemoveItemFromShareFromBagSlot(bagId, slotIndex)
         end, MENU_ADD_OPTION_LABEL)
-        return
+    elseif isEligible then
+        AddCustomMenuItem("Add to Share", function()
+            AddItemToShareFromBagSlot(bagId, slotIndex)
+        end, MENU_ADD_OPTION_LABEL)
     end
 
-    local isEligible = IsItemEligibleForShare(bagId, slotIndex)
-    if not isEligible then
-        return
+    -- The standing offer is independent of this copy: an item can be shared right
+    -- now and marked to always share at the same time, so it gets its own entry
+    -- rather than replacing the one above.
+    local alwaysKey = GetAlwaysShareKey(itemLink)
+    if GetAlwaysShareTable()[alwaysKey] then
+        AddCustomMenuItem("Stop Always Sharing", function()
+            local entry = GetAlwaysShareTable()[alwaysKey]
+            GetAlwaysShareTable()[alwaysKey] = nil
+            dmsg(string.format(
+                "Stopped always sharing %s.",
+                tostring(entry and entry.itemName or itemName)
+            ))
+        end, MENU_ADD_OPTION_LABEL)
+    elseif isEligible then
+        AddCustomMenuItem("Always Share This Item", function()
+            AddAlwaysShareFromBagSlot(bagId, slotIndex)
+        end, MENU_ADD_OPTION_LABEL)
     end
-
-    AddCustomMenuItem("Add to Share", function()
-        AddItemToShareFromBagSlot(bagId, slotIndex)
-    end, MENU_ADD_OPTION_LABEL)
 end
 
 local function RegisterContextMenus()
@@ -1677,10 +2031,17 @@ local function BuildActualInventoryIndex()
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
+    local observableLocationKeys = {}
 
     for _, bagId in ipairs(GetTrackedBagIds()) do
         local locationKey, locationLabel = GetBagLocationInfo(bagId)
         local bagSize = GetBagSize(bagId) or 0
+        if bagSize > 0 then
+            -- A bag we can actually read is a bag we are allowed to judge. An
+            -- unopened bank or guild bank reports size 0, and shares filed there
+            -- must survive a reconcile that could not see them.
+            observableLocationKeys[locationKey] = true
+        end
         for slotIndex = 0, bagSize - 1 do
             local slotItemName = GetItemName(bagId, slotIndex)
             if slotItemName and slotItemName ~= "" then
@@ -1743,6 +2104,7 @@ local function BuildActualInventoryIndex()
     end
 
     return {
+        observableLocationKeys = observableLocationKeys,
         countsByEntryKey = countsByEntryKey,
         countsByLink = countsByLink,
         bagCountsByFurnitureDataId = bagCountsByFurnitureDataId,
@@ -1792,7 +2154,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     return nil
 end
 
-local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     local summary = string.format(
         "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
         tostring(actionName or "Sync"),
@@ -1802,13 +2164,22 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
         furnishingProtectedCount
     )
 
+    if (tonumber(stampedCount) or 0) > 0 then
+        summary = string.format("%s, Guild stamps added: %d", summary, tonumber(stampedCount))
+    end
+
     d("[ItemShare] " .. summary)
-    d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    if not quiet then
+        d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+    end
     dmsg(summary)
 end
 
-SyncSharedItemsWithInventory = function()
+SyncSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
+    -- Before anything is removed: an unstamped share is invisible on the site, and
+    -- stamping needs no bag access, so it must not depend on this pass seeing it.
+    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -1846,20 +2217,34 @@ SyncSharedItemsWithInventory = function()
             end
 
             if extraCount > 0 then
+                local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
                 actualCount = extraCount
-                currentLocation = "Placed Furniture"
+                currentLocation = placedLabel
+                currentLocationKey = placedKey
+                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
             end
         end
+
+        local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+        local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
             if isFurnishing then
                 furnishingProtectedCount = furnishingProtectedCount + 1
                 unchangedCount = unchangedCount + 1
-                dmsg(string.format("Kept furnishing share entry (unverified instead of removing): %s", itemName))
+                if not quiet then
+                    dmsg(string.format("Kept furnishing share entry (unverified instead of removing): %s", itemName))
+                end
+            elseif not canVerify then
+                -- That bag could not be read this session, so "not found" proves
+                -- nothing about the item. Keep the share rather than delete blind.
+                unchangedCount = unchangedCount + 1
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
-                dmsg(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                end
             end
         else
             local previousCount = tonumber(entry.count or 0) or 0
@@ -1886,19 +2271,22 @@ SyncSharedItemsWithInventory = function()
                 or previousItemKey ~= targetItemKey
                 or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
-                dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
+                if not quiet then
+                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
+                end
             else
                 unchangedCount = unchangedCount + 1
             end
         end
     end
 
-    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     RefreshShareListWindowIfVisible()
 end
 
-RebuildSharedItemsWithInventory = function()
+RebuildSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
+    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -1938,20 +2326,33 @@ RebuildSharedItemsWithInventory = function()
             end
 
             if extraCount > 0 then
+                local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
                 actualCount = extraCount
-                currentLocation = "Placed Furniture"
+                currentLocation = placedLabel
+                currentLocationKey = placedKey
+                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
             end
         end
+
+        local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+        local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
             if isFurnishing then
                 furnishingProtectedCount = furnishingProtectedCount + 1
                 unchangedCount = unchangedCount + 1
-                dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+                if not quiet then
+                    dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+                end
+            elseif not canVerify then
+                -- Unreadable bag: keep the share until a session can see it.
+                unchangedCount = unchangedCount + 1
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
-                dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                end
             end
         else
             local previousCount = tonumber(entry.count or 0) or 0
@@ -2000,15 +2401,43 @@ RebuildSharedItemsWithInventory = function()
                 or previousApparelWeight ~= tostring(entry.apparelWeight or "")
                 or previousWeaponType ~= tostring(entry.weaponType or "") then
                 updatedCount = updatedCount + 1
-                dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+                if not quiet then
+                    dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+                end
             else
                 unchangedCount = unchangedCount + 1
             end
         end
     end
 
-    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount)
+    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
     RefreshShareListWindowIfVisible()
+end
+
+-- The saved file is meant to be a snapshot of what the account owns right now, so
+-- the addon refreshes it without being asked: once when a character loads, and
+-- again when a bank opens or closes. Every entry it can see is rewritten from live
+-- data (item id, icon, guild ids, set, enchant, style, level, CP, flavour text),
+-- and entries whose location was readable but no longer holds the item are
+-- dropped. Locations that could not be read are left alone.
+local autoReconcilePending = false
+
+local function ScheduleAutoReconcile(reason)
+    if autoReconcilePending or not ItemShare.savedVars or not zo_callLater then
+        return
+    end
+
+    autoReconcilePending = true
+    zo_callLater(function()
+        autoReconcilePending = false
+        if not ItemShare.savedVars then
+            return
+        end
+
+        RefreshGuildSnapshot()
+        RebuildSharedItemsWithInventory(true)
+        d(string.format("[ItemShare] Shared items refreshed after %s.", tostring(reason or "login")))
+    end, 4000)
 end
 
 local function OnSlashCommand(arg)
@@ -2019,13 +2448,16 @@ local function OnSlashCommand(arg)
         dmsg("Commands:")
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
-        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
+        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare debug     - Toggle debug messages on or off")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
+        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -2042,7 +2474,7 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "rebuild" then
         RebuildSharedItemsWithInventory()
     elseif lowerArg == "save" then
-        SyncSharedItemsWithInventory()
+        RebuildSharedItemsWithInventory()
         ConfirmReloadUI()
     elseif lowerArg == "debug" then
         ItemShare.savedVars.debugEnabled = not ItemShare.savedVars.debugEnabled
@@ -2061,6 +2493,20 @@ local function OnSlashCommand(arg)
                 ))
             end
         end
+    elseif lowerArg == "stamp" then
+        local stamped = StampMissingGuilds()
+        if stamped > 0 then
+            d(string.format(
+                "[ItemShare] Stamped guilds on %d share(s). Use /ishare save or /reloadui to write the file, then upload it.",
+                stamped
+            ))
+        else
+            dmsg("Every share already has guild data; nothing to stamp.")
+        end
+    elseif lowerArg == "always" then
+        PrintAlwaysShareItems()
+    elseif string.match(lowerArg, "^noalways%s+") then
+        RemoveAlwaysShareByName(zo_strtrim(rawArg:sub(9)))
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
@@ -2098,12 +2544,15 @@ local function OnSlashCommand(arg)
         dmsg("Commands:")
         dmsg("/itemshare list      - Open the shared items window")
         dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Update counts and remove items no longer owned")
-        dmsg("/itemshare rebuild   - Refresh all saved item data from current inventory")
+        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare sheet     - Show the saved spreadsheet link")
         dmsg("/itemshare guilds    - Show the guilds captured for this character")
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
+        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
+        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
 end
@@ -2122,9 +2571,36 @@ local function OnAddonLoaded(event, addonName)
         defaults
     )
 
+    -- Files written before this version have no alwaysShare table yet.
+    GetAlwaysShareTable()
+
+    ItemShare.savedVars.addonVersion = ADDON_VERSION
+
     RefreshGuildSnapshot()
+    -- Guilds are often not loaded this early, so this is a head start only; the
+    -- delayed refresh and the login pass stamp again once they are.
+    StampMissingGuilds()
     if zo_callLater then
-        zo_callLater(RefreshGuildSnapshot, 3000)
+        zo_callLater(function()
+            RefreshGuildSnapshot()
+            StampMissingGuilds()
+        end, 3000)
+    end
+
+    if EVENT_PLAYER_ACTIVATED then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_ACTIVATED, function()
+            ScheduleAutoReconcile("login")
+        end)
+    end
+    if EVENT_OPEN_BANK then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
+            ScheduleAutoReconcile("the bank opening")
+        end)
+    end
+    if EVENT_CLOSE_BANK then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
+            ScheduleAutoReconcile("the bank closing")
+        end)
     end
 
     RegisterContextMenus()
@@ -2142,7 +2618,10 @@ local function OnAddonLoaded(event, addonName)
         CreateShareListWindow()
     end
 
-    dmsg("Loaded.")
+    dmsg(string.format(
+        "Loaded (version %s). Shared items refresh from your bags on login and when you open the bank.",
+        ADDON_VERSION
+    ))
 end
 
 EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoaded)

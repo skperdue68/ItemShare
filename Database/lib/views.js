@@ -140,8 +140,11 @@ function accountsCard(accounts, user) {
 
   const blocks = accounts
     .map((account) => {
+      const uploadVersion = account.lastUpload && account.lastUpload.addon_version
+        ? ` &middot; addon ${escapeHtml(account.lastUpload.addon_version)}`
+        : '';
       const lastUpload = account.lastUpload
-        ? `${escapeHtml(account.lastUpload.uploaded_at)} &middot; ${escapeHtml(account.lastUpload.source_file || 'upload')}`
+        ? `${escapeHtml(account.lastUpload.uploaded_at)} &middot; ${escapeHtml(account.lastUpload.source_file || 'upload')}${uploadVersion}`
         : 'never';
 
       const linked = account.link && account.link.user_id
@@ -261,6 +264,12 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
 
   const myAccounts = new Set(accounts.map((account) => account.accountName));
 
+  // An entry with no guild link reaches nobody through the guild join, so the
+  // owner gets it back here, labelled, instead of it quietly disappearing.
+  const unattributedCount = sharedItems.filter(
+    (item) => !item.guild_names && myAccounts.has(item.account_name)
+  ).length;
+
   const rowsFor = (items) =>
     items
       .map((item) => {
@@ -276,7 +285,11 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
             ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
             : name;
 
+        const unattributed = !item.guild_names;
         const details = [
+          unattributed && isMine
+            ? 'no guild recorded - run /itemshare stamp in game, then upload again'
+            : '',
           item.set_name,
           item.quality_name,
           item.weapon_type || item.armor_type || item.apparel_slot || item.equip_type,
@@ -300,6 +313,7 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
               <div class="item-cell-text">
                 <span class="item-name" style="color:${qualityColor(item.quality)}">${linkedName}</span>
                 ${isMine ? '<span class="own-tag">You</span>' : ''}
+                ${unattributed ? '<span class="own-tag">Unattributed</span>' : ''}
                 ${details ? `<span class="item-meta">${details}</span>` : ''}
               </div>
             </div>
@@ -307,7 +321,7 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
           <td class="num">${Number(item.item_count) || 0}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
           <td>${escapeHtml(item.trait || '')}</td>
-          <td>${escapeHtml(item.guild_names || '')}</td>
+          <td>${item.guild_names ? escapeHtml(item.guild_names) : '<span class="muted">none &mdash; unattributed</span>'}</td>
           <td>
             <span class="owner">${escapeHtml(item.account_name)}</span>
             <span class="owner-character">${escapeHtml(item.character_name || '')}</span>
@@ -340,6 +354,13 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
       ${sharedItems.length} item${sharedItems.length === 1 ? '' : 's'} across ${groups.size}
       type${groups.size === 1 ? '' : 's'}, grouped by type and alphabetical inside each group.
       Quantities are what each owner last reported.
+      ${
+        unattributedCount > 0
+          ? `${unattributedCount} of them ${unattributedCount === 1 ? 'has' : 'have'} no guild
+             recorded, so ${unattributedCount === 1 ? 'it is' : 'they are'} visible only to the owner
+             until the addon stamps them.`
+          : ''
+      }
     </p>
     ${bar}
     <div class="table-shell">
@@ -353,7 +374,77 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
   </section>`;
 }
 
-export function renderPage({ user, providers, accounts, sharedItems, facets, filters, dbError }) {
+function alwaysShareCard({ accounts, alwaysShare }) {
+  if (!accounts || accounts.length === 0 || !alwaysShare || alwaysShare.length === 0) {
+    return '';
+  }
+
+  const myAccounts = new Set(accounts.map((account) => account.accountName));
+
+  const rows = alwaysShare
+    .map((item) => {
+      const isMine = myAccounts.has(item.account_name);
+      const icon =
+        Number(item.has_icon) === 1
+          ? `<img class="item-icon" src="/icons/${escapeHtml(item.icon_key)}.png" alt="" width="24" height="24" loading="lazy">`
+          : `<span class="item-icon item-icon-empty" aria-hidden="true"></span>`;
+
+      const name = escapeHtml(item.item_name);
+      const linkedName =
+        Number(item.item_id) > 0
+          ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
+          : name;
+
+      const details = [
+        item.item_type_name,
+        item.set_name,
+        item.trait,
+        Number(item.first_added_at) > 0 ? `offered since ${seenDate(item.first_added_at)}` : '',
+      ]
+        .filter(Boolean)
+        .map((part) => escapeHtml(part))
+        .join(' &middot; ');
+
+      return `
+        <tr>
+          <td>
+            <div class="item-cell">
+              ${icon}
+              <div class="item-cell-text">
+                <span class="item-name" style="color:${qualityColor(item.quality)}">${linkedName}</span>
+                ${isMine ? '<span class="own-tag">You</span>' : ''}
+                ${Number(item.in_inventory) === 1 ? '<span class="own-tag">Has one now</span>' : ''}
+                ${details ? `<span class="item-meta">${details}</span>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>${item.guild_names ? escapeHtml(item.guild_names) : '<span class="muted">none &mdash; unattributed</span>'}</td>
+          <td>
+            <span class="owner">${escapeHtml(item.account_name)}</span>
+            <span class="owner-character">${escapeHtml(item.character_name || '')}</span>
+          </td>
+        </tr>`;
+    })
+    .join('');
+
+  return `
+    <section class="card">
+      <h2>Always shared</h2>
+      <p class="muted">
+        ${alwaysShare.length} standing offer${alwaysShare.length === 1 ? '' : 's'}: these people will
+        hand the item out whenever they have one. They are not counted in anyone's inventory —
+        "Has one now" simply means a copy is in a bag the owner has shared from.
+      </p>
+      <div class="table-shell">
+        <table>
+          <thead><tr><th>Item</th><th>Guilds</th><th>Owner</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+export function renderPage({ user, providers, accounts, sharedItems, alwaysShare, facets, filters, dbError }) {
   const canUpload = !dbError && (!providers || providers.length === 0 || user);
 
   return `<!DOCTYPE html>
@@ -403,6 +494,7 @@ export function renderPage({ user, providers, accounts, sharedItems, facets, fil
 
     ${accountsCard(accounts, user)}
     ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
+    ${alwaysShareCard({ accounts, alwaysShare })}
   </main>
 
   <footer class="footer">
