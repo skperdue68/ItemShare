@@ -164,6 +164,23 @@ Item names also link to `esoitem.uesp.net/itemLink.php?itemid=…` when the id i
 known. That link is a convenience only: type, quality, trait and icon all come
 from the addon, not from UESP.
 
+## Staying signed in
+
+Signing in is meant to be a one-off. Sessions are stored in MariaDB
+(`itemshare_sessions`) rather than in process memory, so a restart, a crash or a
+redeploy no longer signs everyone out while their cookie still says otherwise, and
+the cookie lasts `SESSION_TTL_DAYS` (default 30) with `rolling` renewal, so a person
+who visits now and then never sees a login screen.
+
+The only way out is the avatar menu in the header: it shows two initials, opens a
+small panel with the name and provider, and holds **Log out**. That posts to
+`/logout`, which deletes the session row and clears the cookie. Without JavaScript
+the form still submits.
+
+Expired rows are pruned at startup and twice a day. If MariaDB is unreachable the
+session layer reports "no session" instead of failing the request, so the page still
+renders its database-error card rather than a blank screen.
+
 ## Command line equivalent
 
 ```bash
