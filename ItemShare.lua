@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.2"
+local ADDON_VERSION = "1.10.3"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -48,6 +48,10 @@ local defaults = {
 
 local dmsg
 local RemoveItemFromShareByKey
+-- Sharing and always sharing are one choice per item, so the code that turns one on
+-- has to be able to clear the other from here onwards in the file.
+local RemoveSharesForItemLink
+local RemoveAlwaysShareForItemLink
 local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
 local IsSavedEntryEligibleForShare
@@ -656,6 +660,9 @@ local function GetOrCreateShareListRow(index)
 
             local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
             if savedEntry then
+                -- Adding from this window is the same choice as adding from a bag: it
+                -- replaces a standing offer instead of sitting beside one.
+                RemoveAlwaysShareForItemLink(savedEntry.itemLink)
                 row.entryData = savedEntry
                 row.entryKey = tostring(BuildSharedItemKey(savedEntry.itemLink, savedEntry.locationKey) or row.entryKey or "")
                 row.isShared = true
@@ -2093,7 +2100,22 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local stackCount = GetItemShareCount(bagId, slotIndex)
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
     local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
-    local reserve = savedEntry and tonumber(GetShareReserve(savedEntry.itemLink)) or 0
+
+    if not savedEntry then
+        dmsg(string.format("Could not add %s to the shared list.", tostring(itemData.itemName or "that item")))
+        return
+    end
+
+    -- The other direction: sharing it from a bag now replaces a standing offer. Done
+    -- after the save, because a save that is refused (a bound item) must not take the
+    -- offer away with it.
+    local removedAlways = RemoveAlwaysShareForItemLink(savedEntry.itemLink) ~= nil
+    if removedAlways then
+        TryRefreshInventoryVisuals()
+        RefreshShareListWindowIfVisible()
+    end
+
+    local reserve = tonumber(GetShareReserve(savedEntry.itemLink)) or 0
 
     if reserve > 0 then
         dmsg(string.format(
@@ -2104,16 +2126,22 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
             GetEntryOfferedCount(savedEntry),
             stackCount
         ))
-        return
+    else
+        dmsg(string.format(
+            "%s shared item %s from %s (stack size: %d)",
+            existing and "Updated" or "Added",
+            itemData.itemName,
+            itemData.sharedFrom,
+            stackCount
+        ))
     end
 
-    dmsg(string.format(
-        "%s shared item %s from %s (stack size: %d)",
-        existing and "Updated" or "Added",
-        itemData.itemName,
-        itemData.sharedFrom,
-        stackCount
-    ))
+    if removedAlways then
+        dmsg(string.format(
+            "Stopped always sharing %s: an item is offered one way at a time.",
+            itemData.itemName
+        ))
+    end
 end
 
 RemoveItemFromShareByKey = function(itemKey, entry, refreshListWindow)
@@ -2306,6 +2334,44 @@ local function SaveAlwaysShareEntry(itemData)
     return entry
 end
 
+-- An item is offered one way at a time: shared from a bag right now, or always
+-- offered from then on. These two are what "one way" means in the saved tables, and
+-- both refresh what is on screen afterwards so an open list cannot keep showing the
+-- state it was opened with.
+RemoveSharesForItemLink = function(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return 0
+    end
+
+    local keys = {}
+    for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        if type(entry) == "table" and tostring(entry.itemLink or "") == link then
+            keys[#keys + 1] = itemKey
+        end
+    end
+
+    for _, itemKey in ipairs(keys) do
+        ItemShare.savedVars.sharedItems[itemKey] = nil
+    end
+
+    return #keys
+end
+
+RemoveAlwaysShareForItemLink = function(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return nil
+    end
+
+    local alwaysShare = GetAlwaysShareTable()
+    local existing = alwaysShare[link]
+    if existing ~= nil then
+        alwaysShare[link] = nil
+    end
+    return existing
+end
+
 local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
     local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
     if not isEligible then
@@ -2321,6 +2387,12 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
 
     local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
     SaveAlwaysShareEntry(itemData)
+
+    -- The standing offer replaces any share of the same item, in whichever bag it was
+    -- filed from. Doing it before the refresh means the window redraws once, already
+    -- showing the item as offered rather than shared.
+    local removedShares = RemoveSharesForItemLink(itemData.itemLink)
+
     TryRefreshInventoryVisuals()
     RefreshShareListWindowIfVisible()
     dmsg(string.format(
@@ -2328,6 +2400,12 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
         existing and "Updated" or "Added",
         itemData.itemName
     ))
+    if removedShares > 0 then
+        dmsg(string.format(
+            "Removed %s from the shared list: an item is offered one way at a time.",
+            itemData.itemName
+        ))
+    end
 end
 
 local function PrintAlwaysShareItems()
