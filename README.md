@@ -254,6 +254,126 @@ signing in with Google. Unverified addresses are never used to merge people.
 - Guild membership is replaced in full as well (`itemshare_account_guilds`), so
   leaving a guild in game removes that guild's visibility after the next upload.
 
+## Automatic uploads from GuildSync (file watch)
+
+GuildSync runs on the same machine as the game, so it can notice
+`SavedVariables/ItemShareSavedVars.lua` being written and send it here without anyone
+opening the upload page. ESO writes that file on every save and the addon fills it
+during play, so the site ends up as current as the last save.
+
+The watching belongs in GuildSync, not here: it owns the stored on/off setting, the
+debounce and the line in its log saying what it sent. This site only has to accept
+the file, which it does on `POST /ingest`.
+
+### Turning it on here
+
+1. Make a token: `openssl rand -hex 32`
+2. Put it in `Database/.env` as `INGEST_TOKEN=<that string>` and restart the site.
+   With it blank the endpoint answers `503` and nothing else about the site changes.
+3. Put the same string in GuildSync, next to the on/off switch.
+
+The endpoint takes the file's **contents** as text, not a multipart form:
+
+```bash
+curl -X POST https://your-site.example/ingest \
+  -H "Authorization: Bearer $INGEST_TOKEN" \
+  -H "Content-Type: text/plain" \
+  -H "X-ItemShare-File: ItemShareSavedVars.lua" \
+  --data-binary @ItemShareSavedVars.lua
+```
+
+| Reply | Meaning |
+| --- | --- |
+| `200` | Accepted and applied. The body is the same summary the upload page gets: accounts, item count, quantity, icon and link results |
+| `400` | The body was empty, or no ESO account was found in it - the wrong file, most likely |
+| `401` | Missing or wrong token |
+| `503` | `INGEST_TOKEN` is blank, so automatic uploads are off |
+
+It does exactly what an upload does - parse, resolve icons, fill-then-prune every
+account in one transaction, fetch new icons, and tell open pages to refresh - because
+both routes call the same code. The difference is identity: a watcher has no browser
+session, so it runs anonymously. It never links an ESO account to a person and never
+changes an existing link, so a stolen token can overwrite item lists but cannot
+claim someone's account.
+
+The token is compared in constant time and never appears in a reply or the log. Keep
+the site behind HTTPS: the token travels in a header, and the file contents are
+plain text over the wire.
+
+### The GuildSync side
+
+GuildSync needs three small things of its own: a saved on/off setting, a file watch
+that is attached only while it is on, and a debounced POST. ESO rewrites the whole
+file and `fs.watch` fires more than once per save, so the send waits for the writes
+to settle:
+
+```js
+import { watch } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+let watcher = null;
+let pending = null;
+
+export function setItemShareWatch(on, { file, siteUrl, token, log = console }) {
+  watcher?.close();
+  watcher = null;
+  clearTimeout(pending);
+
+  if (!on) {
+    log.log('ItemShare file watch: off');
+    return;
+  }
+
+  watcher = watch(file, () => {
+    clearTimeout(pending);
+    pending = setTimeout(() => send(file, siteUrl, token, log), 3000);
+  });
+
+  log.log(`ItemShare file watch: on, watching ${file}`);
+}
+
+async function send(file, siteUrl, token, log) {
+  try {
+    const response = await fetch(new URL('/ingest', siteUrl), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'text/plain',
+        'X-ItemShare-File': path.basename(file),
+      },
+      body: await readFile(file, 'utf8'),
+    });
+    const summary = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(summary.error || `HTTP ${response.status}`);
+    }
+
+    log.log(
+      `ItemShare: sent ${summary.accountCount} account(s), ${summary.itemCount} item(s)`
+    );
+  } catch (error) {
+    // The next save tries again; a failed send must never stop the watch.
+    log.warn(`ItemShare: sending the file failed - ${error.message}`);
+  }
+}
+```
+
+Points worth keeping when it is wired in:
+
+- The path is `Documents/Elder Scrolls Online/<live|liveeu|pts>/SavedVariables/ItemShareSavedVars.lua`.
+  `node ingest.js` with no argument already finds that folder the same way
+  (see *Finding the saved variables file*), so GuildSync can reuse that lookup.
+- Nothing is sent until the addon has written at least one account, and the site is
+  the authority on whether a file is usable: a partial write answers `400` and the
+  next save fixes it.
+- The switch is GuildSync's, so turning it off closes the watcher and sends nothing
+  more - no queued file is flushed afterwards. Turning it back on does not send the
+  file immediately; the next save does.
+- Log the reply's `itemCount`, not just success, or a send with nothing in it looks
+  identical to one with thirty items.
+
 ## Seeing shared items
 
 Any Discord or Google account can sign in; it only establishes identity. Once one or more
@@ -361,11 +481,13 @@ picked rather than from the moment it is sent:
   Briarheart Dagger, which does not cover the 3 you asked for." A row that merely
   moved (the item changed character, or was re-shared) is re-pointed by
   `item_key_hash` instead of being cancelled.
-- *Your requests* holds the basket and, below it, **Already sent**: a history of what
-  you actually asked for, newest first and oldest last. Each row carries the item's
-  picture and trait, the time it was sent, and anything that closed says why. When a live update brings back
-  a cancellation the page also says so in a toast, once: opening the page does not
-  replay old ones.
+- *Your requests* holds the basket and, below it, **Already sent**: only the requests
+  that actually stand, newest first and oldest last - waiting on the owner, handed
+  over, or turned down. Each row carries the item's picture and trait and the time it
+  was sent. A request that timed out or was cancelled is not kept there: it was never
+  something the person successfully asked for, so it is dropped instead of sitting in
+  the list looking live. When a live update brings back a cancellation the page still
+  says so in a toast, once: opening the page does not replay old ones.
 - A requester can cancel their own waiting request. The owner sees "2 asked for" on
   the row.
 - Leaving the page with a basket still holding items raises a styled warning
