@@ -6,7 +6,7 @@
 //   npm run simulate -- --every 4000     one action every four seconds
 //   npm run simulate -- --rounds 12      stop after twelve actions
 //   npm run simulate -- --once           exactly one action, then exit
-//   npm run simulate -- --only requests  just asking and cancelling
+//   npm run simulate -- --only requests  asking, sending, cancelling and timing out
 //   npm run simulate -- --only items     just people re-saving their files
 //   npm run simulate -- --reset          remove the simulated people and their data
 //
@@ -30,6 +30,8 @@ import { describeConnectionFailure, openDatabase, readConfig } from './lib/datab
 import {
   cancelOwnRequest,
   createRequest,
+  expireDueDrafts,
+  getBasketRows,
   getSharedItemsForViewer,
   replaceAccounts,
   submitDrafts,
@@ -385,7 +387,7 @@ async function sharedGuilds(connection, accounts) {
  * Asks for something of the real owner's, the way someone browsing the Request tab
  * would: the copies that are free, a quantity that fits, and usually a send.
  */
-async function requestSomething(connection, person, mine) {
+async function requestSomething(connection, person, mine, { send = Math.random() < 0.5 } = {}) {
   const rows = await getSharedItemsForViewer(connection, [person.account], { limit: 200 });
   const candidates = rows.filter(
     (row) =>
@@ -417,7 +419,7 @@ async function requestSomething(connection, person, mine) {
     return { skipped: error.message };
   }
 
-  const sent = Math.random() < 0.7 ? await submitDrafts(connection, { userId: person.userId }) : 0;
+  const sent = send ? await submitDrafts(connection, { userId: person.userId }) : 0;
 
   return {
     person: person.account,
@@ -426,6 +428,107 @@ async function requestSomething(connection, person, mine) {
     owner: outcome.ownerAccountName,
     sent: sent > 0,
   };
+}
+
+/**
+ * Sends the basket, asking for something first if it is empty. This is the scenario
+ * the site emails the owner about; here the sentence says who would have been
+ * emailed rather than sending anything.
+ */
+async function sendBasket(connection, person, mine) {
+  let rows = (await getBasketRows(connection, person.userId)).filter(
+    (row) => row.status === 'draft'
+  );
+
+  if (rows.length === 0) {
+    const asked = await requestSomething(connection, person, mine, { send: false });
+
+    if (!asked || !asked.item) {
+      return null;
+    }
+
+    rows = (await getBasketRows(connection, person.userId)).filter(
+      (row) => row.status === 'draft'
+    );
+  }
+
+  const sent = await submitDrafts(connection, { userId: person.userId });
+
+  if (sent === 0) {
+    return null;
+  }
+
+  return {
+    person: person.account,
+    copies: rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0),
+    items: rows.map((row) => row.item_name),
+    owners: [...new Set(rows.map((row) => String(row.owner_account_name)))],
+    sent,
+  };
+}
+
+/** Takes the most recent thing back out of the basket before it is ever sent. */
+async function removeFromBasket(connection, person) {
+  const rows = (await getBasketRows(connection, person.userId)).filter(
+    (row) => row.status === 'draft'
+  );
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const row = rows[rows.length - 1];
+  const outcome = await cancelOwnRequest(connection, {
+    userId: person.userId,
+    requestId: Number(row.id),
+    holdMinutes: HOLD_MINUTES,
+  });
+
+  return outcome.cancelled
+    ? {
+        person: person.account,
+        item: outcome.itemName || row.item_name || 'an item',
+        fromBasket: true,
+      }
+    : null;
+}
+
+/**
+ * Lets a basket run out of time. The hold is five minutes, so the clock is pushed
+ * past its deadline and the site's own sweeper is run: the rows end up exactly as
+ * they would for somebody who walked away and came back.
+ */
+async function timeoutBasket(connection, person, mine) {
+  const asked = await requestSomething(connection, person, mine, { send: false });
+
+  if (!asked || !asked.item) {
+    return null;
+  }
+
+  await connection.execute(
+    `UPDATE itemshare_requests
+        SET expires_at = NOW() - INTERVAL 1 SECOND
+      WHERE requester_user_id = ? AND status = 'draft'`,
+    [person.userId]
+  );
+
+  const expired = await expireDueDrafts(connection);
+
+  return expired > 0 ? { person: person.account, item: asked.item } : null;
+}
+
+/** Names a few items for one log sentence without dumping a whole basket into it. */
+function describeItems(names) {
+  const list = [...new Set((names || []).filter(Boolean))];
+
+  if (list.length === 0) {
+    return 'an item';
+  }
+  if (list.length <= 3) {
+    return list.join(', ');
+  }
+
+  return `${list.slice(0, 3).join(', ')} and ${list.length - 3} more`;
 }
 
 /** Takes back the most recent waiting request this person has. */
@@ -620,8 +723,8 @@ try {
         only === 'items'
           ? ['save']
           : only === 'requests'
-            ? ['request', 'cancel']
-            : ['request', 'cancel', 'save'];
+            ? ['request', 'send', 'cancel', 'timeout']
+            : ['request', 'send', 'cancel', 'timeout', 'save'];
 
       console.log(
         `Simulating ${PEOPLE.length} people into ${guilds.size} guild${
@@ -629,7 +732,7 @@ try {
         } alongside ${mine.join(', ')}.`
       );
       console.log(
-        `${only ? `Only ${only}` : 'A mix of asks, cancels and re-saves'}${
+        `${only ? `Only ${only}` : 'A mix of asks, sends, cancels, timeouts and re-saves'}${
           Number.isFinite(rounds)
             ? `, ${rounds} action${rounds === 1 ? '' : 's'}`
             : ', running until you stop it'
@@ -654,16 +757,39 @@ try {
 
           if (done && done.item) {
             line = `${done.person} asked ${done.owner} for ${done.quantity} x ${done.item}${
-              done.sent ? '' : ' (still in their basket)'
+              done.sent ? ' and sent it straight away' : ' (still in their basket)'
             }`;
           } else {
             line = `nothing free to ask for right now (${person.account})`;
           }
-        } else if (action === 'cancel') {
-          const done = await cancelSomething(connection, person);
+        } else if (action === 'send') {
+          const done = await sendBasket(connection, person, mine);
+
           line = done
-            ? `${done.person} cancelled their request for ${done.item}`
+            ? `${done.person} sent ${done.sent} request${done.sent === 1 ? '' : 's'} (${done.copies} cop${
+                done.copies === 1 ? 'y' : 'ies'
+              }) for ${describeItems(done.items)} to ${done.owners.join(
+                ', '
+              )} - the owner would be emailed`
+            : `nothing for ${person.account} to send`;
+        } else if (action === 'cancel') {
+          const done =
+            (await cancelSomething(connection, person)) ||
+            (await removeFromBasket(connection, person));
+
+          line = done
+            ? `${done.person} ${done.fromBasket ? 'took back' : 'cancelled'} their request for ${
+                done.item
+              }`
             : `nothing for ${person.account} to cancel`;
+        } else if (action === 'timeout') {
+          const done = await timeoutBasket(connection, person, mine);
+
+          line = done
+            ? `${done.person} let the basket clock run out, so ${describeItems([
+                done.item,
+              ])} went back to being available`
+            : `nothing to time out for ${person.account}`;
         } else {
           const done = await saveSomething(connection, person, guilds);
           line = `${done.person} saved again: ${done.items} items, now in ${done.where}`;
