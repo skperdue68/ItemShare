@@ -3,7 +3,11 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.0"
+local ADDON_VERSION = "1.10.1"
+-- Bumped whenever the saved layout changes shape. A file written by a different
+-- number is not migrated: its tables are started over, so the file is rewritten in
+-- the current layout on the next save.
+local SAVED_VARS_VERSION = 4
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -71,7 +75,7 @@ local ApplyShareReserve
 -- offer is the held count minus the reserve, and the reserve lives in its own table,
 -- so neither number needs a copy on the entry that can drift from them.
 GetEntryHeldCount = function(entry)
-    return math.max(0, math.floor(tonumber(entry and (entry.heldCount or entry.count) or 0) or 0))
+    return math.max(0, math.floor(tonumber(entry and entry.heldCount or 0) or 0))
 end
 
 GetEntryOfferedCount = function(entry)
@@ -822,10 +826,6 @@ local function GetNormalizedItemLink(bagId, slotIndex)
     return itemLink
 end
 
-local function GetCurrentAccountName()
-    return GetDisplayName() or "@Unknown"
-end
-
 local function GetCurrentCharacterName()
     return GetNormalizedText(GetUnitName("player")) or "Unknown"
 end
@@ -942,293 +942,6 @@ local function RefreshGuildSnapshot()
     return guilds
 end
 
--- Membership for any character, resolved through the registry, so the guilds of a
--- character that is not online can still be named.
-GetGuildsForCharacter = function(characterName)
-    local name = tostring(characterName or "")
-    if name == "" then
-        name = GetCurrentCharacterName()
-    end
-
-    local guilds = {}
-    local snapshot = GetCharacterGuildSnapshots()[name]
-
-    if type(snapshot) == "table" and type(snapshot.guildIds) == "table" then
-        for _, rawGuildId in ipairs(snapshot.guildIds) do
-            local guildId = tonumber(rawGuildId) or 0
-            if guildId > 0 then
-                guilds[#guilds + 1] = {
-                    guildId = guildId,
-                    guildName = GetGuildNameById(guildId),
-                }
-            end
-        end
-    end
-
-    -- The guild list in front of us beats a snapshot that was never written.
-    if #guilds == 0 and name == GetCurrentCharacterName() then
-        guilds = GetCharacterGuilds()
-    end
-
-    return guilds
-end
-
--- Anything written before 1.10 carries the guild list three times over. This folds
--- all of it into the registry and takes the copies off the entries. It runs on every
--- load and is a no-op once there is nothing left to fold.
-MigrateGuildData = function()
-    if not ItemShare.savedVars then
-        return 0
-    end
-
-    local registry = GetSavedGuildRegistry()
-    local snapshots = GetCharacterGuildSnapshots()
-    local folded = 0
-
-    -- The account-wide map was the only place a name could outlive its guild.
-    local legacyKnown = ItemShare.savedVars.knownGuilds
-    if type(legacyKnown) == "table" then
-        for guildId, guildName in pairs(legacyKnown) do
-            if RecordGuildInRegistry(guildId, guildName) then
-                folded = folded + 1
-            end
-        end
-        ItemShare.savedVars.knownGuilds = nil
-    end
-
-    -- A character snapshot held the same membership twice, once as ids and once as
-    -- {guildId, guildName} pairs. Keep the ids, fold the pairs into the registry.
-    for _, snapshot in pairs(snapshots) do
-        if type(snapshot) == "table" then
-            if type(snapshot.guilds) == "table" then
-                for _, guild in ipairs(snapshot.guilds) do
-                    if type(guild) == "table"
-                        and RecordGuildInRegistry(guild.guildId, guild.guildName) then
-                        folded = folded + 1
-                    end
-                end
-                snapshot.guilds = nil
-            end
-            if type(snapshot.guildIds) ~= "table" then
-                snapshot.guildIds = {}
-            end
-        end
-    end
-
-    -- Shares carried the whole membership each. What they still know that no
-    -- snapshot does is worth keeping: a character that has not logged in since the
-    -- addon started recording guilds has no snapshot of its own.
-    for _, tableName in ipairs({ "sharedItems", "alwaysShare" }) do
-        local entries = ItemShare.savedVars[tableName]
-        if type(entries) == "table" then
-            for _, entry in pairs(entries) do
-                if type(entry) == "table" then
-                    if type(entry.guildIds) == "table" then
-                        local names = type(entry.guildNames) == "table" and entry.guildNames or {}
-                        local ids = {}
-
-                        for index, rawGuildId in ipairs(entry.guildIds) do
-                            local guildId = tonumber(rawGuildId) or 0
-                            if guildId > 0 then
-                                ids[#ids + 1] = guildId
-                                RecordGuildInRegistry(guildId, names[index])
-                            end
-                        end
-
-                        local characterName = tostring(entry.characterName or "")
-                        if #ids > 0 and characterName ~= ""
-                            and type(snapshots[characterName]) ~= "table" then
-                            snapshots[characterName] = {
-                                guildIds = ids,
-                                updatedAt = tonumber(entry.guildsCapturedAt or 0) or 0,
-                            }
-                        end
-
-                        folded = folded + 1
-                    end
-
-                    entry.guildIds = nil
-                    entry.guildNames = nil
-                    entry.guildsCapturedAt = nil
-                end
-            end
-        end
-    end
-
-    if ItemShare.savedVars.guilds == nil then
-        ItemShare.savedVars.guilds = registry
-    end
-
-    return folded
-end
-
--- The offered count, the per-entry reserve, the entry key and the account name are all
--- derivable: the held count is the only count worth storing, the reserve lives in the
--- reserves table, and the key is the entry's own table key. A reserve that only an
--- entry knew about is written into the table that owns it before the copy goes.
-MigrateEntryData = function()
-    if not ItemShare.savedVars then
-        return 0
-    end
-
-    if type(ItemShare.savedVars.reserves) ~= "table" then
-        ItemShare.savedVars.reserves = {}
-    end
-    local reserves = ItemShare.savedVars.reserves
-
-    local cleaned = 0
-    for _, tableName in ipairs({ "sharedItems", "alwaysShare" }) do
-        local entries = ItemShare.savedVars[tableName]
-        if type(entries) == "table" then
-            for _, entry in pairs(entries) do
-                if type(entry) == "table" then
-                    local link = tostring(entry.itemLink or "")
-                    local reserve = math.max(0, math.floor(tonumber(entry.reserve) or 0))
-
-                    if link ~= "" and reserve > 0 and reserves[link] == nil then
-                        reserves[link] = reserve
-                    end
-
-                    if entry.count ~= nil or entry.reserve ~= nil
-                        or entry.itemKey ~= nil or entry.accountName ~= nil then
-                        cleaned = cleaned + 1
-                    end
-
-                end
-            end
-        end
-    end
-
-    return cleaned
-end
-
--- One release of compatibility. 1.9 and the website both expect the guild list to
--- ride along on every share (and twice more at account level), so rather than keep
--- writing that into the live tables, /ishare export writes a complete old-shape copy
--- into its own saved-variables file. That file is what gets uploaded until the site
--- reads the guild table directly.
-GetCompatExportScope = function()
-    if ItemShare.compatExportScope then
-        return ItemShare.compatExportScope
-    end
-
-    if type(ItemShareExport) ~= "table" then
-        ItemShareExport = {}
-    end
-
-    ItemShare.compatExportScope = ZO_SavedVars:NewAccountWide("ItemShareExport", 1, nil, {
-        version = 2,
-        addonVersion = "",
-        sharedItems = {},
-        alwaysShare = {},
-        knownGuilds = {},
-        characterGuilds = {},
-        guildsUpdatedAt = 0,
-    })
-
-    return ItemShare.compatExportScope
-end
-
-BuildCompatExport = function()
-    if not ItemShare.savedVars then
-        return nil
-    end
-
-    local scope = GetCompatExportScope()
-    if not scope then
-        return nil
-    end
-
-    local knownGuilds = {}
-    for guildId, guildName in pairs(GetSavedGuildRegistry()) do
-        knownGuilds[tostring(guildId)] = tostring(guildName)
-    end
-    scope.knownGuilds = knownGuilds
-
-    local guildsCapturedAt = tonumber(ItemShare.savedVars.guildsUpdatedAt or 0) or 0
-    local characterGuilds = {}
-    for characterName, snapshot in pairs(GetCharacterGuildSnapshots()) do
-        local ids = {}
-        local guildPairs = {}
-
-        if type(snapshot) == "table" and type(snapshot.guildIds) == "table" then
-            for _, rawGuildId in ipairs(snapshot.guildIds) do
-                local guildId = tonumber(rawGuildId) or 0
-                if guildId > 0 then
-                    ids[#ids + 1] = guildId
-                    guildPairs[#guildPairs + 1] = {
-                        guildId = guildId,
-                        guildName = GetGuildNameById(guildId),
-                    }
-                end
-            end
-        end
-
-        characterGuilds[tostring(characterName)] = {
-            guildIds = ids,
-            guilds = guildPairs,
-            updatedAt = tonumber(snapshot and snapshot.updatedAt or 0) or 0,
-        }
-    end
-    scope.characterGuilds = characterGuilds
-    scope.guildsUpdatedAt = guildsCapturedAt
-    scope.addonVersion = ADDON_VERSION
-    scope.spreadsheetUrl = tostring(ItemShare.savedVars.spreadsheetUrl or "")
-    scope.version = 2
-
-    -- The one place the old shape is rebuilt: everything else in the addon reads the
-    -- guild table, so the compatibility copy cannot drift from it.
-    -- The website reads a few fields the addon no longer stores because they follow
-    -- from what it does store: the entry key, the account the file belongs to, what is
-    -- offered and what is kept back.
-    local function copyWithGuilds(itemKey, entry)
-        local copy = {}
-        for key, value in pairs(entry) do
-            copy[key] = value
-        end
-
-        local link = tostring(entry.itemLink or "")
-        copy.itemKey = tostring(itemKey)
-        copy.accountName = GetCurrentAccountName()
-        copy.heldCount = GetEntryHeldCount(entry)
-        copy.reserve = GetShareReserve(link)
-        copy.count = ShareableCount(link, copy.heldCount)
-
-        local guildIds = {}
-        local guildNames = {}
-        for _, guild in ipairs(GetGuildsForCharacter(tostring(entry.characterName or ""))) do
-            guildIds[#guildIds + 1] = guild.guildId
-            guildNames[#guildNames + 1] = guild.guildName
-        end
-
-        copy.guildIds = guildIds
-        copy.guildNames = guildNames
-        copy.guildsCapturedAt = guildsCapturedAt
-        return copy
-    end
-
-    local itemCount = 0
-    local sharedItems = {}
-    for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        if type(entry) == "table" then
-            sharedItems[itemKey] = copyWithGuilds(itemKey, entry)
-            itemCount = itemCount + 1
-        end
-    end
-    scope.sharedItems = sharedItems
-
-    local offerCount = 0
-    local alwaysShare = {}
-    for itemKey, entry in pairs(ItemShare.savedVars.alwaysShare or {}) do
-        if type(entry) == "table" then
-            alwaysShare[itemKey] = copyWithGuilds(itemKey, entry)
-            offerCount = offerCount + 1
-        end
-    end
-    scope.alwaysShare = alwaysShare
-
-    return itemCount, offerCount
-end
 
 
 local function GetSelectedGuildBankLocationInfo()
@@ -3461,15 +3174,13 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
         dmsg("/itemshare debug     - Toggle debug messages on or off")
-        dmsg("/itemshare guilds    - Show the guilds captured for this character")
+        dmsg("/itemshare guilds    - Show the guilds this character's shares are matched against")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
-        dmsg("/itemshare stamp     - Refresh the guild list shares are matched against")
-        dmsg("/itemshare export    - Write a website-compatible copy for upload (ItemShareExport)")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -3505,24 +3216,6 @@ local function OnSlashCommand(arg)
                 ))
             end
         end
-    elseif lowerArg == "stamp" then
-        local guilds = RefreshGuildSnapshot()
-        d(string.format(
-            "[ItemShare] Guild list refreshed: %d guild(s) for %s. Shares no longer carry their own copy, so there is nothing left to stamp.",
-            #guilds,
-            GetCurrentCharacterName()
-        ))
-    elseif lowerArg == "export" or lowerArg == "compat" then
-        local items, offers = BuildCompatExport()
-        if not items then
-            dmsg("Nothing to export yet.")
-        else
-            d(string.format(
-                "[ItemShare] Wrote a website-compatible copy of %d share(s) and %d standing offer(s) to ItemShareExport. Use /reloadui to write the file, then upload ItemShareExport.lua.",
-                items,
-                offers
-            ))
-        end
     elseif lowerArg == "always" then
         PrintAlwaysShareItems()
     elseif string.match(lowerArg, "^noalways%s+") then
@@ -3554,15 +3247,13 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
         dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
         dmsg("/itemshare save      - Reload the UI")
-        dmsg("/itemshare guilds    - Show the guilds captured for this character")
+        dmsg("/itemshare guilds    - Show the guilds this character's shares are matched against")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
-        dmsg("/itemshare stamp     - Refresh the guild list shares are matched against")
-        dmsg("/itemshare export    - Write a website-compatible copy for upload (ItemShareExport)")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
 end
@@ -3576,18 +3267,25 @@ local function OnAddonLoaded(event, addonName)
 
     ItemShare.savedVars = ZO_SavedVars:NewAccountWide(
         "ItemShareSavedVars",
-        3,
+        SAVED_VARS_VERSION,
         nil,
         defaults
     )
 
-    -- Files written before this version have no alwaysShare table yet.
-    GetAlwaysShareTable()
+    -- A file written by another layout is not carried forward: this release starts its
+    -- tables over rather than reading around an old shape. Shares come back from the
+    -- bags on the rebuild that runs at login; standing offers and reserves are set by
+    -- hand rather than read from a bag, so they start empty.
+    if tonumber(ItemShare.savedVars.schema) ~= SAVED_VARS_VERSION then
+        ItemShare.savedVars.sharedItems = {}
+        ItemShare.savedVars.alwaysShare = {}
+        ItemShare.savedVars.reserves = {}
+        ItemShare.savedVars.guilds = {}
+        ItemShare.savedVars.characterGuilds = {}
+        ItemShare.savedVars.schema = SAVED_VARS_VERSION
+    end
 
-    -- Shares used to carry their own copy of the guild list; fold those copies into
-    -- the guild table and take them off the entries.
-    MigrateGuildData()
-    MigrateEntryData()
+    GetAlwaysShareTable()
 
     ItemShare.savedVars.addonVersion = ADDON_VERSION
 

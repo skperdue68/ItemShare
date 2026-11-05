@@ -1,8 +1,8 @@
 ## Title: ItemShare
 ## Author: evainefaye
-## Version: 1.10.0
+## Version: 1.10.1
 ## APIVersion: 101051
-## SavedVariables: ItemShareSavedVars ItemShareExport
+## SavedVariables: ItemShareSavedVars
 ## DependsOn: LibCustomMenu>=7.3.0
 
 ItemShare.lua
