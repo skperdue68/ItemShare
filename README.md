@@ -19,7 +19,9 @@ Items that are bound to you cannot be shared, and neither can items the game onl
 
 Right-click an item and choose "Always Share This Item" to make it a standing offer: it stays offered even when you no longer have a copy, and `/ishare sync` never removes it. A normally shared item is different - it is only offered while it is in a bag the addon can read, and it disappears from the list once it is gone.
 
-The badge on an item icon shows which of the two it is. A green gift means it is shared right now; the same gift in gold with a closed ring means it is always shared, and that gold badge stays on the item even when you have none in your bags. Hovering the badge says which state it is in.
+The badge on an item icon shows which of the two it is. A green gift means it is shared right now; the same gift in gold with a closed ring means it is always shared, and that gold badge stays on the item even when you have none in your bags. A small amber padlock tag is added to either badge when the item has a share reserve. Hovering the badge says which state it is in and, when there is a reserve, how much is being kept back.
+
+`/ishare list` shows what is on offer right now: every share with something above its reserve, plus any standing offer that has a copy in your bags even if that copy was never marked by hand. A row that offers nothing is not listed at all, a row with a reserve says `keep N` beside its location, and right-clicking a row that only stands for a standing offer stops the offer.
 
 ### Share reserve: share only what you have above a number
 
@@ -33,7 +35,7 @@ If you want to keep some of a stack for yourself, give it a share reserve. The a
 /itemshare noreserve soul gem     share the whole stack again
 ```
 
-The name only has to be part of the item name, and it is refused if it matches more than one shared item. A share that is entirely inside its reserve stays marked at zero, so it comes back on its own when you acquire more - nothing has to be re-marked. Items with no reserve behave exactly as before, and an always-shared item ignores the reserve, because a standing offer means "whenever you have one".
+The name only has to be part of the item name, and it is refused if it matches more than one shared item. A share that is entirely inside its reserve stays marked at zero, so it comes back on its own when you acquire more - nothing has to be re-marked. Items with no reserve behave exactly as before. A reserve covers standing offers too: the list only shows one while you hold more than the reserve, and the offer comes back by itself once you do.
 
 Once Everything is as you want it, save the file by doing /ishare save or typing /reloadui
 
