@@ -10,6 +10,9 @@ local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 ItemShare.savedVars = nil
 
 local SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_share2.dds"
+-- The standing-offer variant of the same glyph: the dome closes into a ring, so
+-- "always shared" is readable at 16 px without needing a colour legend.
+local ALWAYS_SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_always.dds"
 local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
@@ -34,6 +37,7 @@ local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
+local IsItemLinkAlwaysShared
 local CanModifyGuildBankShare
 local SyncSharedItemsWithInventory
 local RebuildSharedItemsWithInventory
@@ -212,6 +216,10 @@ local function CreateShareListWindow()
 
     local wm = WINDOW_MANAGER
     local window = wm:CreateTopLevelWindow("ItemShareShareListWindow")
+    -- Registered before anything below can throw. A half-built window is still better
+    -- than a second CreateTopLevelWindow on the next call, which errors with "already
+    -- exists" and leaves the list unreachable until a reload.
+    ItemShare.ui.listWindow = window
     window:SetDimensions(720, 520)
     window:SetAnchor(CENTER, GuiRoot, CENTER, 0, 0)
     window:SetMovable(true)
@@ -352,7 +360,21 @@ local function CreateShareListWindow()
         ReloadUI()
     end)
 
-    local scroll = wm:CreateControlFromVirtual(nil, window, "ZO_ScrollContainer")
+    -- Named explicitly and reused if it is already there. An unnamed control created
+    -- from a virtual template takes the template's own name, so the moment anything
+    -- else in the client has a control called "Scroll", creating this one fails with
+    -- "Unable to create control [Scroll]. This control already exists" - which is the
+    -- intermittent error this replaces. Reusing also covers a previous attempt that
+    -- built the scroll and then threw before the window was finished.
+    local scrollName = "ItemShareShareListScroll"
+    local scroll = _G[scrollName]
+
+    if scroll then
+        scroll:SetParent(window)
+    else
+        scroll = wm:CreateControlFromVirtual(scrollName, window, "ZO_ScrollContainer")
+    end
+
     scroll:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 116)
     scroll:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -72)
     scroll:SetMouseEnabled(true)
@@ -485,6 +507,8 @@ local function GetOrCreateShareListRow(index)
     local function updateRowSharedVisuals()
         local isShared = row.entryKey and ItemShare.savedVars and ItemShare.savedVars.sharedItems and ItemShare.savedVars.sharedItems[row.entryKey] ~= nil
         row.isShared = isShared and true or false
+        statusIcon:SetTexture(IsItemLinkAlwaysShared(row.itemLink or (row.entryData and row.entryData.itemLink))
+            and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
         statusIcon:SetHidden(not row.isShared)
         RefreshRowAppearance()
     end
@@ -626,6 +650,13 @@ end
 
 RefreshShareListWindow = function()
     local window = CreateShareListWindow()
+
+    -- A window that exists but never finished being built has no scroll to put rows
+    -- in; returning here keeps one bad load from turning into an error every refresh.
+    if not ItemShare.ui.listContent then
+        return
+    end
+
     local entries = GetSortedSharedEntries()
     local rowHeight = 24
     local contentWidth = math.max((ItemShare.ui.listScroll and ItemShare.ui.listScroll:GetWidth()) or 660, 660)
@@ -1444,6 +1475,17 @@ local function FindSharedEntryKeyForBagSlot(bagId, slotIndex)
     return nil
 end
 
+-- An item can be in the share list and in the always-share list at the same time.
+-- The offer is keyed by item link (not by bag and slot), so it follows the item
+-- between bags and out of them entirely.
+IsItemLinkAlwaysShared = function(itemLink)
+    local alwaysShare = ItemShare.savedVars and ItemShare.savedVars.alwaysShare
+    if type(alwaysShare) ~= "table" then
+        return false
+    end
+    return alwaysShare[tostring(itemLink or "")] ~= nil
+end
+
 local function TryRefreshInventoryVisuals()
     if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
         return
@@ -1479,43 +1521,58 @@ local function GetBagAndSlotFromSlotData(control, slotData)
     return bagId, slotIndex
 end
 
+-- The badge sits on the item icon's own top-left corner rather than in the gap
+-- beside it. That gap is where the slot's level, stack count and lock live, and it
+-- is also where a second addon may already be drawing; the corner of the icon reads
+-- as part of the item instead of as a loose symbol next to it.
+local function AnchorShareMarker(marker, control)
+    local icon = control.GetNamedChild and control:GetNamedChild("Icon") or nil
+
+    marker:ClearAnchors()
+    marker:SetDimensions(14, 14)
+
+    if icon then
+        marker:SetAnchor(TOPLEFT, icon, TOPLEFT, -2, -2)
+        marker:SetDrawLayer(icon:GetDrawLayer())
+        marker:SetDrawTier(icon:GetDrawTier() + 1)
+    else
+        marker:SetAnchor(TOPLEFT, control, TOPLEFT, 2, 2)
+    end
+end
+
 local function EnsureShareMarker(control)
     if not control then
         return nil
     end
 
     if control.ItemShareMarker and control.ItemShareMarker.SetTexture then
+        -- Rows are recycled and the icon a row borrows can change, so the anchor is
+        -- re-applied rather than only set once at creation.
+        AnchorShareMarker(control.ItemShareMarker, control)
         return control.ItemShareMarker
     end
 
     local marker = WINDOW_MANAGER:CreateControl(nil, control, CT_TEXTURE)
-    marker:SetDrawLayer(DL_OVERLAY)
-    marker:SetDrawTier(DT_HIGH)
-    marker:SetDimensions(18, 18)
     marker:SetTexture(SHARE_TEXTURE_PATH)
     marker:SetHidden(true)
     marker:SetMouseEnabled(true)
 
+    -- The wording follows the texture: the same badge serves both states, so the
+    -- tooltip is decided when the marker is shown, not when it is built.
     marker:SetHandler("OnMouseEnter", function(self)
         InitializeTooltip(InformationTooltip, self, TOPLEFT, 0, 0)
-        SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        if self.ItemShareAlways then
+            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one, even when it is not in a bag.")
+        else
+            SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        end
     end)
 
     marker:SetHandler("OnMouseExit", function()
         ClearTooltip(InformationTooltip)
     end)
 
-    local icon = control.GetNamedChild and control:GetNamedChild("Icon") or nil
-    local nameLabel = control.GetNamedChild and control:GetNamedChild("Name") or nil
-
-    if icon then
-        marker:ClearAnchors()
-        marker:SetAnchor(RIGHT, icon, LEFT, -4, 0)
-        marker:SetDrawLayer(icon:GetDrawLayer())
-        marker:SetDrawTier(icon:GetDrawTier() + 1)
-    else
-        marker:SetAnchor(TOPLEFT, control, TOPLEFT, 2, 2)
-    end
+    AnchorShareMarker(marker, control)
 
     control.ItemShareMarker = marker
     return marker
@@ -1539,11 +1596,17 @@ local function UpdateSharedRowMarker(control, slotData)
 
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     local locationKey = select(1, GetBagLocationInfo(bagId))
-    if itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey) then
-        marker:SetHidden(false)
-    else
-        marker:SetHidden(true)
+    local isShared = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
+
+    if isShared then
+        -- Same glyph with a closed ring and a gold tint when the item is also a
+        -- standing offer, so the bag and the share list never disagree.
+        local isAlways = IsItemLinkAlwaysShared(itemLink)
+        marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
+        marker.ItemShareAlways = isAlways and true or false
     end
+
+    marker:SetHidden(not isShared)
 end
 
 local function HookInventoryRowCallbacks()
