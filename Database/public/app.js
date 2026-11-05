@@ -382,6 +382,84 @@ if (listRegion) {
     };
   })();
 
+  // A filter can hold several values, and what is switched on is shown as chips
+  // under the row, so the controls and the chips are built from one place.
+  function chosenValues(name) {
+    const values = [];
+
+    filterForm.querySelectorAll(`[data-filter][name="${name}"]`).forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked && field.value) {
+          values.push(field.value);
+        }
+        return;
+      }
+
+      const value = String(field.value || '').trim();
+
+      if (value) {
+        values.push(value);
+      }
+    });
+
+    return values;
+  }
+
+  function renderFilterChips() {
+    const row = filterForm.querySelector('[data-filter-chips]');
+
+    if (!row) {
+      return;
+    }
+
+    row.textContent = '';
+
+    ['type', 'owner'].forEach((name) => {
+      chosenValues(name).forEach((value) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'filter-chip';
+        chip.dataset.chipFilter = name;
+        chip.dataset.chipValue = value;
+        chip.title = `Remove the ${value} filter`;
+        chip.setAttribute('aria-label', `Remove the ${value} filter`);
+        chip.append(document.createTextNode(value));
+
+        const cross = document.createElement('span');
+        cross.setAttribute('aria-hidden', 'true');
+        cross.textContent = '\u00d7';
+        chip.appendChild(cross);
+        row.appendChild(chip);
+      });
+    });
+  }
+
+  // Each menu says how many of its values are on, so a closed menu still answers
+  // whether it is doing anything.
+  function renderFilterMenus() {
+    filterForm.querySelectorAll('[data-filter-menu]').forEach((menu) => {
+      const checked = Array.from(
+        menu.querySelectorAll('input[type="checkbox"][data-filter]')
+      ).filter((box) => box.checked);
+      const label = menu.querySelector('.filter-select-label');
+      const badge = menu.querySelector('.filter-count');
+      const allLabel = menu.dataset.allLabel || 'All';
+
+      if (label) {
+        label.textContent =
+          checked.length === 0
+            ? allLabel
+            : checked.length === 1
+              ? checked[0].value
+              : `${checked.length} chosen`;
+      }
+      if (badge) {
+        badge.textContent = String(checked.length);
+        badge.hidden = checked.length === 0;
+      }
+    });
+  }
+
   function applyFilters() {
     if (!filterForm) {
       return;
@@ -389,11 +467,8 @@ if (listRegion) {
 
     const params = new URLSearchParams();
 
-    filterForm.querySelectorAll('[data-filter]').forEach((field) => {
-      const value = String(field.value || '').trim();
-      if (value) {
-        params.set(field.name, value);
-      }
+    ['type', 'owner', 'added', 'q'].forEach((name) => {
+      chosenValues(name).forEach((value) => params.append(name, value));
     });
 
     if (sortState.field !== 'type') {
@@ -403,6 +478,9 @@ if (listRegion) {
         params.set('dir', 'desc');
       }
     }
+
+    renderFilterChips();
+    renderFilterMenus();
 
     const query = params.toString();
 
@@ -417,9 +495,18 @@ if (listRegion) {
     let searchTimer = null;
 
     filterForm.addEventListener('change', (event) => {
-      if (event.target.matches('[data-filter]')) {
-        applyFilters();
+      if (!event.target.matches('[data-filter]')) {
+        return;
       }
+
+      // Picking something in a menu closes it; the chip below shows the result.
+      const menu = event.target.closest('details');
+
+      if (menu && event.target.type === 'checkbox') {
+        menu.open = false;
+      }
+
+      applyFilters();
     });
 
     // Typing filters as it is typed, just slowly enough not to fetch on every key.
@@ -437,16 +524,56 @@ if (listRegion) {
       applyFilters();
     });
 
+    // A chip removes its own value and leaves the rest of the filters alone.
+    filterForm.addEventListener('click', (event) => {
+      const chip = event.target.closest ? event.target.closest('[data-chip-filter]') : null;
+
+      if (!chip) {
+        return;
+      }
+
+      event.preventDefault();
+      const name = chip.dataset.chipFilter;
+      const value = chip.dataset.chipValue;
+
+      filterForm.querySelectorAll(`[data-filter][name="${name}"]`).forEach((field) => {
+        if (field.type === 'checkbox' && field.value === value) {
+          field.checked = false;
+        } else if (field.tagName === 'SELECT' && field.value === value) {
+          field.value = '';
+        }
+      });
+
+      applyFilters();
+    });
+
     const clearButton = filterForm.querySelector('[data-clear-filters]');
 
     if (clearButton) {
       clearButton.addEventListener('click', () => {
         filterForm.querySelectorAll('[data-filter]').forEach((field) => {
-          field.value = '';
+          if (field.type === 'checkbox') {
+            field.checked = false;
+          } else {
+            field.value = '';
+          }
         });
         applyFilters();
       });
     }
+
+    // A click outside a menu closes it, so two open menus never sit over each other
+    // while the reader is trying to use the one underneath.
+    document.addEventListener('click', (event) => {
+      filterForm.querySelectorAll('details[open]').forEach((menu) => {
+        if (!menu.contains(event.target)) {
+          menu.open = false;
+        }
+      });
+    });
+
+    renderFilterChips();
+    renderFilterMenus();
   }
 
   // -------------------------------------------------------- keeping the place
@@ -579,9 +706,10 @@ if (listRegion) {
   refreshListsSoon = (delay = 0) => scheduleRefresh(delay);
 
   // ---------------------------------------------------------------- requests
-  // The button carries how many are still unspoken for, so the dialog cannot offer
-  // a number that is not there. One, the whole stack, or anything in between - the
-  // last two only when the owner has more than one.
+  // The button carries how many this person may end up holding, their own basket
+  // included, so the dialog can offer the rest of a stack that is partly theirs
+  // already. One, everything they can hold, or any number in between - the last two
+  // only when more than one is possible.
   let dialog = null;
   const knownClosed = new Set();
   let requestsPrimed = false;
@@ -609,8 +737,11 @@ if (listRegion) {
 
   function openRequestDialog(button) {
     const kind = button.dataset.kind === 'offer' ? 'offer' : 'inventory';
+    // max is what this person may end up holding in total, which includes anything
+    // already in their basket; stack is how many copies exist at all.
     const max = Math.max(1, Number(button.dataset.max) || 1);
     const stack = Math.max(max, Number(button.dataset.stack) || max);
+    const held = Math.max(0, Number(button.dataset.held) || 0);
     const name = button.dataset.name || 'that item';
     const choices = kind === 'inventory' && max > 1;
 
@@ -624,15 +755,19 @@ if (listRegion) {
         <p class="muted">${
           kind === 'offer'
             ? 'This is a standing offer, so it means one copy.'
-            : `${max} still unspoken for${stack > max ? ` of ${stack}` : ''}.`
+            : `${max} you can hold${stack > max ? ` of the ${stack} shared` : ''}${
+                held > 0
+                  ? `, ${held} of them already in your basket - asking for more tops up that row rather than adding another one`
+                  : ''
+              }.`
         }</p>
         <form class="request-form" data-request-form>
           ${
             choices
               ? `<label class="request-option"><input type="radio" name="how" value="one" checked> Just one</label>
-                 <label class="request-option"><input type="radio" name="how" value="stack"> The whole stack (${max})</label>
+                 <label class="request-option"><input type="radio" name="how" value="stack"> All you can hold (${max})</label>
                  <label class="request-option"><input type="radio" name="how" value="number">
-                   <input class="request-number" type="number" name="quantity" min="1" max="${max}" value="${max}" aria-label="How many"> of them
+                   <input class="request-number" type="number" name="quantity" min="1" max="${max}" value="${max}" aria-label="How many in total"> in total
                  </label>`
               : '<label class="request-option"><input type="radio" name="how" value="one" checked> One</label>'
           }
@@ -705,8 +840,16 @@ if (listRegion) {
         throw new Error(result.error || `That request failed with status ${response.status}`);
       }
 
+      // Asking again for something already in the basket tops that row up, so the
+      // number that stuck is the one to report, not the one that was picked.
+      const asked = Number(result.quantity) || quantity;
+
       showToast(
-        quantity > 1 ? `Asked for ${quantity} of ${name}.` : `Asked for ${name}.`,
+        result.combined
+          ? `Your basket now holds ${asked} of ${name}.`
+          : asked > 1
+            ? `Asked for ${asked} of ${name}.`
+            : `Asked for ${name}.`,
         'ok'
       );
       refreshAfterChange();
@@ -1032,20 +1175,25 @@ window.addEventListener('beforeunload', (event) => {
 
 // ------------------------------------------------------- removed basket rows
 // Taking something out of the basket leaves the row where it was, marked cancelled,
-// for half a minute, so the removal is visible instead of the row just vanishing.
+// for five seconds, so the removal is visible instead of the row just vanishing.
 // Then it fades and the rows under it close the gap on their own, because they are
 // table rows rather than absolutely placed boxes.
 //
 // Only basket rows do this. A sent request stays in the history for good - that list
 // is the record of what was asked for, newest first.
-const CLOSED_ROW_LINGER_MS = 30000;
-const CLOSED_ROW_FADE_MS = 600;
+const CLOSED_ROW_LINGER_MS = 5000;
+// Long enough to read as a fade rather than a blink: the row dims and then goes.
+const CLOSED_ROW_FADE_MS = 1200;
 const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
 
 // Dismissals outlive a reload. Otherwise a refresh rebuilds the table, the request
-// this browser has already seen out comes back, and its minute starts again.
+// this browser has already seen out comes back, and its few seconds start again.
 const removedRequestRows = new Set(readDismissedRows());
-const closingRequestRows = new Set();
+// The deadline belongs to the request, not to the element: a live refresh replaces
+// the row while the clock is still running, and the new element has to inherit the
+// same deadline rather than start a new one (or be skipped because the old element
+// already had its timer).
+const closingRequestRows = new Map();
 
 function readDismissedRows() {
   try {
@@ -1077,6 +1225,8 @@ function sweepClosedRequestRows() {
     return;
   }
 
+  const now = Date.now();
+
   region.querySelectorAll('[data-basket-row]').forEach((row) => {
     const status = row.dataset.status;
     const id = row.dataset.requestId;
@@ -1086,27 +1236,27 @@ function sweepClosedRequestRows() {
     }
 
     // A live refresh rebuilds this table from the database, so a row this browser has
-    // already seen out must not come back and sit here for another minute.
+    // already seen out must not come back and sit here again.
     if (removedRequestRows.has(id)) {
       row.remove();
       return;
     }
 
-    if (closingRequestRows.has(id)) {
+    let deadline = closingRequestRows.get(id);
+
+    if (!deadline) {
+      deadline = now + CLOSED_ROW_LINGER_MS;
+      closingRequestRows.set(id, deadline);
+    }
+
+    if (now < deadline || row.classList.contains('row-fading')) {
       return;
     }
 
-    closingRequestRows.add(id);
-
-    window.setTimeout(() => {
-      if (!row.isConnected) {
-        return;
-      }
-
-      rememberDismissedRow(id);
-      row.classList.add('row-fading');
-      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
-    }, CLOSED_ROW_LINGER_MS);
+    closingRequestRows.delete(id);
+    rememberDismissedRow(id);
+    row.classList.add('row-fading');
+    window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
   });
 }
 
@@ -1115,12 +1265,66 @@ const rowRegion = document.getElementById('itemLists');
 if (rowRegion) {
   // The table is replaced wholesale on a live update, so new rows are picked up from
   // the mutation instead of from one pass at load.
-  new MutationObserver(() => sweepClosedRequestRows()).observe(rowRegion, {
+  new MutationObserver(() => {
+    sweepClosedRequestRows();
+    sweepExhaustedRows();
+  }).observe(rowRegion, {
     childList: true,
     subtree: true,
   });
 
   sweepClosedRequestRows();
+
+  // Timers armed against an element are lost when a live update replaces it, so the
+  // row is checked on a short tick instead: the deadline lives under the request id
+  // and whichever element is on screen when it passes gets faded and dropped.
+  window.setInterval(sweepClosedRequestRows, 500);
+}
+
+// ------------------------------------------------------------ rows that ran out
+// A row whose every copy was asked for and sent has nothing left to offer. It stays
+// just long enough to be seen going, then fades and the rows under it close up. The
+// server keeps sending it for the same few seconds and then stops (EXHAUSTED_ROW_
+// LINGER_MS in lib/store.js), so a refresh cannot bring it back.
+const exhaustedRowKeys = new Set();
+
+function sweepExhaustedRows() {
+  const region = document.getElementById('itemLists');
+
+  if (!region) {
+    return;
+  }
+
+  region.querySelectorAll('[data-exhausted]').forEach((row) => {
+    const key = row.dataset.itemKey || '';
+
+    if (!key) {
+      return;
+    }
+
+    // A refresh in the last seconds of the fade rebuilds the row; the one this page
+    // has already seen out must not come back for another turn.
+    if (exhaustedRowKeys.has(key)) {
+      row.remove();
+      return;
+    }
+
+    exhaustedRowKeys.add(key);
+    const wait = Math.max(0, Number(row.dataset.exhausted) || 5000);
+
+    window.setTimeout(() => {
+      if (!row.isConnected) {
+        return;
+      }
+
+      row.classList.add('row-fading');
+      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
+    }, wait);
+  });
+}
+
+if (rowRegion) {
+  sweepExhaustedRows();
 }
 
 // ------------------------------------------------------------- ESO accounts
@@ -1242,6 +1446,66 @@ function placeTipCard() {
   tipCard.style.top = `${Math.round(top)}px`;
 }
 
+// ESO item text carries the game's own colour codes: |cRRGGBB switches colour and
+// |r returns to it, and |H...|h wraps a link nobody can follow from a card. They are
+// read here, after escaping, so a number arrives as a coloured number rather than
+// as "|cffffff10|r". Codes too dark for the card's panel are lifted towards white.
+function esoColour(hex) {
+  const value = parseInt(hex, 16);
+  const channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  const luminance =
+    (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]) / 255;
+
+  if (luminance >= 0.3) {
+    return `#${hex}`;
+  }
+
+  return `#${channels
+    .map((channel) =>
+      Math.round(channel + (255 - channel) * 0.7)
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`;
+}
+
+function esoMarkup(text) {
+  const escaped = String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  let open = 0;
+
+  const coloured = escaped.replace(/\|c([0-9a-fA-F]{6})/g, (match, hex) => {
+    open += 1;
+    return `<span style="color:${esoColour(hex)}">`;
+  });
+
+  const closed = coloured.replace(/\|r/g, () => {
+    if (open <= 0) {
+      return '';
+    }
+
+    open -= 1;
+    return '</span>';
+  });
+
+  return (
+    closed
+      // |H1:item:123|hLabel|h: keep the label and drop the link around it.
+      .replace(/\|H[^|]*\|h/g, '')
+      .replace(/\|h/g, '')
+      // Whatever else starts with a pipe is a code the game understands, not text.
+      .replace(/\|[A-Za-z]/g, '') + '</span>'.repeat(Math.max(0, open))
+  );
+}
+
+function tipText(tag, className, value) {
+  const element = tipElement(tag, className);
+  element.innerHTML = esoMarkup(value);
+  return element;
+}
+
 function renderTipCard(trigger, detail) {
   tipCard.textContent = '';
 
@@ -1263,10 +1527,10 @@ function renderTipCard(trigger, detail) {
     tipCard.appendChild(tipElement('div', 'item-tip-meta', meta));
   }
   if (detail && detail.description) {
-    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.description));
+    tipCard.appendChild(tipText('p', 'item-tip-text', detail.description));
   }
   if (detail && detail.traitDesc) {
-    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.traitDesc));
+    tipCard.appendChild(tipText('p', 'item-tip-text', detail.traitDesc));
   }
 
   if (detail && detail.set && detail.set.name) {
@@ -1277,7 +1541,7 @@ function renderTipCard(trigger, detail) {
     if (Array.isArray(detail.set.bonuses) && detail.set.bonuses.length > 0) {
       const list = document.createElement('ul');
 
-      detail.set.bonuses.forEach((bonus) => list.appendChild(tipElement('li', '', bonus)));
+      detail.set.bonuses.forEach((bonus) => list.appendChild(tipText('li', '', bonus)));
       block.appendChild(list);
     }
 

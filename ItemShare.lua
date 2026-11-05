@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.2"
+local ADDON_VERSION = "1.8.5"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -35,6 +35,7 @@ local dmsg
 local RemoveItemFromShareByKey
 local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
+local IsSavedEntryEligibleForShare
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
 local IsItemLinkAlwaysShared
@@ -547,6 +548,14 @@ local function GetOrCreateShareListRow(index)
             row.isShared = false
             updateRowSharedVisuals()
         elseif row.entryData then
+            -- Re-adding from the list window is still a marking: an item that has
+            -- become bound since it was filed must not slip back in this way.
+            local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
+            if not isEligible then
+                dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
+                return
+            end
+
             local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
             if savedEntry then
                 row.entryData = savedEntry
@@ -579,7 +588,11 @@ local function GetOrCreateShareListRow(index)
     statusIcon:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
         InitializeTooltip(InformationTooltip, self, TOPLEFT, 0, 0)
-        SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        if row.itemLink and IsItemLinkAlwaysShared(row.itemLink) then
+            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one, in a bag or not.")
+        else
+            SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        end
     end)
 
     statusIcon:SetHandler("OnMouseExit", function()
@@ -1439,6 +1452,29 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     }
 end
 
+-- The item link carries the item's own bound state, which still answers when the
+-- slot cannot: a guild bank tab that is not open, a house bank the client has not
+-- loaded, a saved row whose bag was reorganised. It is a second opinion behind
+-- IsItemBound, never a replacement for it.
+local function IsItemLinkBound(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" or type(GetItemLinkBoundStatus) ~= "function" then
+        return false
+    end
+
+    local status = GetItemLinkBoundStatus(link)
+    if status == nil then
+        return false
+    end
+
+    -- The named constant is preferred so a client that renumbers the enum is still
+    -- read correctly; every version defines BOUND_STATUS_UNBOUND as 0.
+    if BOUND_STATUS_UNBOUND ~= nil then
+        return status ~= BOUND_STATUS_UNBOUND
+    end
+    return tonumber(status) ~= 0
+end
+
 local function IsItemEligibleForShare(bagId, slotIndex)
     if bagId == nil or slotIndex == nil then
         return false, "Invalid inventory slot."
@@ -1446,9 +1482,39 @@ local function IsItemEligibleForShare(bagId, slotIndex)
     if IsItemBound(bagId, slotIndex) then
         return false, "Item is already bound."
     end
+    if IsItemLinkBound(GetNormalizedItemLink(bagId, slotIndex)) then
+        return false, "Item is already bound."
+    end
     if IsItemBoPAndTradeable(bagId, slotIndex) then
         return false, "Item is restricted to temporary group sharing."
     end
+    return true, nil
+end
+
+-- A row in the share list keeps the bag and slot it was filed from, but that slot
+-- may hold something else by now. The slot check only counts when it still holds
+-- this item; otherwise the link's own bound state is the honest answer.
+IsSavedEntryEligibleForShare = function(entry)
+    if not entry then
+        return false, "No item data."
+    end
+
+    local itemLink = tostring(entry.itemLink or "")
+    if itemLink == "" then
+        return false, "No item link."
+    end
+
+    local bagId = tonumber(entry.bagId)
+    local slotIndex = tonumber(entry.slotIndex)
+
+    if bagId and slotIndex and GetNormalizedItemLink(bagId, slotIndex) == itemLink then
+        return IsItemEligibleForShare(bagId, slotIndex)
+    end
+
+    if IsItemLinkBound(itemLink) then
+        return false, "Item is already bound."
+    end
+
     return true, nil
 end
 
@@ -1644,16 +1710,19 @@ local function UpdateSharedRowMarker(control, slotData)
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     local locationKey = select(1, GetBagLocationInfo(bagId))
     local isShared = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
+    -- A standing offer deserves its badge even when no copy is in a bag right now:
+    -- that is what the offer means. It used to show nothing at all in that state,
+    -- which made the gold icon look as if it did not exist.
+    local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
 
-    if isShared then
-        -- Same glyph with a closed ring and a gold tint when the item is also a
-        -- standing offer, so the bag and the share list never disagree.
-        local isAlways = IsItemLinkAlwaysShared(itemLink)
+    if isShared or isAlways then
+        -- Same glyph with a closed ring and a gold tint for a standing offer, so the
+        -- bag and the share list never disagree.
         marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
         marker.ItemShareAlways = isAlways and true or false
     end
 
-    marker:SetHidden(not isShared)
+    marker:SetHidden(not (isShared or isAlways))
 end
 
 local function HookInventoryRowCallbacks()
@@ -1741,6 +1810,12 @@ end
 
 SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     if not itemData or not itemData.itemKey then
+        return nil
+    end
+
+    -- Every path that files an item ends here, so the rule lives here as well: a
+    -- bound item is not offerable, whichever way it was reached.
+    if IsItemLinkBound(itemData.itemLink) then
         return nil
     end
 
@@ -1871,6 +1946,10 @@ end
 
 local function SaveAlwaysShareEntry(itemData)
     if not itemData or not itemData.itemLink or itemData.itemLink == "" then
+        return nil
+    end
+
+    if IsItemLinkBound(itemData.itemLink) then
         return nil
     end
 
