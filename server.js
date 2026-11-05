@@ -63,6 +63,7 @@ const PROVIDERS = {
         username: profile.global_name || profile.username || String(profile.id),
         email: typeof profile.email === 'string' ? profile.email : '',
         emailVerified: profile.verified === true,
+        avatarUrl: discordAvatarUrl(profile),
       };
     },
   },
@@ -81,6 +82,7 @@ const PROVIDERS = {
         username: profile.name || profile.email || String(profile.sub),
         email: typeof profile.email === 'string' ? profile.email : '',
         emailVerified: profile.email_verified === true,
+        avatarUrl: googleAvatarUrl(profile),
       };
     },
   },
@@ -353,6 +355,9 @@ app.get('/auth/:provider/callback', async (req, res) => {
       username: identity.username,
       email: identity.email,
       emailVerified: identity.emailVerified,
+      // Discarded by the store if it is not https, so whatever is left is safe to
+      // put in an img src.
+      avatarUrl: signedIn.avatarUrl || identity.avatarUrl || '',
     };
     req.session.accountNames = null;
 

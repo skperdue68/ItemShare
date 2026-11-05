@@ -172,8 +172,13 @@ redeploy no longer signs everyone out while their cookie still says otherwise, a
 the cookie lasts `SESSION_TTL_DAYS` (default 30) with `rolling` renewal, so a person
 who visits now and then never sees a login screen.
 
-The only way out is the avatar menu in the header: it shows two initials, opens a
-small panel with the name and provider, and holds **Log out**. That posts to
+The avatar shows the picture from the sign-in provider when there is one: Google's
+`picture` claim, or Discord's avatar hash turned into a CDN URL (animated avatars
+keep their GIF form). Only https URLs are stored, and if a picture stops loading the
+initials underneath show instead, so the header never depends on a third party.
+
+The only way out is the avatar menu in the header: it opens a panel with the name and
+provider and holds **Log out**. That posts to
 `/logout`, which deletes the session row and clears the cookie. Without JavaScript
 the form still submits.
 
