@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.3"
+local ADDON_VERSION = "1.10.4"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -167,10 +167,65 @@ local function GetShareListEntries()
     local entries = {}
     local linksListed = {}
 
+    -- Asked at most once per refresh, and only when a number has to come from the
+    -- bags, so an ordinary refresh stays as cheap as it was.
+    local inventoryIndex = nil
+    local function GetListInventoryIndex()
+        if inventoryIndex == nil then
+            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
+        end
+        return inventoryIndex or nil
+    end
+
+    -- One row per item, not one row per stack. A share is filed by the stack it was
+    -- marked from, so two stacks of 20 of the same thing were two rows saying 20
+    -- each when what is actually available is 40. The stacks are folded together
+    -- here, and the count comes from every stack of that link the bags report.
+    local sharesByLink = {}
+    local shareOrder = {}
+
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        local count = GetEntryOfferedCount(entry)
         local link = tostring(entry.itemLink or "")
+        local groupKey = link ~= "" and link or tostring(itemKey)
+
+        local group = sharesByLink[groupKey]
+        if not group then
+            group = {
+                itemKey = itemKey,
+                entry = entry,
+                itemLink = link,
+                stacksHeld = 0,
+                locations = {},
+                locationTexts = {},
+            }
+            sharesByLink[groupKey] = group
+            shareOrder[#shareOrder + 1] = groupKey
+        end
+
+        group.stacksHeld = group.stacksHeld + GetEntryHeldCount(entry)
+
+        local from = tostring(entry.sharedFrom or "")
+        if from ~= "" and not group.locations[from] then
+            group.locations[from] = true
+            group.locationTexts[#group.locationTexts + 1] = from
+        end
+    end
+
+    table.sort(shareOrder)
+
+    for _, groupKey in ipairs(shareOrder) do
+        local group = sharesByLink[groupKey]
+        local entry = group.entry
+        local link = group.itemLink
         local reserve = link ~= "" and GetShareReserve(link) or 0
+
+        -- What the bags hold across every stack beats the one stack the share was
+        -- filed from: marking one of three stacks of 20 means 60 available, not 20,
+        -- and the count column is what people read before asking for something.
+        local index = link ~= "" and GetListInventoryIndex() or nil
+        local indexHeld = (index and math.max(0, tonumber(index.countsByLink[link] or 0) or 0)) or 0
+        local held = indexHeld > 0 and indexHeld or group.stacksHeld
+        local count = ShareableCount(link, held)
 
         -- A share that is entirely inside its reserve is still a share: it stays in
         -- the window with nothing on offer, so the reserve can be seen and changed
@@ -180,27 +235,27 @@ local function GetShareListEntries()
             for k, v in pairs(entry) do
                 copy[k] = v
             end
-            copy.itemKey = itemKey
+
+            copy.itemKey = group.itemKey
             copy.itemLink = link
             copy.count = count
             copy.reserve = reserve
-            copy.heldCount = GetEntryHeldCount(entry)
+            copy.heldCount = held
+            copy.stackCount = #group.locationTexts
+
+            -- Every place the stacks are: "Backpack + Bank" rather than whichever
+            -- one happened to be marked first.
+            if #group.locationTexts > 0 then
+                table.sort(group.locationTexts)
+                copy.sharedFrom = table.concat(group.locationTexts, " + ")
+            end
+
             entries[#entries + 1] = copy
 
             if link ~= "" then
                 linksListed[link] = true
             end
         end
-    end
-
-    -- Asked at most once, and only when something is missing from the list, so an
-    -- ordinary refresh stays as cheap as it was.
-    local inventoryIndex = nil
-    local function GetListInventoryIndex()
-        if inventoryIndex == nil then
-            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
-        end
-        return inventoryIndex or nil
     end
 
     local alwaysShare = ItemShare.savedVars.alwaysShare
