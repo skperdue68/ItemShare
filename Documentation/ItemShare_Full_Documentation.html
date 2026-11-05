@@ -319,7 +319,15 @@
             <tr><td><code>/ishare reserves</code></td><td>List everything that has a reserve</td></tr>
             <tr><td><code>/ishare noreserve soul gem</code></td><td>Share the whole stack again</td></tr>
         </table>
-        <p>The same reserve is on the item's right-click menu: <strong>Share Reserve</strong> opens a number box with the item already chosen, refuses anything that is not a whole number of at least 1, and offers <strong>Clear Reserve</strong> once something is kept back. The name only has to be part of the item name, and it is refused if it matches more than one shared item. A reserve covers standing offers too: the offer only shows while you hold more than the reserve.</p>
+        <h3>Setting a reserve from the item's right-click menu</h3>
+        <p>You never have to type the command. Right-click the item and choose <strong>Share Reserve</strong>:</p>
+        <ol>
+            <li>The <strong>Share Reserve</strong> window opens with the item already named, above the prompt <em>"Keep how many back? They are not offered while you hold this many or fewer."</em></li>
+            <li>Type the number in the box, then click <strong>Keep This Many</strong>. The addon reports what is now shared, for example <em>keeping 12 back, so 8 of 20 held are shared</em>.</li>
+            <li>Anything that is not a whole number of at least 1 is refused in red with "Enter a whole number of 1 or more." and the box keeps focus, so the reserve is never saved as something invalid.</li>
+        </ol>
+        <p>The window also carries a <strong>Clear Reserve</strong> button, which drops the reserve and shares everything held; Escape or the close button leaves the item as it was. Once a number is set, the item's menu changes to <strong>Share Reserve: Keep N Back...</strong> to change it and <strong>Clear Share Reserve</strong> to remove it without opening the window at all.</p>
+        <p>The menu entry shows up wherever the item's right-click menu does - your inventory, the bank, house storage and the furnishing vault - and the reserve belongs to the item rather than to one copy, so it stays with the item when that copy leaves your bags. The slash command is simply another way in: the name only has to be part of the item name, and it is refused if it matches more than one shared item. A reserve covers standing offers too: the offer only shows while you hold more than the reserve.</p>
     </section>
 
     <section class="card">
