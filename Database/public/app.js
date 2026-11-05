@@ -808,3 +808,251 @@ if (listRegion) {
     });
   }
 }
+
+// ------------------------------------------------------- unsent request basket
+// A request holds its item before it is sent, so the clock matters twice: the person
+// needs to see how long they have left, and walking away would strand a reservation
+// nobody knows about. Both live here.
+
+function basketHeldItems() {
+  const basket = document.querySelector('[data-basket]');
+  return basket ? Number(basket.dataset.items) || 0 : 0;
+}
+
+// The server sends the seconds left as it renders the page; from then on this counts
+// down against the clock, so the number moves without one request per second. A live
+// refresh replaces the element, which restarts it from whatever the server now says.
+function tickCountdown() {
+  const basket = document.querySelector('[data-basket]');
+  const label = basket ? basket.querySelector('[data-countdown]') : null;
+
+  if (!basket || !label) {
+    return;
+  }
+
+  if (!basket.dataset.deadline) {
+    basket.dataset.deadline = String(Date.now() + (Number(basket.dataset.seconds) || 0) * 1000);
+  }
+
+  const remaining = Math.max(0, Math.round((Number(basket.dataset.deadline) - Date.now()) / 1000));
+  const minutes = Math.floor(remaining / 60);
+
+  label.textContent = `${minutes}:${String(remaining % 60).padStart(2, '0')}`;
+  label.classList.toggle('countdown-urgent', remaining <= 30);
+
+  // Zero is when the server has already let the items go; saying so is better than
+  // leaving a basket on screen that can no longer be sent.
+  if (remaining === 0 && !basket.dataset.lapsed) {
+    basket.dataset.lapsed = '1';
+    showToast('The time to send those requests ran out, so the items went back to being available.', 'err');
+    refreshAfterChange();
+  }
+}
+
+window.setInterval(tickCountdown, 1000);
+tickCountdown();
+
+async function sendBasket(button) {
+  button.disabled = true;
+
+  try {
+    const response = await fetch('/requests/submit', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Those requests could not be sent.');
+    }
+
+    showToast(
+      result.sent === 1 ? 'Request sent.' : `${result.sent} requests sent.`,
+      'ok'
+    );
+    refreshAfterChange();
+  } catch (error) {
+    showToast(error.message, 'err');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const submit = event.target.closest ? event.target.closest('[data-submit-requests]') : null;
+
+  if (submit) {
+    event.preventDefault();
+    sendBasket(submit);
+  }
+});
+
+// ------------------------------------------------------------ leaving the page
+// The browser's own beforeunload dialog cannot be styled, so the prompt here is a
+// real one and beforeunload is only the last resort for a closed tab or a form post.
+let leavePrompt = null;
+
+function closeLeavePrompt() {
+  if (leavePrompt) {
+    leavePrompt.remove();
+    leavePrompt = null;
+  }
+
+  document.removeEventListener('keydown', onLeavePromptKey);
+}
+
+function onLeavePromptKey(event) {
+  if (event.key === 'Escape') {
+    closeLeavePrompt();
+  }
+}
+
+function openLeavePrompt(href) {
+  const held = basketHeldItems();
+
+  closeLeavePrompt();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="leaveTitle">
+      <h2 id="leaveTitle">You have unsubmitted item requests</h2>
+      <p class="muted" data-leave-sentence></p>
+      <p class="muted">
+        They are held for a few more minutes. If you leave without sending them, the items
+        go back to being available to everyone else - which is what will happen anyway when
+        the clock runs out.
+      </p>
+      <div class="leave-actions">
+        <button class="filter-clear" type="button" data-stay>Stay on this page</button>
+        <button class="primary-button" type="button" data-leave-anyway>Leave anyway</button>
+      </div>
+    </div>`;
+
+  // Written as text rather than markup: it is a count, but the habit is worth keeping.
+  backdrop.querySelector('[data-leave-sentence]').textContent =
+    held === 1 ? '1 item is waiting to be sent.' : `${held} items are waiting to be sent.`;
+
+  document.body.appendChild(backdrop);
+  leavePrompt = backdrop;
+  document.addEventListener('keydown', onLeavePromptKey);
+
+  backdrop.addEventListener('click', (event) => {
+    if (event.target === backdrop || (event.target.closest && event.target.closest('[data-stay]'))) {
+      closeLeavePrompt();
+      return;
+    }
+
+    if (event.target.closest && event.target.closest('[data-leave-anyway]')) {
+      closeLeavePrompt();
+      window.location.assign(href);
+    }
+  });
+
+  const stay = backdrop.querySelector('[data-stay]');
+
+  if (stay) {
+    stay.focus();
+  }
+}
+
+document.addEventListener('click', (event) => {
+  if (event.defaultPrevented || event.button !== 0) {
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    return;
+  }
+  if (basketHeldItems() === 0) {
+    return;
+  }
+
+  const link = event.target.closest ? event.target.closest('a[href]') : null;
+
+  if (!link || link.target === '_blank' || link.hasAttribute('download')) {
+    return;
+  }
+
+  const href = link.getAttribute('href') || '';
+
+  if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+    return;
+  }
+
+  event.preventDefault();
+  openLeavePrompt(href);
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (basketHeldItems() === 0) {
+    return undefined;
+  }
+
+  event.preventDefault();
+  event.returnValue = 'You have unsubmitted item requests.';
+  return event.returnValue;
+});
+
+// ------------------------------------------------------------- ESO accounts
+// Which accounts are linked is reference material: it lives behind the profile menu,
+// in the modal the page already rendered, rather than above the item list.
+const accountsModal = document.getElementById('accountsModal');
+
+function closeAccountsModal() {
+  if (!accountsModal || accountsModal.hidden) {
+    return;
+  }
+
+  accountsModal.hidden = true;
+
+  const opener = document.querySelector('[data-open-accounts]');
+
+  if (opener) {
+    opener.focus();
+  }
+}
+
+function openAccountsModal() {
+  if (!accountsModal) {
+    return;
+  }
+
+  accountsModal.hidden = false;
+
+  const close = accountsModal.querySelector('[data-close-accounts]');
+
+  if (close) {
+    close.focus();
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const closest = event.target.closest ? event.target.closest.bind(event.target) : () => null;
+
+  if (!accountsModal) {
+    return;
+  }
+
+  if (closest('[data-open-accounts]')) {
+    event.preventDefault();
+    openAccountsModal();
+    return;
+  }
+
+  if (closest('[data-close-accounts]')) {
+    event.preventDefault();
+    closeAccountsModal();
+    return;
+  }
+
+  // The backdrop is the modal's own parent, so a click on it is a click outside.
+  if (!accountsModal.hidden && event.target === accountsModal) {
+    closeAccountsModal();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && accountsModal && !accountsModal.hidden) {
+    closeAccountsModal();
+  }
+});
