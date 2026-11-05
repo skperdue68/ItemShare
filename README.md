@@ -1,5 +1,9 @@
 Requires LibCustomMenu
 
+The upload site that turns your saved file into a shareable list is a separate
+project: https://github.com/skperdue68/ItemShare-Web. Nothing in this repository
+needs it; the addon only writes ItemShareSavedVars.lua.
+
 Download and extract to your ESO AddOns Directory
 Ensure Add on is loaded at startup
 
