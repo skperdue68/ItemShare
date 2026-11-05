@@ -579,9 +579,10 @@ if (listRegion) {
   refreshListsSoon = (delay = 0) => scheduleRefresh(delay);
 
   // ---------------------------------------------------------------- requests
-  // The button carries how many are still unspoken for, so the dialog cannot offer
-  // a number that is not there. One, the whole stack, or anything in between - the
-  // last two only when the owner has more than one.
+  // The button carries how many this person may end up holding, their own basket
+  // included, so the dialog can offer the rest of a stack that is partly theirs
+  // already. One, everything they can hold, or any number in between - the last two
+  // only when more than one is possible.
   let dialog = null;
   const knownClosed = new Set();
   let requestsPrimed = false;
@@ -609,8 +610,11 @@ if (listRegion) {
 
   function openRequestDialog(button) {
     const kind = button.dataset.kind === 'offer' ? 'offer' : 'inventory';
+    // max is what this person may end up holding in total, which includes anything
+    // already in their basket; stack is how many copies exist at all.
     const max = Math.max(1, Number(button.dataset.max) || 1);
     const stack = Math.max(max, Number(button.dataset.stack) || max);
+    const held = Math.max(0, Number(button.dataset.held) || 0);
     const name = button.dataset.name || 'that item';
     const choices = kind === 'inventory' && max > 1;
 
@@ -624,15 +628,19 @@ if (listRegion) {
         <p class="muted">${
           kind === 'offer'
             ? 'This is a standing offer, so it means one copy.'
-            : `${max} still unspoken for${stack > max ? ` of ${stack}` : ''}.`
+            : `${max} you can hold${stack > max ? ` of the ${stack} shared` : ''}${
+                held > 0
+                  ? `, ${held} of them already in your basket - asking for more tops up that row rather than adding another one`
+                  : ''
+              }.`
         }</p>
         <form class="request-form" data-request-form>
           ${
             choices
               ? `<label class="request-option"><input type="radio" name="how" value="one" checked> Just one</label>
-                 <label class="request-option"><input type="radio" name="how" value="stack"> The whole stack (${max})</label>
+                 <label class="request-option"><input type="radio" name="how" value="stack"> All you can hold (${max})</label>
                  <label class="request-option"><input type="radio" name="how" value="number">
-                   <input class="request-number" type="number" name="quantity" min="1" max="${max}" value="${max}" aria-label="How many"> of them
+                   <input class="request-number" type="number" name="quantity" min="1" max="${max}" value="${max}" aria-label="How many in total"> in total
                  </label>`
               : '<label class="request-option"><input type="radio" name="how" value="one" checked> One</label>'
           }
@@ -705,8 +713,16 @@ if (listRegion) {
         throw new Error(result.error || `That request failed with status ${response.status}`);
       }
 
+      // Asking again for something already in the basket tops that row up, so the
+      // number that stuck is the one to report, not the one that was picked.
+      const asked = Number(result.quantity) || quantity;
+
       showToast(
-        quantity > 1 ? `Asked for ${quantity} of ${name}.` : `Asked for ${name}.`,
+        result.combined
+          ? `Your basket now holds ${asked} of ${name}.`
+          : asked > 1
+            ? `Asked for ${asked} of ${name}.`
+            : `Asked for ${name}.`,
         'ok'
       );
       refreshAfterChange();
@@ -1043,9 +1059,13 @@ const CLOSED_ROW_FADE_MS = 600;
 const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
 
 // Dismissals outlive a reload. Otherwise a refresh rebuilds the table, the request
-// this browser has already seen out comes back, and its minute starts again.
+// this browser has already seen out comes back, and its few seconds start again.
 const removedRequestRows = new Set(readDismissedRows());
-const closingRequestRows = new Set();
+// The deadline belongs to the request, not to the element: a live refresh replaces
+// the row while the clock is still running, and the new element has to inherit the
+// same deadline rather than start a new one (or be skipped because the old element
+// already had its timer).
+const closingRequestRows = new Map();
 
 function readDismissedRows() {
   try {
@@ -1077,6 +1097,8 @@ function sweepClosedRequestRows() {
     return;
   }
 
+  const now = Date.now();
+
   region.querySelectorAll('[data-basket-row]').forEach((row) => {
     const status = row.dataset.status;
     const id = row.dataset.requestId;
@@ -1086,27 +1108,27 @@ function sweepClosedRequestRows() {
     }
 
     // A live refresh rebuilds this table from the database, so a row this browser has
-    // already seen out must not come back and sit here for another minute.
+    // already seen out must not come back and sit here again.
     if (removedRequestRows.has(id)) {
       row.remove();
       return;
     }
 
-    if (closingRequestRows.has(id)) {
+    let deadline = closingRequestRows.get(id);
+
+    if (!deadline) {
+      deadline = now + CLOSED_ROW_LINGER_MS;
+      closingRequestRows.set(id, deadline);
+    }
+
+    if (now < deadline || row.classList.contains('row-fading')) {
       return;
     }
 
-    closingRequestRows.add(id);
-
-    window.setTimeout(() => {
-      if (!row.isConnected) {
-        return;
-      }
-
-      rememberDismissedRow(id);
-      row.classList.add('row-fading');
-      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
-    }, CLOSED_ROW_LINGER_MS);
+    closingRequestRows.delete(id);
+    rememberDismissedRow(id);
+    row.classList.add('row-fading');
+    window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
   });
 }
 
@@ -1124,6 +1146,11 @@ if (rowRegion) {
   });
 
   sweepClosedRequestRows();
+
+  // Timers armed against an element are lost when a live update replaces it, so the
+  // row is checked on a short tick instead: the deadline lives under the request id
+  // and whichever element is on screen when it passes gets faded and dropped.
+  window.setInterval(sweepClosedRequestRows, 500);
 }
 
 // ------------------------------------------------------------ rows that ran out

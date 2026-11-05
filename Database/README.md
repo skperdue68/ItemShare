@@ -296,9 +296,12 @@ is readable without a guild overlap, so an account in no guilds sees nothing.
 ## Asking for something
 
 Every row in *Request* has a **Request** button. It opens a small dialog offering one,
-the whole stack, or any number in between. The largest number offered is what is
-still unspoken for rather than the raw `item_count`, so two people can never be
-promised the same five. A standing offer has no count behind it, so it always means one copy, and it can
+everything you can hold, or any number in between. The largest number offered is what
+you may end up holding, which is the copies nobody has claimed plus whatever you have
+already put in your own basket, and never more than the raw `item_count` - so two
+people can never be promised the same five, and asking again for a stack you already
+took part of still works. A number picked there is the total you want to hold, so the
+same item stays one row in the basket. A standing offer has no count behind it, so it always means one copy, and it can
 only be asked for while the owner has one in a bag right now. When they do not, the
 row says *Not in a bag right now* instead of offering a button that cannot be
 honoured, and the server refuses the same request either way.
@@ -329,7 +332,14 @@ picked rather than from the moment it is sent:
 - Each item in the basket can be removed before sending, which also restarts the
   clock for the rest. A removed row stays where it was, marked **Cancelled**, for
   about five seconds, then fades out and the rows below it close up. It is not added
-  to the history, because it was never sent.
+  to the history, because it was never sent. The five seconds belong to the request,
+  not to the row on screen, so a live update that rebuilds the table cannot restart
+  them or lose them.
+- **Asking again for the same item tops the row up.** Taking 2 of a stack of 5 and
+  then asking for the whole stack leaves one basket row holding 5, not two rows
+  holding 7: the number in the dialog is the total you want to hold, and the request
+  button offers that total (your own basket included) rather than only what is
+  unclaimed.
 - A row that runs out - every copy asked for and sent - also stays for about five
   seconds before fading away, then the request list stops showing it. A row that is
   only being picked stays visible with *being picked* beside it, because a basket can
