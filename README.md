@@ -8,10 +8,27 @@ You can use commands
 
 /ishare or /itemshare to control functionality
 
-/ishare list - shows you the list of items that are set to being shared.  You may remove or re-add items that are in this list from this panel
-/ishare reset - Clears all items from your shared list
-/ishare save - Does a reloadUI which forces the Shared list to be written to disk so you can import it to the spreadsheet
-/ishare sync - Checks your shared list against items you still have, items you no longer have are removed from the shared list. Always-shared items are left alone, because a standing offer is meant to outlive the copy.
+/ishare list - opens or closes the shared items window. Right-click a row there to remove or re-add a share.
+/ishare reset (or clear) - clears every share and every standing offer.
+/ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy.
+/ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
+/ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
+/ishare debug - turns the addon's own status messages on or off.
+/ishare sheet [url] - shows or sets the spreadsheet link; /ishare sheet clear removes it.
+/ishare sharelink - puts the spreadsheet link into chat so it can be clicked.
+/ishare guilds - lists the guilds captured for the current character.
+/ishare always - lists the items you always offer, whether or not a copy is in your bags.
+/ishare noalways <part of the name> - stops always sharing one item.
+/ishare reserve <amount> <part of the name> - keeps that many back and offers the rest.
+/ishare noreserve <part of the name> - shares the whole stack again.
+/ishare reserves - lists every item with a reserve, and what it is offering.
+/ishare stamp - gives guild data to shares written before 1.6.0 so they appear on the site.
+/ishare guildbank - toggles sharing from the guild bank.
+
+The window and the item menus cover the same ground without typing:
+
+- Right-click an item in a bag, the bank, house storage or the furnishing vault: **Add to Share**, **Remove from Shared List**, **Always Share This Item**, **Stop Always Sharing**, **Keep Some Back (Share Reserve)...** (asks for a number of at least 1) and, when a reserve is set, **Share Reserve: Keep N Back...** and **Clear Share Reserve**.
+- In `/ishare list`, right-click a row to stop sharing it, or to stop the standing offer a row stands for.
 
 You may add items to the shared list from Inventory, House Storage, Your Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
 

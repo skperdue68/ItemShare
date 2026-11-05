@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.8"
+local ADDON_VERSION = "1.9.0"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -57,6 +57,10 @@ local GetAlwaysShareTable
 local GetAlwaysShareKey
 local BuildActualInventoryIndex
 local TryRefreshInventoryVisuals
+-- The reserve prompt and the one place a reserve is written to everything that
+-- records it. Both are assigned further down, once the tables and the panel exist.
+local OpenShareReserveDialog
+local ApplyShareReserve
 
 -- Which of the four badges belongs on an item: standing offer or plain share, with
 -- an amber tag on either when a reserve is set on it.
@@ -142,16 +146,24 @@ local function GetShareListEntries()
 
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
         local count = math.max(0, tonumber(entry.count or 0) or 0)
-        if count > 0 then
+        local link = tostring(entry.itemLink or "")
+        local reserve = link ~= "" and GetShareReserve(link) or 0
+
+        -- A share that is entirely inside its reserve is still a share: it stays in
+        -- the window with nothing on offer, so the reserve can be seen and changed
+        -- instead of the item quietly vanishing until more are picked up.
+        if count > 0 or reserve > 0 then
             local copy = {}
             for k, v in pairs(entry) do
                 copy[k] = v
             end
             copy.itemKey = itemKey
+            copy.itemLink = link
             copy.count = count
+            copy.reserve = reserve
+            copy.heldCount = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
             entries[#entries + 1] = copy
 
-            local link = tostring(entry.itemLink or "")
             if link ~= "" then
                 linksListed[link] = true
             end
@@ -176,7 +188,10 @@ local function GetShareListEntries()
                 local held = math.max(0, tonumber(index.countsByLink[link] or 0) or 0)
                 local offered = ShareableCount(link, held)
 
-                if link ~= "" and offered > 0 then
+                -- A standing offer is a promise, so it stays in the window even when
+                -- there is nothing in a bag to hand over at this moment: the row says
+                -- where it would come from and the badge says the offer still stands.
+                if link ~= "" then
                     local location = index.locationsByLink and index.locationsByLink[link] or nil
                     entries[#entries + 1] = {
                         itemKey = link,
@@ -608,10 +623,15 @@ local function GetOrCreateShareListRow(index)
 
     local function updateRowSharedVisuals()
         local isShared = row.entryKey and ItemShare.savedVars and ItemShare.savedVars.sharedItems and ItemShare.savedVars.sharedItems[row.entryKey] ~= nil
-        row.isShared = isShared and true or false
-        statusIcon:SetTexture(IsItemLinkAlwaysShared(row.itemLink or (row.entryData and row.entryData.itemLink))
-            and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
-        statusIcon:SetHidden(not row.isShared)
+        local link = row.itemLink or (row.entryData and row.entryData.itemLink) or ""
+        local isAlways = link ~= "" and IsItemLinkAlwaysShared(link)
+
+        -- A standing offer has no share entry to find, so "shared" has to include it,
+        -- and the badge has to come from the same function the rest of the addon uses:
+        -- picking a texture here by hand lost the amber reserve tag after a toggle.
+        row.isShared = (isShared or isAlways) and true or false
+        statusIcon:SetTexture(GetShareBadgeTexture(link, isAlways))
+        statusIcon:SetHidden(not (isShared or isAlways))
         RefreshRowAppearance()
     end
 
@@ -830,7 +850,10 @@ RefreshShareListWindow = function()
         local locationText = tostring(entry.sharedFrom or "-")
         local reserve = tonumber(entry.reserve or 0) or 0
         if reserve > 0 then
-            locationText = string.format("%s - keep %d", locationText, reserve)
+            local held = math.max(0, tonumber(entry.heldCount or 0) or 0)
+            locationText = held > 0
+                and string.format("%s - keep %d of %d", locationText, reserve, held)
+                or string.format("%s - keep %d", locationText, reserve)
         end
         row.locationLabel:SetText(locationText)
         row.isShared = true
@@ -2292,6 +2315,9 @@ local function SaveAlwaysShareEntry(itemData)
     entry.esoDetails = itemData.esoDetails or {}
     entry.firstAddedAt = entry.firstAddedAt or now
     entry.lastUpdatedAt = now
+    -- The site is told why a standing offer has nothing to hand over, without being
+    -- told a count it could offer: the offer itself never carries one.
+    entry.reserve = GetShareReserve(itemData.itemLink)
 
     alwaysShare[key] = entry
     return entry
@@ -2450,6 +2476,29 @@ local function AddInventoryContextMenu(slot)
     elseif isEligible then
         AddCustomMenuItem("Always Share This Item", function()
             AddAlwaysShareFromBagSlot(bagId, slotIndex)
+        end, MENU_ADD_OPTION_LABEL)
+    end
+
+    -- The reserve belongs to the item, not to this copy, so it is offered wherever the
+    -- item can be shared from and stays visible when the copy leaves the bag.
+    local reserve = GetShareReserve(itemLink)
+    if reserve > 0 then
+        AddCustomMenuItem(string.format("Share Reserve: Keep %d Back...", reserve), function()
+            if OpenShareReserveDialog then
+                OpenShareReserveDialog(bagId, slotIndex)
+            end
+        end, MENU_ADD_OPTION_LABEL)
+        AddCustomMenuItem("Clear Share Reserve", function()
+            if ApplyShareReserve then
+                ApplyShareReserve(itemLink, 0)
+                d(string.format("[ItemShare] Share reserve cleared for %s.", tostring(itemName)))
+            end
+        end, MENU_ADD_OPTION_LABEL)
+    else
+        AddCustomMenuItem("Keep Some Back (Share Reserve)...", function()
+            if OpenShareReserveDialog then
+                OpenShareReserveDialog(bagId, slotIndex)
+            end
         end, MENU_ADD_OPTION_LABEL)
     end
 end
@@ -3010,6 +3059,275 @@ local function SetShareReserveByName(searchText, amount)
     end
 end
 
+-- Sets the reserve for one item and keeps every place that records it in step: the
+-- share entry and the count it implies, the standing offer, the bag badges and the
+-- share list. Everything that changes a reserve comes through here, so a number typed
+-- into the box and a number typed after the slash command cannot disagree.
+ApplyShareReserve = function(itemLink, amount)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return nil
+    end
+
+    local keep = math.max(0, math.floor(tonumber(amount) or 0))
+    SetShareReserve(link, keep)
+
+    local updated = nil
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        if tostring(entry.itemLink or "") == link then
+            local held = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
+            entry.heldCount = held
+            entry.reserve = keep
+            entry.count = ShareableCount(link, held)
+            updated = entry
+        end
+    end
+
+    local alwaysShare = ItemShare.savedVars.alwaysShare
+    if type(alwaysShare) == "table" then
+        for _, entry in pairs(alwaysShare) do
+            if type(entry) == "table" and tostring(entry.itemLink or "") == link then
+                entry.reserve = keep
+                updated = updated or entry
+            end
+        end
+    end
+
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
+    return updated
+end
+
+-- The reserve prompt. A reserve is a number the player has in mind rather than one of
+-- a few fixed choices, so this is a number box with the item already chosen and a
+-- clear button that appears only when there is something to clear. Anything that is
+-- not a whole number of at least one is refused: zero is "no reserve" and has its own
+-- button.
+local reserveDialog = nil
+
+local function CloseReserveDialog()
+    if reserveDialog and reserveDialog.window then
+        reserveDialog.window:SetHidden(true)
+    end
+end
+
+local function BuildReserveDialog()
+    if reserveDialog then
+        return reserveDialog.broken and nil or reserveDialog
+    end
+
+    local wm = WINDOW_MANAGER
+    local window = wm:CreateTopLevelWindow("ItemShareReserveWindow")
+    -- Remembered before anything below can throw, so a half-built window is never
+    -- created a second time under the same name.
+    reserveDialog = { window = window }
+    window:SetDimensions(380, 196)
+    window:SetAnchor(CENTER, GuiRoot, CENTER, 0, 0)
+    window:SetMouseEnabled(true)
+    window:SetClampedToScreen(true)
+    window:SetMovable(true)
+    window:SetHidden(true)
+
+    local backdrop = wm:CreateControl(nil, window, CT_BACKDROP)
+    backdrop:SetAnchorFill(window)
+    backdrop:SetCenterColor(0.05, 0.05, 0.05, 0.97)
+    backdrop:SetEdgeColor(0.7, 0.7, 0.7, 1)
+    backdrop:SetEdgeTexture(nil, 1, 1, 2, 0)
+
+    local title = wm:CreateControl(nil, window, CT_LABEL)
+    title:SetFont("ZoFontWinH2")
+    title:SetColor(1, 1, 1, 1)
+    title:SetText("Share Reserve")
+    title:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 12)
+
+    local closeButton = wm:CreateControl(nil, window, CT_BUTTON)
+    closeButton:SetDimensions(28, 28)
+    closeButton:SetAnchor(TOPRIGHT, window, TOPRIGHT, -6, 6)
+    closeButton:SetNormalTexture("/esoui/art/buttons/decline_up.dds")
+    closeButton:SetPressedTexture("/esoui/art/buttons/decline_down.dds")
+    closeButton:SetMouseOverTexture("/esoui/art/buttons/decline_over.dds")
+    closeButton:SetHandler("OnClicked", CloseReserveDialog)
+
+    local itemLabel = wm:CreateControl(nil, window, CT_LABEL)
+    itemLabel:SetFont("ZoFontGame")
+    itemLabel:SetColor(1, 1, 1, 1)
+    itemLabel:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 42)
+    itemLabel:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 42)
+    itemLabel:SetHeight(20)
+    itemLabel:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
+    if itemLabel.SetMaxLineCount then
+        itemLabel:SetMaxLineCount(1)
+    end
+
+    local prompt = wm:CreateControl(nil, window, CT_LABEL)
+    prompt:SetFont("ZoFontGameSmall")
+    prompt:SetColor(0.85, 0.85, 0.85, 1)
+    prompt:SetText("Keep how many back? They are not offered while you hold this many or fewer.")
+    prompt:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 64)
+    prompt:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 64)
+    prompt:SetHeight(30)
+    prompt:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
+
+    local editBox = nil
+    if wm.CreateControlFromVirtual then
+        local built, control = pcall(function()
+            return wm:CreateControlFromVirtual("ItemShareReserveEdit", window, "ZO_DefaultEditForBackdrop")
+        end)
+        if built then
+            editBox = control
+        end
+    end
+
+    if not editBox then
+        -- No number box means nothing to type an answer into: leave the slash command
+        -- as the way in rather than opening a window that cannot work.
+        reserveDialog = { window = window, broken = true }
+        window:SetHidden(true)
+        return nil
+    end
+
+    editBox:SetDimensions(110, 26)
+    editBox:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 100)
+    if editBox.SetMaxChars then
+        editBox:SetMaxChars(6)
+    end
+
+    local status = wm:CreateControl(nil, window, CT_LABEL)
+    status:SetFont("ZoFontGameSmall")
+    status:SetColor(0.85, 0.85, 0.85, 1)
+    status:SetAnchor(TOPLEFT, window, TOPLEFT, 138, 104)
+    status:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 104)
+    status:SetHeight(20)
+
+    local keepButton = wm:CreateControl(nil, window, CT_BUTTON)
+    keepButton:SetDimensions(130, 28)
+    keepButton:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, 14)
+    keepButton:SetFont("ZoFontGameSmall")
+    keepButton:SetText("Keep This Many")
+    keepButton:SetNormalTexture("/esoui/art/buttons/accept_up.dds")
+    keepButton:SetPressedTexture("/esoui/art/buttons/accept_down.dds")
+    keepButton:SetMouseOverTexture("/esoui/art/buttons/accept_over.dds")
+    keepButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
+
+    local clearButton = wm:CreateControl(nil, window, CT_BUTTON)
+    clearButton:SetDimensions(120, 28)
+    clearButton:SetAnchor(BOTTOM, window, BOTTOM, 0, 14)
+    clearButton:SetFont("ZoFontGameSmall")
+    clearButton:SetText("Clear Reserve")
+    clearButton:SetNormalTexture("/esoui/art/buttons/decline_up.dds")
+    clearButton:SetPressedTexture("/esoui/art/buttons/decline_down.dds")
+    clearButton:SetMouseOverTexture("/esoui/art/buttons/decline_over.dds")
+    clearButton:SetClickSound(SOUNDS.DIALOG_DECLINE)
+
+    local cancelButton = wm:CreateControl(nil, window, CT_BUTTON)
+    cancelButton:SetDimensions(90, 28)
+    cancelButton:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, 14)
+    cancelButton:SetFont("ZoFontGameSmall")
+    cancelButton:SetText("Cancel")
+    cancelButton:SetNormalTexture("/esoui/art/buttons/normal_up.dds")
+    cancelButton:SetPressedTexture("/esoui/art/buttons/normal_down.dds")
+    cancelButton:SetMouseOverTexture("/esoui/art/buttons/normal_over.dds")
+    cancelButton:SetHandler("OnClicked", CloseReserveDialog)
+
+    keepButton:SetHandler("OnClicked", function()
+        local pending = reserveDialog and reserveDialog.pending
+        if not pending then
+            return
+        end
+
+        local typed = zo_strtrim(tostring(editBox:GetText() or ""))
+        local amount = tonumber(typed)
+
+        if not amount or amount < 1 or amount ~= math.floor(amount) then
+            status:SetColor(1, 0.45, 0.45, 1)
+            status:SetText("Enter a whole number of 1 or more.")
+            editBox:TakeFocus()
+            return
+        end
+
+        local entry = ApplyShareReserve(pending.itemLink, amount)
+        local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
+        local offered = math.max(0, tonumber(entry and entry.count or 0) or 0)
+
+        if held > 0 then
+            d(string.format(
+                "[ItemShare] %s: keeping %d back, so %d of %d held are shared.",
+                tostring(pending.itemName),
+                amount,
+                offered,
+                held
+            ))
+        else
+            d(string.format(
+                "[ItemShare] %s: keeping %d back. Nothing is offered until you hold more.",
+                tostring(pending.itemName),
+                amount
+            ))
+        end
+
+        window:SetHidden(true)
+    end)
+
+    clearButton:SetHandler("OnClicked", function()
+        local pending = reserveDialog and reserveDialog.pending
+        if not pending then
+            return
+        end
+
+        local entry = ApplyShareReserve(pending.itemLink, 0)
+        local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
+        d(string.format(
+            "[ItemShare] %s: reserve cleared, so everything held is shared (%d).",
+            tostring(pending.itemName),
+            held
+        ))
+        window:SetHidden(true)
+    end)
+
+    window:SetHandler("OnKeyUp", function(_, key)
+        if KEY_ESCAPE and key == KEY_ESCAPE then
+            CloseReserveDialog()
+        end
+    end)
+
+    reserveDialog.itemLabel = itemLabel
+    reserveDialog.editBox = editBox
+    reserveDialog.status = status
+    reserveDialog.clearButton = clearButton
+    return reserveDialog
+end
+
+OpenShareReserveDialog = function(bagId, slotIndex)
+    local itemLink = GetNormalizedItemLink(bagId, slotIndex)
+    local itemName = GetNormalizedItemName(bagId, slotIndex) or itemLink
+
+    if not itemLink then
+        return
+    end
+
+    local dialog = BuildReserveDialog()
+
+    if not dialog then
+        d(string.format(
+            "[ItemShare] The reserve box is unavailable in this client. Use /itemshare reserve <amount> %s.",
+            tostring(itemName)
+        ))
+        return
+    end
+
+    local reserve = GetShareReserve(itemLink)
+    dialog.pending = { itemLink = itemLink, itemName = itemName }
+    dialog.itemLabel:SetText(tostring(itemName))
+    dialog.editBox:SetText(reserve > 0 and tostring(reserve) or "")
+    dialog.clearButton:SetHidden(reserve <= 0)
+    dialog.status:SetColor(0.85, 0.85, 0.85, 1)
+    dialog.status:SetText(
+        reserve > 0 and string.format("Keeping %d back now.", reserve) or "Nothing is kept back yet."
+    )
+    dialog.window:SetHidden(false)
+    dialog.editBox:TakeFocus()
+end
+
 local function PrintShareReserves()
     local entries = {}
 
@@ -3061,6 +3379,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("Right-click an item - Keep Some Back (Share Reserve)... asks for a number")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
@@ -3170,6 +3489,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("Right-click an item - Keep Some Back (Share Reserve)... asks for a number")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end

@@ -48,6 +48,8 @@ const ITEM_COLUMNS = [
   'location_key',
   'location_label',
   'item_count',
+  'held_quantity',
+  'reserve_quantity',
   'first_dumped_at',
   'last_dumped_at',
   'upload_id',
@@ -102,6 +104,8 @@ function itemValues(item, uploadId) {
     item.locationKey,
     item.locationLabel,
     item.itemCount,
+    item.heldQuantity || 0,
+    item.reserveQuantity || 0,
     item.firstDumpedAt,
     item.lastDumpedAt,
     uploadId,
@@ -148,6 +152,8 @@ const ALWAYS_COLUMNS = [
   'flavor_text',
   'eso_data',
   'furniture_data_id',
+  'held_quantity',
+  'reserve_quantity',
   'first_added_at',
   'last_updated_at',
   'upload_id',
@@ -191,6 +197,8 @@ function alwaysShareValues(entry, uploadId) {
     entry.flavorText || null,
     entry.esoData || null,
     entry.furnitureDataId || 0,
+    entry.heldQuantity || 0,
+    entry.reserveQuantity || 0,
     entry.firstAddedAt || 0,
     entry.lastUpdatedAt || 0,
     uploadId,
@@ -1102,6 +1110,8 @@ export async function getSharedItemsForViewer(
             i.item_key_hash,
             i.icon_key,
             i.item_count,
+            i.held_quantity,
+            i.reserve_quantity,
             i.quality,
             i.quality_name,
             i.item_type_name,
@@ -1124,7 +1134,8 @@ export async function getSharedItemsForViewer(
             GROUP_CONCAT(DISTINCT g.guild_name ORDER BY g.guild_name SEPARATOR ', ') AS guild_names
        ${visibleItemsFrom(names)}
        ${where}
-      GROUP BY i.id, i.item_name, i.item_id, i.item_key_hash, i.icon_key, i.item_count, i.quality,
+      GROUP BY i.id, i.item_name, i.item_id, i.item_key_hash, i.icon_key, i.item_count,
+               i.held_quantity, i.reserve_quantity, i.quality,
                i.quality_name, i.item_type_name, i.trait, i.set_name, i.enchant_name,
                i.style_name, i.required_level, i.required_cp, i.armor_type, i.weapon_type,
                i.apparel_slot, i.equip_type, i.location_label, i.last_dumped_at, i.first_seen_at,
@@ -1191,6 +1202,8 @@ export async function getAlwaysShareForViewer(
             a.item_type_name,
             a.trait,
             a.set_name,
+            a.held_quantity,
+            a.reserve_quantity,
             a.first_added_at,
             a.first_seen_at,
             a.account_name,
@@ -1205,8 +1218,8 @@ export async function getAlwaysShareForViewer(
        ${visibleAlwaysShareFrom(names)}
        ${where}
       GROUP BY a.id, a.item_name, a.item_id, a.item_key_hash, a.icon_key, a.quality, a.item_type_name,
-               a.trait, a.set_name, a.first_added_at, a.first_seen_at, a.account_name, a.character_name,
-               icon.icon_key
+               a.trait, a.set_name, a.held_quantity, a.reserve_quantity, a.first_added_at, a.first_seen_at,
+               a.account_name, a.character_name, icon.icon_key
       ORDER BY ${orderFor('a', sort, dir)}
       LIMIT ${safeLimit}`,
     params
