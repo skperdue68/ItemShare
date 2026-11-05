@@ -111,7 +111,7 @@
     <div class="box">
       <label for="savedVarFile">Saved variables file</label>
       <input id="savedVarFile" type="file" accept=".lua,.txt,text/plain">
-      <div class="muted">Suggested Windows location:</div>
+      <div class="muted">Typical location - Windows, then macOS/Linux:</div>
       <div id="expectedPath" class="path"></div>
       <div class="muted" style="margin-top: 8px;">
         Browsers do not allow a web page or Apps Script dialog to auto-select a file from your local
@@ -182,7 +182,14 @@
       }
 
       google.script.run.withSuccessHandler(function(config) {
-        document.getElementById('expectedPath').textContent = config.expectedWindowsPath;
+        var target = document.getElementById('expectedPath');
+        var paths = config.expectedPaths || [];
+        target.textContent = '';
+        paths.forEach(function(path) {
+          var line = document.createElement('div');
+          line.textContent = path;
+          target.appendChild(line);
+        });
       }).getUploaderConfig();
 
       function updateSheet() {
