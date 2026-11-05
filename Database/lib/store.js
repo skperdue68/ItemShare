@@ -874,7 +874,8 @@ async function attachRequestCounts(connection, rows, kind) {
             COALESCE(SUM(CASE WHEN ${holdingSql()} THEN quantity ELSE 0 END), 0) AS reserved,
             COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS request_count,
             COALESCE(SUM(CASE WHEN status = 'draft' AND expires_at > NOW() THEN 1 ELSE 0 END), 0)
-              AS draft_count
+              AS draft_count,
+            MAX(CASE WHEN status = 'pending' THEN submitted_at END) AS last_sent_at
        FROM itemshare_requests
       WHERE item_kind = ? AND status IN ('draft', 'pending')
         AND ${column} IN (${inClause(ids)})
@@ -889,9 +890,41 @@ async function attachRequestCounts(connection, rows, kind) {
     row.reserved = Number(count?.reserved || 0);
     row.request_count = Number(count?.request_count || 0);
     row.draft_count = Number(count?.draft_count || 0);
+    row.last_sent_at = count?.last_sent_at || null;
   }
 
   return rows;
+}
+
+/**
+ * How long a row that has just run out stays on screen. The page fades it over the
+ * same window, so the row goes rather than vanishing; app.js mirrors this number.
+ */
+export const EXHAUSTED_ROW_LINGER_MS = 5000;
+
+/**
+ * Drops rows that have nothing left to offer, after a last look.
+ *
+ * A row is finished when every copy is held by requests that were actually sent -
+ * not while somebody is still picking, because a draft hold can lapse and the copy
+ * come back. It is kept for a few seconds after the last send so the page can fade
+ * it and the rows beneath close the gap, then it stops being sent at all.
+ */
+export function dropExhaustedRows(rows, now = Date.now()) {
+  return (rows || []).filter((row) => {
+    const free = (Number(row.item_count) || 0) - (Number(row.reserved) || 0);
+
+    if (free > 0 || Number(row.draft_count) > 0) {
+      return true;
+    }
+
+    const lastSent = row.last_sent_at ? new Date(row.last_sent_at).getTime() : 0;
+    const remaining = lastSent ? EXHAUSTED_ROW_LINGER_MS - (now - lastSent) : 0;
+
+    row.exhausted = Math.max(0, Math.round(remaining));
+
+    return remaining > 0;
+  });
 }
 
 export async function getSharedItemsForViewer(
@@ -968,7 +1001,7 @@ export async function getSharedItemsForViewer(
     params
   );
 
-  return attachRequestCounts(connection, rows, 'inventory');
+  return dropExhaustedRows(await attachRequestCounts(connection, rows, 'inventory'));
 }
 
 /**
@@ -1507,7 +1540,7 @@ export async function getRequesterRequests(connection, userId) {
  * the same window, and the server stops returning it just after, so a refresh does
  * not bring it back.
  */
-export const BASKET_CANCEL_LINGER_SECONDS = 30;
+export const BASKET_CANCEL_LINGER_SECONDS = 5;
 
 /**
  * What is in the basket: everything held but unsent, plus anything removed from it

@@ -328,8 +328,12 @@ picked rather than from the moment it is sent:
   arithmetic is right even between two sweeps.
 - Each item in the basket can be removed before sending, which also restarts the
   clock for the rest. A removed row stays where it was, marked **Cancelled**, for
-  about half a minute, then fades out and the rows below it close up. It is not added
+  about five seconds, then fades out and the rows below it close up. It is not added
   to the history, because it was never sent.
+- A row that runs out - every copy asked for and sent - also stays for about five
+  seconds before fading away, then the request list stops showing it. A row that is
+  only being picked stays visible with *being picked* beside it, because a basket can
+  lapse and the copy come back.
 - After every upload the owner's requests are settled oldest first, because they were
   promised first. One whose item has gone, or whose turn the stack no longer reaches,
   is cancelled with a sentence the requester can read: "Ghost Bane now has 2 of
