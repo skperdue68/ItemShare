@@ -485,9 +485,28 @@ local function GetOrCreateShareListRow(index)
     statusIcon:SetTexture(SHARE_TEXTURE_PATH)
     statusIcon:SetMouseEnabled(true)
 
+    -- The standing offer gets its own icon beside the share glyph. An item can be
+    -- shared right now and marked to always share at the same time - they are two
+    -- separate promises - and a single icon can only say one of them.
+    local alwaysIcon = wm:CreateControl(nil, row, CT_TEXTURE)
+    alwaysIcon:SetAnchor(LEFT, row, LEFT, 22, 0)
+    alwaysIcon:SetDimensions(18, 18)
+    alwaysIcon:SetDrawLayer(DL_OVERLAY)
+    alwaysIcon:SetDrawTier(DT_HIGH)
+    alwaysIcon:SetTexture(ALWAYS_SHARE_TEXTURE_PATH)
+    alwaysIcon:SetHidden(true)
+    alwaysIcon:SetMouseEnabled(true)
+    alwaysIcon:SetHandler("OnMouseEnter", function(self)
+        InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
+        SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
+    end)
+    alwaysIcon:SetHandler("OnMouseExit", function()
+        ClearTooltip(InformationTooltip)
+    end)
+
     local itemLabel = wm:CreateControl(nil, row, CT_LABEL)
-    itemLabel:SetAnchor(TOPLEFT, row, TOPLEFT, 28, 0)
-    itemLabel:SetDimensions(334, 22)
+    itemLabel:SetAnchor(TOPLEFT, row, TOPLEFT, 48, 0)
+    itemLabel:SetDimensions(314, 22)
     itemLabel:SetFont("ZoFontGameSmall")
     itemLabel:SetColor(1, 1, 1, 1)
     itemLabel:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
@@ -551,11 +570,13 @@ local function GetOrCreateShareListRow(index)
             countLabel:SetColor(0.55, 0.55, 0.55, 1)
             locationLabel:SetColor(0.55, 0.55, 0.55, 1)
             statusIcon:SetAlpha(0.35)
+            alwaysIcon:SetAlpha(0.35)
         else
             itemLabel:SetColor(1, 1, 1, 1)
             countLabel:SetColor(1, 1, 1, 1)
             locationLabel:SetColor(1, 1, 1, 1)
             statusIcon:SetAlpha(1)
+            alwaysIcon:SetAlpha(1)
         end
     end
 
@@ -572,11 +593,22 @@ local function GetOrCreateShareListRow(index)
         -- rule the bags use, so removing a share here does not leave a stale badge.
         local reserve = link ~= "" and ((GetShareReserve and GetShareReserve(link)) or 0) or 0
         row.isReserveOnly = (not (isShared or isAlways)) and reserve > 0
-        row.isShared = (isShared or isAlways) and true or false
+        -- The share state is the share alone. Counting the standing offer as
+        -- "shared" made a row whose share had just been removed still look shared,
+        -- so the next right-click tried to remove a share that was already gone.
+        row.isShared = isShared and true or false
+        -- The ring moves to its own icon only when this row is also a share. On a row
+        -- that is nothing but a standing offer the ring is still the first badge, so
+        -- the two icons cannot show the same thing twice.
+        local alwaysSeparate = isAlways and isShared
         statusIcon:SetTexture(
-            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways)
+            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH
+                or GetShareBadgeTexture(link, isAlways and not alwaysSeparate)
         )
         statusIcon:SetHidden(not (isShared or isAlways or row.isReserveOnly))
+        if row.alwaysIcon then
+            row.alwaysIcon:SetHidden(not alwaysSeparate)
+        end
         RefreshRowAppearance()
     end
 
@@ -633,6 +665,15 @@ local function GetOrCreateShareListRow(index)
             row.entryData = currentEntry or row.entryData
             row.isShared = false
             updateRowSharedVisuals()
+
+            -- A standing offer is a separate promise: removing the share leaves it
+            -- alone. Saying so keeps the row from looking as if it lost both.
+            if row.itemLink and row.itemLink ~= "" and IsItemLinkAlwaysShared(row.itemLink) then
+                dmsg(string.format(
+                    "%s is still always shared. Stop that from the item's right-click menu.",
+                    tostring(currentEntry and currentEntry.itemName or row.itemLink)
+                ))
+            end
         elseif row.entryData then
             -- Re-adding from the list window is still a marking: an item that has
             -- become bound since it was filed must not slip back in this way.
@@ -770,6 +811,7 @@ local function GetOrCreateShareListRow(index)
     row.countLabel = countLabel
     row.locationLabel = locationLabel
     row.statusIcon = statusIcon
+    row.alwaysIcon = alwaysIcon
     row.rowBackdrop = rowBackdrop
     row.UpdateSharedVisuals = updateRowSharedVisuals
     row.RefreshAppearance = RefreshRowAppearance
@@ -828,11 +870,19 @@ RefreshShareListWindow = function()
         -- Rows are recycled, so the badge is set from the entry on every refresh.
         -- Leaving it to creation time meant a removed standing offer kept its gold
         -- icon in this window until the row happened to be reused for something else.
+        -- A row for a share that is also always offered says both: the share badge and
+        -- the ring beside it. A row that is only the offer keeps the ring as its first
+        -- badge and leaves the second icon empty, so nothing is drawn twice.
+        local rowIsAlways = IsItemLinkAlwaysShared(entry.itemLink) and true or false
+        local alwaysSeparate = rowIsAlways and not (entry.alwaysOnly and true or false)
         row.statusIcon:SetTexture(
             (entry.reserveOnly and RESERVE_ONLY_TEXTURE_PATH)
-                or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink))
+                or GetShareBadgeTexture(entry.itemLink, rowIsAlways and not alwaysSeparate)
         )
         row.statusIcon:SetHidden(false)
+        if row.alwaysIcon then
+            row.alwaysIcon:SetHidden(not alwaysSeparate)
+        end
         if row.RefreshAppearance then
             row:RefreshAppearance()
         end
@@ -1855,14 +1905,11 @@ local function EnsureShareMarker(control)
         -- puts the pointer back on it: hovering the left edge flashed nonstop.
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
 
+        -- The standing offer has its own badge and its own tooltip, so this one only
+        -- ever speaks for the share.
         local lines = {}
-        if self.ItemShareAlways then
-            lines[#lines + 1] = "|cFFD266Always shared|r"
-            lines[#lines + 1] = "You offer this whenever you have one."
-        else
-            lines[#lines + 1] = "|c00FF00Shared Item|r"
-            lines[#lines + 1] = "This item is available to others."
-        end
+        lines[#lines + 1] = "|c00FF00Shared Item|r"
+        lines[#lines + 1] = "This item is available to others."
 
         local reserve = tonumber(self.ItemShareReserve) or 0
         if reserve > 0 then
@@ -1973,6 +2020,64 @@ local function EnsureReserveMarker(control)
     return marker
 end
 
+-- The standing offer's own corner, opposite the share glyph. It is drawn for the
+-- offer alone, so adding or stopping the offer never has to touch the share badge
+-- and the two can be on the item at the same time.
+local function AnchorAlwaysMarker(marker, control)
+    local icon = FindItemIconControl(control)
+
+    marker:ClearAnchors()
+
+    local width = icon and icon.GetWidth and icon:GetWidth() or 0
+    local height = icon and icon.GetHeight and icon:GetHeight() or 0
+    local size = 20
+
+    if width > 0 and height > 0 then
+        size = math.max(18, math.min(26, math.floor(math.min(width, height) * 0.55)))
+    else
+        local controlHeight = (control.GetHeight and control:GetHeight()) or 0
+        size = controlHeight > 0 and math.max(16, math.min(26, math.floor(controlHeight * 0.5))) or 20
+    end
+
+    marker:SetDimensions(size, size)
+
+    if icon then
+        marker:SetAnchor(TOPRIGHT, icon, TOPRIGHT, 2, -2)
+        marker:SetDrawLayer(icon:GetDrawLayer())
+        marker:SetDrawTier(icon:GetDrawTier() + 1)
+    else
+        marker:SetAnchor(TOPRIGHT, control, TOPRIGHT, 0, 0)
+    end
+end
+
+local function EnsureAlwaysMarker(control)
+    if not control then
+        return nil
+    end
+
+    if control.ItemShareAlwaysMarker then
+        return control.ItemShareAlwaysMarker
+    end
+
+    local marker = WINDOW_MANAGER:CreateControl(nil, control, CT_TEXTURE)
+    marker:SetTexture(ALWAYS_SHARE_TEXTURE_PATH)
+    marker:SetHidden(true)
+    marker:SetMouseEnabled(true)
+
+    marker:SetHandler("OnMouseEnter", function(self)
+        InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
+        SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
+    end)
+
+    marker:SetHandler("OnMouseExit", function()
+        ClearTooltip(InformationTooltip)
+    end)
+
+    AnchorAlwaysMarker(marker, control)
+    control.ItemShareAlwaysMarker = marker
+    return marker
+end
+
 local function UpdateSharedRowMarker(control, slotData)
     if not control then
         return
@@ -2009,18 +2114,18 @@ local function UpdateSharedRowMarker(control, slotData)
     local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
     local reserve = (itemLink and GetShareReserve(itemLink)) or 0
 
-    if isShared or isAlways then
-        -- The plain glyph, saying only what the item offers. A reserve is a separate
-        -- fact and gets its own corner below, so a share that keeps some back shows
-        -- both instead of one badge having to mean two things.
-        marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
-        marker.ItemShareAlways = isAlways and true or false
-        marker.ItemShareReserve = reserve
-        marker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
-        marker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
-    end
+    -- One corner per fact, because an item can be several at once: shared right now,
+    -- always offered, and partly kept back. This badge is only ever the share.
+    marker:SetTexture(SHARE_TEXTURE_PATH)
+    marker.ItemShareReserve = reserve
+    marker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
+    marker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
+    marker:SetHidden(not isShared)
 
-    marker:SetHidden(not (isShared or isAlways))
+    local alwaysMarker = EnsureAlwaysMarker(control)
+    if alwaysMarker then
+        alwaysMarker:SetHidden(not isAlways)
+    end
 
     -- The reserve tag, bottom-left: a reserved share shows the parcel above and the
     -- amber tag below, and a reserve on an item that is not shared at all shows only
