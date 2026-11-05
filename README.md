@@ -239,9 +239,19 @@ account sends nothing.
 ## Making it look busy: simulated people
 
 `npm run simulate` (in `Database/`) drives three made-up people through the same store
-code the site uses, so a list with one real owner has traffic on it: they ask for items
-in *your* list, leave some in their baskets, cancel others, and re-save their files so
-items move between bags, the bank and the furnishing vault and stack counts change.
+code the site uses, so a list with one real owner has traffic on it. Every scenario the
+site can put a request through happens for real in the database, one at a time:
+
+- **asking** - something of yours goes into their basket, on the same five-minute clock
+- **sending** - the basket is committed, which is the moment a real person's send would
+  email you; the log says who *would* have been emailed instead of sending anything
+- **cancelling** - either a request that was already waiting, or one taken back out of
+  the basket before it was ever sent
+- **timing out** - the basket's clock is pushed past its deadline and the site's own
+  sweeper runs, so those reservations are released exactly as if they had lapsed
+- **re-saving** - items move between bags, the bank and the furnishing vault, stacks
+  change and pending requests are re-settled against the new file
+
 One action, a pause, another action: it keeps going until you stop it with Ctrl+C, and
 every action ends by asking the running site to announce what happened. The pause is
 10 seconds unless `--every` says otherwise.
@@ -251,7 +261,7 @@ npm run simulate                        until Ctrl+C, one action every 10s
 npm run simulate -- --every 4000        one action every four seconds
 npm run simulate -- --rounds 12         stop after twelve actions
 npm run simulate -- --once              exactly one action, then exit
-npm run simulate -- --only requests     just asking and cancelling
+npm run simulate -- --only requests     asking, sending, cancelling and timing out
 npm run simulate -- --only items        just re-saving files
 npm run simulate -- --reset             remove the simulated people and their data
 ```
@@ -265,6 +275,8 @@ Their activity appears in the log as a sentence rather than a revision number:
 
 ```
 Live: @DemoTrader asked @YourAccount for 2 x Soul Gem; @QuietSmith saved again: 2 items, now in Bank / Craft Bag - 1 open page told to refresh
+Live: @NightMarket sent 2 requests for Briarheart Greatsword, Dwemer Frame to @YourAccount - the owner would be emailed
+Live: @QuietSmith let the basket clock run out, so Alinor Bookshelf, Grand went back to being available
 Requests: 3 unsent requests timed out, so the items are free again
 ```
 
@@ -273,8 +285,10 @@ over the socket at that moment, each of which refetches its own list. It says no
 about how many people use the site - closing the page drops it to zero.
 
 Everything here is recorded server-side; the browser never decides how many are
-left. Handing an item over in game is not recorded yet, so nothing moves from
-*Waiting* to *Handed over* and nobody is emailed - see *Not done yet*.
+left. The simulator never sends mail - the email module is only reached from the
+site's own send route - so a simulated send changes the data and says in the log who
+would have been emailed. Handing an item over in game is not recorded yet, so nothing
+moves from *Waiting* to *Handed over* - see *Not done yet*.
 
 ## Item icons
 
@@ -298,9 +312,28 @@ pass may look up; `ICON_BACKFILL_INTERVAL_MS=0` turns the pass off. A pass looks
 only at ids that have no path anywhere, so an item UESP is still refusing simply
 stays queued for the next one.
 
-Item names also link to `esoitem.uesp.net/itemLink.php?itemid=…` when the id is
-known. That link is a convenience only: type, quality, trait and icon all come
-from the addon, not from UESP.
+## Hovering an item
+
+An item's name opens a card instead of sending the reader to another tab. The card
+starts with what the row already knows - name in its quality colour, type, trait,
+enchant, level and champion points - and then adds the game's own description and what
+the item's **set** does. That second half comes from UESP's public item database
+(`esoitem.uesp.net/exportJson.php`), fetched server-side by `/item-tip` and cached in
+`itemshare_item_tips` (migration 014) for a month, so a name is looked up once however
+often it is hovered and the browser never talks to UESP.
+
+The cache is an optimisation: with an empty table, no network, or UESP refusing the
+request, the card still shows everything the row carries and simply stops there. The
+set name is no longer printed under the item name - it lives in the card, with the
+bonus lines, instead. Clicking a name still opens the UESP page in a new tab, which is
+the place to go when the card is not enough.
+
+The card is placed beside the pointer rather than under it, flips to the other side
+near a window edge, opens on keyboard focus as well as hover, and ignores the pointer
+entirely so it can never steal the hover that opened it.
+
+Item type, quality, trait and icon all come from the addon, not from UESP; only the
+description and set bonuses are looked up.
 
 ## Staying signed in
 
@@ -483,7 +516,10 @@ handled by one process would otherwise never reach the sockets held by another.
 - **Uploads start on their own.** Dropping `ItemShareSavedVars.lua` on the upload
   card, or picking it with the file chooser, uploads it straight away. A toast says
   the file has been received and is being processed, then summarises what landed.
-- **Three tabs.** *Request* is what other people in your guilds are sharing,
+- **The line above the tabs** says how much there is to look at: *9 different items
+  shared by other members of your guilds*. It counts different items, not copies, so
+  a stack of thirty Soul Gems is still one item.
+- **Three tabs,** centred. *Request* is what other people in your guilds are sharing,
   *Offering* is your own items and your own standing offers, and *Your requests* is
   what you asked others for and what became of it. That split is why no row carries a
   "You" tag - which tab it is in already says whose it is.

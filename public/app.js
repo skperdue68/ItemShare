@@ -1186,3 +1186,228 @@ document.addEventListener('keydown', (event) => {
     closeAccountsModal();
   }
 });
+
+// -------------------------------------------------------------- item tooltips
+// A name says what the item is without leaving the page. The card starts with what
+// the row already knows (name, type, trait, level), then /item-tip adds the game's
+// description and what the item's set does - fetched from UESP once and cached
+// server-side, so hovering the same name again costs nothing.
+const tipCard = document.createElement('div');
+tipCard.className = 'item-tip-card';
+tipCard.hidden = true;
+document.body.appendChild(tipCard);
+
+const tipCache = new Map();
+let tipTrigger = null;
+let tipTicket = 0;
+let tipPoint = { x: 0, y: 0 };
+
+function tipElement(tag, className, text) {
+  const element = document.createElement(tag);
+
+  if (className) {
+    element.className = className;
+  }
+  if (text !== undefined) {
+    element.textContent = text;
+  }
+
+  return element;
+}
+
+// Beside the pointer, never under it: the name being read stays visible, and the
+// card flips to the other side near an edge rather than hanging off the window.
+function placeTipCard() {
+  if (tipCard.hidden) {
+    return;
+  }
+
+  const width = tipCard.offsetWidth;
+  const height = tipCard.offsetHeight;
+  const gap = 22;
+  let left = tipPoint.x + gap;
+  let top = tipPoint.y + 18;
+
+  if (left + width > window.innerWidth - 12) {
+    left = tipPoint.x - width - gap;
+  }
+  if (left < 12) {
+    left = 12;
+  }
+  if (top + height > window.innerHeight - 12) {
+    top = Math.max(12, tipPoint.y - height - 18);
+  }
+
+  tipCard.style.left = `${Math.round(left)}px`;
+  tipCard.style.top = `${Math.round(top)}px`;
+}
+
+function renderTipCard(trigger, detail) {
+  tipCard.textContent = '';
+
+  const head = tipElement('div', 'item-tip-head');
+  const name = tipElement('strong', 'item-tip-name', trigger.dataset.tipName || 'Item');
+
+  name.style.color = trigger.dataset.tipColor || '';
+  head.appendChild(name);
+
+  if (detail && detail.unique) {
+    head.appendChild(tipElement('span', 'item-tip-tag', 'Unique'));
+  }
+
+  tipCard.appendChild(head);
+
+  const meta = trigger.dataset.tipMeta || '';
+
+  if (meta) {
+    tipCard.appendChild(tipElement('div', 'item-tip-meta', meta));
+  }
+  if (detail && detail.description) {
+    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.description));
+  }
+  if (detail && detail.traitDesc) {
+    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.traitDesc));
+  }
+
+  if (detail && detail.set && detail.set.name) {
+    const block = tipElement('div', 'item-tip-set');
+
+    block.appendChild(tipElement('div', 'item-tip-set-name', detail.set.name));
+
+    if (Array.isArray(detail.set.bonuses) && detail.set.bonuses.length > 0) {
+      const list = document.createElement('ul');
+
+      detail.set.bonuses.forEach((bonus) => list.appendChild(tipElement('li', '', bonus)));
+      block.appendChild(list);
+    }
+
+    tipCard.appendChild(block);
+  }
+
+  if (detail && detail.fromUesp) {
+    tipCard.appendChild(tipElement('span', 'item-tip-source', 'Details from UESP'));
+  }
+
+  tipCard.hidden = false;
+  placeTipCard();
+}
+
+async function fillTipCard(trigger) {
+  const item = Number(trigger.dataset.tipItem) || 0;
+  const set = trigger.dataset.tipSet || '';
+
+  if (item <= 0 && !set) {
+    return;
+  }
+
+  const key = `${item}|${set.toLowerCase()}`;
+  const ticket = tipTicket;
+
+  if (tipCache.has(key)) {
+    renderTipCard(trigger, tipCache.get(key));
+    return;
+  }
+
+  const params = new URLSearchParams();
+
+  if (item > 0) {
+    params.set('item', String(item));
+  }
+  if (set) {
+    params.set('set', set);
+  }
+
+  try {
+    const response = await fetch(`/item-tip?${params.toString()}`, {
+      credentials: 'same-origin',
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const detail = await response.json();
+
+    if (!detail || detail.available === false) {
+      return;
+    }
+
+    tipCache.set(key, detail);
+
+    // Only write it into the card if the pointer is still on this name and this is
+    // still the newest lookup; a fast reader must not get a slow answer for the
+    // row above.
+    if (tipTrigger === trigger && ticket === tipTicket) {
+      renderTipCard(trigger, detail);
+    }
+  } catch (error) {
+    // The card keeps the details the page already carries.
+  }
+}
+
+function showTipCard(trigger, point) {
+  tipTrigger = trigger;
+  tipTicket += 1;
+  tipPoint = point;
+  renderTipCard(trigger, null);
+  fillTipCard(trigger);
+}
+
+function hideTipCard() {
+  tipTrigger = null;
+  tipTicket += 1;
+  tipCard.hidden = true;
+}
+
+document.addEventListener('mouseover', (event) => {
+  const trigger = event.target.closest ? event.target.closest('[data-item-tip]') : null;
+
+  if (!trigger) {
+    hideTipCard();
+    return;
+  }
+
+  if (trigger !== tipTrigger) {
+    showTipCard(trigger, { x: event.clientX, y: event.clientY });
+  }
+});
+
+document.addEventListener('mousemove', (event) => {
+  if (tipCard.hidden) {
+    return;
+  }
+
+  tipPoint = { x: event.clientX, y: event.clientY };
+  placeTipCard();
+});
+
+document.addEventListener('mouseout', (event) => {
+  const trigger = event.target.closest ? event.target.closest('[data-item-tip]') : null;
+
+  if (trigger && !trigger.contains(event.relatedTarget)) {
+    hideTipCard();
+  }
+});
+
+// Keyboard readers get the same card: tabbing onto a name opens it, tabbing on
+// closes it, and it is anchored to the name rather than to a pointer that is not
+// there.
+document.addEventListener('focusin', (event) => {
+  const trigger = event.target.closest ? event.target.closest('[data-item-tip]') : null;
+
+  if (!trigger) {
+    return;
+  }
+
+  const rect = trigger.getBoundingClientRect();
+  showTipCard(trigger, { x: rect.right, y: rect.top });
+});
+
+document.addEventListener('focusout', (event) => {
+  if (event.target.closest && event.target.closest('[data-item-tip]')) {
+    hideTipCard();
+  }
+});
+
+window.addEventListener('scroll', hideTipCard, { passive: true });
+window.addEventListener('resize', hideTipCard);

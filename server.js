@@ -41,6 +41,7 @@ import {
   submitDrafts,
 } from './lib/store.js';
 import { emailConfig, renderRequestEmail, sendEmail } from './lib/email.js';
+import { getItemTip } from './lib/uesp.js';
 import { buildProviders } from './lib/providers.js';
 import { attachRealtime } from './lib/realtime.js';
 import { MariaDbSessionStore } from './lib/sessionStore.js';
@@ -540,6 +541,29 @@ app.get('/icons/:file', async (req, res) => {
   } catch (error) {
     console.warn(`Could not serve icon ${match[1]}: ${error.message}`);
     res.status(500).end();
+  }
+});
+
+// The second half of an item's hover card: the game's description of it and what its
+// set does. UESP answers both publicly, and lib/uesp.js keeps the answer in MariaDB
+// for a month, so this is a cache read almost every time.
+app.get('/item-tip', async (req, res) => {
+  const itemId = Number(req.query.item) || 0;
+  const setName = String(req.query.set || '').trim().slice(0, 120);
+
+  res.set('Cache-Control', 'private, max-age=600');
+
+  if (itemId <= 0 && !setName) {
+    res.status(400).json({ error: 'Name an item or a set to look up.' });
+    return;
+  }
+
+  try {
+    res.json(await withDatabase((connection) => getItemTip(connection, { itemId, setName })));
+  } catch (error) {
+    // A tooltip is never worth an error page: the card keeps what the row already
+    // carries and simply says nothing more.
+    res.status(200).json({ available: false, error: error.message });
   }
 });
 
