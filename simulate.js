@@ -547,7 +547,9 @@ async function nudge(summary) {
   const token = String(process.env.SIMULATE_TOKEN || '').trim();
 
   if (!token) {
-    return 'no SIMULATE_TOKEN set, so open pages were not told';
+    // Nothing worth a line of its own: the data still changed, and the next refresh
+    // - or the next thing the reader does - shows it.
+    return '';
   }
 
   const base = `http://127.0.0.1:${process.env.PORT || 3000}`;
@@ -767,7 +769,12 @@ try {
         }
 
         console.log(`[${new Date().toLocaleTimeString()}] ${line}`);
-        console.log(`  live: ${await nudge(line)}`);
+
+        const live = await nudge(line);
+
+        if (live) {
+          console.log(`  live: ${live}`);
+        }
 
         if (every > 0 && acted < rounds && !stopping) {
           await sleep(every);

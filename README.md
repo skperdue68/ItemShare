@@ -292,6 +292,14 @@ filtered, sorted view can be bookmarked and still works with scripts off.
 The list refreshes automatically after an upload, and a request being cancelled
 reaches the person who asked the same way.
 
+An owner can keep some of a stack back in game with a *share reserve*. What the site
+lists is what they are actually offering: the addon subtracts the reserve before it
+uploads, so `Free` and every request calculation only ever see the shareable number.
+The reserve itself is shown as a small amber note under the item name - `keeping 12
+back of 20` - so a stack that offers 8 does not look like an owner who only has 8. A
+standing offer with nothing above its reserve says it is keeping some back and offers
+nothing until the owner holds more.
+
 Visibility joins three tables: the item's own guilds
 (`itemshare_shared_item_guilds`), the viewer's guilds
 (`itemshare_account_guilds`), and the guild names (`itemshare_guilds`). Nothing
@@ -438,7 +446,8 @@ npm run simulate -- --reset             remove the simulated people and their da
 ```
 
 Set `SIMULATE_TOKEN` in `Database/.env` and restart the site to have open pages refresh
-as it runs; without it the data still changes and you see it on the next refresh. The
+as it runs; without it the data still changes and you see it on the next refresh, and
+no `live:` line is printed after an action, because there is no delivery to report. The
 three people are identified by a `simulator` identity, so they are the same people on
 every run, and `--reset` takes all of them out again.
 
@@ -545,6 +554,23 @@ Expired rows are pruned at startup and twice a day. If MariaDB is unreachable th
 session layer reports "no session" instead of failing the request, so the page still
 renders its database-error card rather than a blank screen.
 
+## Commands
+
+Everything runs from `Database/`, through the `package.json` scripts:
+
+| Command | What it does |
+| --- | --- |
+| `npm start` | The site: migrations on boot, the request sweeper, the icon repair timer, sockets |
+| `npm run check` | Parses `SampleData/Sample1/ItemShareSavedVars.lua` without touching the database |
+| `npm run ingest -- <file>` | Imports one saved variables file from the command line |
+| `npm run backfill` | Retries item icons now instead of waiting for the timer |
+| `npm run seed:demo` | Adds `@DemoTrader` to your guilds so *Request* has rows; `-- --remove` takes it out |
+| `npm run simulate` | Drives three fake people through real asks, sends, timeouts and re-saves |
+
+`npm run seed:demo` prints what it put where: the guilds it could use, every shared
+item with its set, quality, trait, quantity and location, and every standing offer.
+Nothing needs it to be inferred from the site afterwards.
+
 ## Command line equivalent
 
 ```bash
@@ -580,6 +606,11 @@ every account is replaced inside one transaction, each with its own guilds.
 | `itemshare_always_share` | Standing offers: items the owner will hand out whenever they have one |
 | `itemshare_always_share_guilds` | Which guilds each standing offer is shown in |
 | `itemshare_requests` | Who asked for what, how many, and how it ended |
+
+`itemshare_shared_items` and `itemshare_always_share` also carry `held_quantity`
+and `reserve_quantity`: what was in the bag and what the owner keeps back. The
+`item_count` column stays what is actually on offer, so every Free/Held calculation
+is unaffected by a reserve.
 
 Guild IDs come from the addon (1.3.0+; `/ishare guilds` shows what was captured).
 Names are display only, because names are neither unique nor stable.
@@ -741,7 +772,9 @@ npm run seed:demo -- --remove          # take it all out again
 
 It writes `@DemoTrader` with nine items and three standing offers into guilds that
 already exist, and never links that account to your login, so its items appear under
-Request exactly like a real guildmate's would. The items are deliberately spread
+Request exactly like a real guildmate's would. The output lists each item with its
+set, quality, trait, quantity and location, then each standing offer, so it is clear
+which sets and slots the demo now covers. The items are deliberately spread
 across Weapon, Apparel, Jewelry, Consumable, Material, Furnishing and Style, with
 two of them in a furnishing vault, so the location line and the type grouping have
 something to show.
