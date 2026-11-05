@@ -330,3 +330,42 @@ page reloads and restores the same row from session storage.
 The broadcast is in-process. Running several Node processes against the same
 database needs a shared Socket.IO adapter (`@socket.io/mysql`), because an upload
 handled by one process would otherwise never reach the sockets held by another.
+
+## Using the site
+
+- **Filters apply as you change them.** Type, "Offered by" and the item name box
+  update the list immediately; there is no Apply button, and "Clear filters" is a
+  button instead of a link. The address bar keeps up, so a reload or a live update
+  uses the same filters. With scripts off, the form's own submit button appears and
+  everything still works.
+- **Uploads start on their own.** Dropping `ItemShareSavedVars.lua` on the upload
+  card, or picking it with the file chooser, uploads it straight away. A toast says
+  the file has been received and is being processed, then summarises what landed.
+- **Two tabs.** *Request* is what other people in your guilds are sharing; *Offering*
+  is your own items and your own standing offers. That split is why no row carries a
+  "You" tag - which tab it is in already says whose it is.
+- **Nothing is listed before your first upload.** Items are shared through guilds,
+  so until your account and its guilds are known there is nothing anyone could
+  legitimately show you.
+- Guild names are not repeated on every row: a row is there *because* of a shared
+  guild. The guild list at the top shows names only, no ids.
+
+## Previewing it with a fake guildmate
+
+A saved variables file cannot act as a second person - every account in an uploaded
+file is linked to whoever uploaded it. To see the Request tab before someone else
+really uploads, seed a demo account instead:
+
+```bash
+npm run seed:demo                      # into every guild you are in
+npm run seed:demo -- --account @Name   # only that account's guilds
+npm run seed:demo -- --guild 761817    # only that guild
+npm run seed:demo -- --remove          # take it all out again
+```
+
+It writes `@DemoTrader` with nine items and three standing offers into guilds that
+already exist, and never links that account to your login, so its items appear under
+Request exactly like a real guildmate's would. The items are deliberately spread
+across Weapon, Apparel, Jewelry, Consumable, Material, Furnishing and Style, with
+two of them in a furnishing vault, so the location line and the type grouping have
+something to show.
