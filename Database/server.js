@@ -28,7 +28,9 @@ import {
   getAlwaysShareForViewer,
   getBasketRows,
   getDraftBasket,
+  getOwnerContacts,
   getRequesterRequests,
+  getSubmittedRequests,
   getSharedItemsForViewer,
   getViewerAccounts,
   getViewerFacets,
@@ -38,6 +40,7 @@ import {
   signInWithProvider,
   submitDrafts,
 } from './lib/store.js';
+import { emailConfig, renderRequestEmail, sendEmail } from './lib/email.js';
 import { buildProviders } from './lib/providers.js';
 import { attachRealtime } from './lib/realtime.js';
 import { MariaDbSessionStore } from './lib/sessionStore.js';
@@ -136,6 +139,80 @@ function readParam(value) {
 // does not give one.
 function personLabel(user) {
   return (user && (user.username || user.email)) || 'Someone';
+}
+
+/**
+ * Emails every owner named in the requests that were just sent, one message per
+ * person: the ESO name to mail the items to, then each item with its quantity. A
+ * person who owns several ESO accounts gets one message, not one per account.
+ *
+ * Runs outside the database block on purpose - a slow mail API must not hold a
+ * connection, and it must not be able to make a real request look failed.
+ */
+async function emailOwners({ user, submitted, contacts }) {
+  if (!submitted || submitted.length === 0 || !contacts || contacts.size === 0) {
+    return { sent: 0, skipped: 0 };
+  }
+
+  const groups = new Map();
+
+  for (const row of submitted) {
+    const contact = contacts.get(String(row.owner_account_name));
+
+    if (!contact || !contact.email) {
+      continue;
+    }
+
+    if (!groups.has(contact.email)) {
+      groups.set(contact.email, { email: contact.email, owners: new Set(), items: [] });
+    }
+
+    const group = groups.get(contact.email);
+    group.owners.add(String(row.owner_account_name));
+    group.items.push({ name: row.item_name || 'Item', quantity: Number(row.quantity) || 1 });
+  }
+
+  if (groups.size === 0) {
+    return { sent: 0, skipped: 0 };
+  }
+
+  const config = emailConfig();
+
+  if (!config.configured) {
+    console.log(
+      `Email: ${groups.size} request email${groups.size === 1 ? '' : 's'} not sent - set RESEND_API_KEY and EMAIL_FROM in Database/.env`
+    );
+    return { sent: 0, skipped: groups.size };
+  }
+
+  const requesterAccount = submitted[0].requester_account_name || '';
+  let sent = 0;
+  let skipped = 0;
+
+  for (const group of groups.values()) {
+    const message = renderRequestEmail({
+      requester: personLabel(user),
+      requesterAccount,
+      ownerAccount: [...group.owners].join(', '),
+      items: group.items,
+      siteUrl: config.siteUrl,
+    });
+
+    const result = await sendEmail({ to: group.email, ...message }, config);
+
+    if (result.ok) {
+      sent += 1;
+    } else {
+      skipped += 1;
+      console.warn(`Email: could not email ${group.email}: ${result.error}`);
+    }
+  }
+
+  console.log(
+    `Email: sent ${sent} request email${sent === 1 ? '' : 's'}${skipped ? `, ${skipped} failed` : ''}`
+  );
+
+  return { sent, skipped };
 }
 
 // Every page the site can end up on uses the same shell, so a cancelled sign-in or
@@ -383,23 +460,57 @@ app.post('/requests/submit', async (req, res) => {
 
   try {
     const outcome = await withDatabase(async (connection) => {
+      const basketRows = await getBasketRows(connection, user.id);
+      const live = basketRows.filter((row) => row.status === 'draft');
       const sent = await submitDrafts(connection, { userId: user.id });
-      return { sent, basket: await getDraftBasket(connection, user.id) };
+
+      // Re-read the rows that really flipped: one that lapsed between the read and the
+      // update was never sent, so it must not turn up in anyone's inbox.
+      const submitted =
+        live.length > 0
+          ? await getSubmittedRequests(
+              connection,
+              user.id,
+              live.map((row) => row.id)
+            )
+          : [];
+      const contacts = await getOwnerContacts(
+        connection,
+        submitted.map((row) => row.owner_account_name)
+      );
+
+      return {
+        sent,
+        basket: await getDraftBasket(connection, user.id),
+        submitted,
+        contacts: [...contacts.entries()],
+      };
     });
 
     if (outcome.sent === 0) {
       res.status(409).json({
         error: 'Nothing was still waiting to be sent - the clock had already run out.',
-        ...outcome,
+        sent: outcome.sent,
+        basket: outcome.basket,
       });
       return;
     }
 
+    // Mail goes out after the database work, so a slow mail API never holds a
+    // connection open or makes the request itself wait to be real.
+    const mail = await emailOwners({
+      user,
+      submitted: outcome.submitted,
+      contacts: new Map(outcome.contacts),
+    });
+
     notifyItemsChanged(
       'request',
-      `${personLabel(user)} sent ${outcome.sent} request${outcome.sent === 1 ? '' : 's'}`
+      `${personLabel(user)} sent ${outcome.sent} request${outcome.sent === 1 ? '' : 's'}${
+        mail.sent > 0 ? ` and emailed ${mail.sent} owner${mail.sent === 1 ? '' : 's'}` : ''
+      }`
     );
-    res.json({ ok: true, ...outcome });
+    res.json({ ok: true, sent: outcome.sent, basket: outcome.basket, emailed: mail.sent });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }

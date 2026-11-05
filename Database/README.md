@@ -205,7 +205,7 @@ picked rather than from the moment it is sent:
   `item_key_hash` instead of being cancelled.
 - *Your requests* holds the basket and, below it, **Already sent**: a history of what
   you actually asked for, newest first and oldest last. Each row carries the item's
-  picture and trait, and anything that closed says why. When a live update brings back
+  picture and trait, the time it was sent, and anything that closed says why. When a live update brings back
   a cancellation the page also says so in a toast, once: opening the page does not
   replay old ones.
 - A requester can cancel their own waiting request. The owner sees "2 asked for" on
@@ -214,17 +214,43 @@ picked rather than from the moment it is sent:
   ("You have unsubmitted item requests") before following a link, with the browser's
   own unload prompt as the fallback for closing the tab or posting a form.
 
+## Request emails
+
+Sending the basket emails the owner of each item: one message per person, headed
+**ESO Item Request**, listing every item with its quantity and naming the ESO account
+(`@Name`) the items should be mailed to. It goes out after the requests are committed,
+and a failed send is logged rather than turned into an error - the request already
+exists either way.
+
+Delivery is Resend over its HTTP API, so nothing has to be installed:
+
+```
+RESEND_API_KEY=re_...
+EMAIL_FROM=ItemShare <requests@your-domain.example>
+BASE_URL=https://your-site.example
+```
+
+`EMAIL_FROM` has to be on a domain verified in Resend. With either setting blank the
+site still runs and the log says `Email: N request emails not sent - set
+RESEND_API_KEY and EMAIL_FROM in Database/.env`. Only an owner whose ESO account is
+linked to a signed-in person has an address at all, so a request to an unclaimed
+account sends nothing.
+
 ## Making it look busy: simulated people
 
 `npm run simulate` (in `Database/`) drives three made-up people through the same store
 code the site uses, so a list with one real owner has traffic on it: they ask for items
 in *your* list, leave some in their baskets, cancel others, and re-save their files so
 items move between bags, the bank and the furnishing vault and stack counts change.
-Every round ends by asking the running site to announce what happened.
+One action, a pause, another action: it keeps going until you stop it with Ctrl+C, and
+every action ends by asking the running site to announce what happened. The pause is
+10 seconds unless `--every` says otherwise.
 
 ```
-npm run simulate                        one round
-npm run simulate -- --rounds 12 --every 4000
+npm run simulate                        until Ctrl+C, one action every 10s
+npm run simulate -- --every 4000        one action every four seconds
+npm run simulate -- --rounds 12         stop after twelve actions
+npm run simulate -- --once              exactly one action, then exit
 npm run simulate -- --only requests     just asking and cancelling
 npm run simulate -- --only items        just re-saving files
 npm run simulate -- --reset             remove the simulated people and their data
@@ -350,15 +376,14 @@ member's view. `getOwnerNotificationEmail(connection, accountName)` is the singl
 server-side helper for finding an owner's address when a request needs to notify
 them.
 
-Sending mail is not wired up yet: requests are recorded, but nobody is emailed
-about them. When that lands it will need mail credentials in `.env` (SMTP or an API
-key); nothing about the capture side needs to change.
+That helper is what the request email uses: see *Request emails* above for the
+credentials it needs in `.env` and what the message contains.
 
 ## Not done yet (next step)
 
-**Handing a request over.** Requests are recorded, reserved and cancelled correctly,
-but nothing yet marks one as delivered, and an owner is not told that somebody asked:
-no mail, and no in-page notice of their own. `itemshare_requests.status`
+**Handing a request over.** Requests are recorded, reserved, emailed and cancelled
+correctly, but nothing yet marks one as delivered, and an owner gets no in-page notice
+of their own (only the email). `itemshare_requests.status`
 (`pending` / `cancelled` / `fulfilled` / `declined`) and `closed_at` are in place for
 that step.
 

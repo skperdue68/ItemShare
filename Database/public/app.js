@@ -898,8 +898,13 @@ async function sendBasket(button) {
       throw new Error(result.error || 'Those requests could not be sent.');
     }
 
+    const emailed =
+      Number(result.emailed) > 0
+        ? ` ${result.emailed} owner${result.emailed === 1 ? '' : 's'} emailed.`
+        : '';
+
     showToast(
-      result.sent === 1 ? 'Request sent.' : `${result.sent} requests sent.`,
+      `${result.sent === 1 ? 'Request sent.' : `${result.sent} requests sent.`}${emailed}`,
       'ok'
     );
     refreshAfterChange();
