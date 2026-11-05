@@ -293,7 +293,7 @@ reaches the person who asked the same way.
 
 An owner can keep some of a stack back in game with a *share reserve*. What the site
 lists is what they are actually offering: the addon subtracts the reserve before it
-uploads, so `Free` and every request calculation only ever see the shareable number.
+uploads, so the Qty column and every request calculation only ever see the shareable number.
 The reserve itself is shown as a small amber note under the item name - `keeping 12
 back of 20` - so a stack that offers 8 does not look like an owner who only has 8. A
 standing offer with nothing above its reserve says it is keeping some back and offers
@@ -326,7 +326,7 @@ requests*.
 A request is a **reservation, not a delivery**, and it reserves from the moment it is
 picked rather than from the moment it is sent:
 
-- The list has two quantity columns. **Free** is what nobody is holding, **Held** is
+- The list has two quantity columns. **Qty** is how many copies the owner shares, **Held** is
   what a request is standing on, and they always add up to what the owner reported.
   Once nothing is free the button becomes *All held*.
 - Asking puts the item in a **basket** with a five minute clock (`REQUEST_HOLD_MINUTES`).
@@ -633,7 +633,7 @@ browser hands the file over, which is the only way a web page can read it at all
 
 `itemshare_shared_items` and `itemshare_always_share` also carry `held_quantity`
 and `reserve_quantity`: what was in the bag and what the owner keeps back. The
-`item_count` column stays what is actually on offer, so every Free/Held calculation
+`item_count` column stays what is actually on offer, so every Qty/Held calculation
 is unaffected by a reserve.
 
 Guild IDs come from the addon (1.3.0+; `/ishare guilds` shows what was captured).
