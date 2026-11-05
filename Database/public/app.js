@@ -1,13 +1,125 @@
+// ItemShare page behaviour: uploads, the account menu and the live item lists.
+//
+// Everything here is an enhancement. The logout form posts without scripts and the
+// filter form still submits on its own, so a failed script costs convenience only.
+
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('savedvars');
 const fileName = document.getElementById('fileName');
-const uploadButton = document.getElementById('uploadButton');
-const status = document.getElementById('status');
+const toast = document.getElementById('toast');
+
+// Filled in by the list code once it can refresh without a page load; until then a
+// change has to be shown the only other way there is.
+let refreshListsSoon = null;
+
+function refreshAfterChange() {
+  if (refreshListsSoon) {
+    refreshListsSoon(0);
+    return;
+  }
+
+  window.location.reload();
+}
+
+// ---------------------------------------------------------------------- toast
+// One short lived message, replaced by whatever the next step has to say. The
+// upload is the only thing here that takes long enough to need reassuring.
+let toastHideTimer = null;
+
+function showToast(message, kind = 'info', { sticky = false } = {}) {
+  if (!toast) {
+    return;
+  }
+
+  toast.textContent = message;
+  toast.className = `toast ${kind}`;
+  toast.hidden = false;
+  window.requestAnimationFrame(() => toast.classList.add('visible'));
+
+  window.clearTimeout(toastHideTimer);
+
+  if (sticky) {
+    return;
+  }
+
+  toastHideTimer = window.setTimeout(() => {
+    toast.classList.remove('visible');
+    toastHideTimer = window.setTimeout(() => {
+      toast.hidden = true;
+    }, 220);
+  }, kind === 'err' ? 7000 : 4500);
+}
+
+// --------------------------------------------------------------------- upload
+// Dropping a file or picking one both upload straight away: there is no button to
+// press and nothing to confirm first.
+async function uploadFile(file) {
+  if (!file) {
+    return;
+  }
+
+  if (fileName) {
+    fileName.textContent = `${file.name} (${Math.round(file.size / 1024)} KB)`;
+  }
+  if (dropZone) {
+    dropZone.classList.add('busy');
+  }
+
+  showToast(`Received ${file.name} - uploading and processing...`, 'info', { sticky: true });
+
+  try {
+    const body = new FormData();
+    body.append('savedvars', file);
+
+    const response = await fetch('/upload', { method: 'POST', body });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(result.error || `Upload failed with status ${response.status}`);
+    }
+
+    const accounts = result.accounts || [];
+    const icons = result.iconLookup && result.iconLookup.resolved
+      ? `Found ${result.iconLookup.resolved} icon${result.iconLookup.resolved === 1 ? '' : 's'} that were missing.`
+      : '';
+
+    showToast(
+      [
+        `${file.name} has been received.`,
+        ...accounts.map(
+          (account) =>
+            `${account.accountName}: ${account.itemCount} item${account.itemCount === 1 ? '' : 's'}, quantity ${account.totalQuantity}`
+        ),
+        icons,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      'ok'
+    );
+
+    refreshAfterChange();
+  } catch (error) {
+    showToast(error.message, 'err');
+  } finally {
+    if (dropZone) {
+      dropZone.classList.remove('busy');
+    }
+    // Clearing the input means the same file can be chosen again straight away.
+    if (fileInput) {
+      fileInput.value = '';
+    }
+    if (fileName) {
+      fileName.textContent = 'No file selected';
+    }
+  }
+}
 
 if (dropZone && fileInput) {
   fileInput.addEventListener('change', () => {
     const file = fileInput.files && fileInput.files[0];
-    fileName.textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : 'No file selected';
+    if (file) {
+      uploadFile(file);
+    }
   });
 
   ['dragenter', 'dragover'].forEach((eventName) => {
@@ -27,62 +139,7 @@ if (dropZone && fileInput) {
   dropZone.addEventListener('drop', (event) => {
     const dropped = event.dataTransfer && event.dataTransfer.files;
     if (dropped && dropped.length > 0) {
-      fileInput.files = dropped;
-      fileInput.dispatchEvent(new Event('change'));
-    }
-  });
-}
-
-function setStatus(message, kind) {
-  status.textContent = message || '';
-  status.className = `status ${kind || ''}`;
-}
-
-if (uploadButton) {
-  uploadButton.addEventListener('click', async () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) {
-      setStatus('Choose your ItemShareSavedVars.lua file first.', 'err');
-      return;
-    }
-
-    uploadButton.disabled = true;
-    setStatus('Uploading and replacing every account in the file...', '');
-
-    try {
-      const body = new FormData();
-      body.append('savedvars', file);
-
-      const response = await fetch('/upload', { method: 'POST', body });
-      const result = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(result.error || `Upload failed with status ${response.status}`);
-      }
-
-      const summaryLines = (result.accounts || []).map(
-        (account) =>
-          `${account.accountName}: ${account.itemCount} items, quantity ${account.totalQuantity}, ${account.guildCount} guilds`
-      );
-
-      const fetchedIcons = result.icons ? Number(result.icons.fetched) || 0 : 0;
-
-      setStatus(
-        [
-          `Saved ${summaryLines.length} ESO account${summaryLines.length === 1 ? '' : 's'}.`,
-          ...summaryLines,
-          fetchedIcons > 0 ? `Cached ${fetchedIcons} item icon${fetchedIcons === 1 ? '' : 's'} for local display.` : '',
-          result.link === 'linked' ? 'Linked to your Discord user.' : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        'ok'
-      );
-
-      window.setTimeout(() => window.location.reload(), 1400);
-    } catch (error) {
-      setStatus(error.message, 'err');
-      uploadButton.disabled = false;
+      uploadFile(dropped[0]);
     }
   });
 }
@@ -150,13 +207,25 @@ if (listRegion) {
   const ANCHOR_LINE_RATIO = 0.35;
   const ANCHOR_LINE_MAX = 280;
   const CHANGE_DELAY_MS = 120;
+  const SEARCH_DELAY_MS = 250;
   const RELOAD_ANCHOR_KEY = 'itemshare:scroll-anchor';
+  const TAB_KEY = 'itemshare:tab';
 
   let liveState = 'wait';
   let refreshing = false;
   let queued = false;
   let timer = null;
   let everConnected = false;
+  let activeTab = 'request';
+
+  try {
+    const stored = window.sessionStorage.getItem(TAB_KEY);
+    if (stored === 'request' || stored === 'offer') {
+      activeTab = stored;
+    }
+  } catch (error) {
+    // No storage: the request tab is the default, which is also the useful one.
+  }
 
   const anchorLine = () => Math.min(window.innerHeight * ANCHOR_LINE_RATIO, ANCHOR_LINE_MAX);
 
@@ -171,6 +240,134 @@ if (listRegion) {
     });
   }
 
+  // ---------------------------------------------------------------------- tabs
+  // Request and Offering are the same data cut two ways, so the tab is a display
+  // choice the server does not need to know about. It survives a live refresh (the
+  // region is re-rendered from the Request tab) and a page rebuild.
+  function setTab(name, { focus = false } = {}) {
+    const tabs = Array.from(listRegion.querySelectorAll('[data-tab]'));
+    const panels = Array.from(listRegion.querySelectorAll('[data-panel]'));
+
+    if (!tabs.some((tab) => tab.dataset.tab === name)) {
+      return;
+    }
+
+    activeTab = name;
+
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.tab === name;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+
+      if (selected && focus) {
+        tab.focus();
+      }
+    });
+
+    panels.forEach((panel) => {
+      panel.hidden = panel.dataset.panel !== name;
+    });
+
+    try {
+      window.sessionStorage.setItem(TAB_KEY, name);
+    } catch (error) {
+      // Tab choice is a convenience; failing to remember it changes nothing.
+    }
+  }
+
+  listRegion.addEventListener('click', (event) => {
+    const tab = event.target.closest ? event.target.closest('[data-tab]') : null;
+
+    if (tab) {
+      event.preventDefault();
+      setTab(tab.dataset.tab, { focus: true });
+    }
+  });
+
+  listRegion.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+      return;
+    }
+
+    const tabs = Array.from(listRegion.querySelectorAll('[data-tab]'));
+    const index = tabs.findIndex((tab) => tab.dataset.tab === activeTab);
+
+    if (index === -1) {
+      return;
+    }
+
+    event.preventDefault();
+    const step = event.key === 'ArrowRight' ? 1 : tabs.length - 1;
+    setTab(tabs[(index + step) % tabs.length].dataset.tab, { focus: true });
+  });
+
+  setTab(activeTab);
+
+  // ------------------------------------------------------------------- filters
+  // Filters apply as soon as they change - there is no button to forget - and the
+  // address bar keeps up, so a reload or a live refresh uses the same filters.
+  const filterForm = document.querySelector('[data-filters]');
+
+  function applyFilters() {
+    if (!filterForm) {
+      return;
+    }
+
+    const params = new URLSearchParams();
+
+    filterForm.querySelectorAll('[data-filter]').forEach((field) => {
+      const value = String(field.value || '').trim();
+      if (value) {
+        params.set(field.name, value);
+      }
+    });
+
+    const query = params.toString();
+
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, '', query ? `/?${query}` : '/');
+    }
+
+    scheduleRefresh(0);
+  }
+
+  if (filterForm) {
+    let searchTimer = null;
+
+    filterForm.addEventListener('change', (event) => {
+      if (event.target.matches('[data-filter]')) {
+        applyFilters();
+      }
+    });
+
+    // Typing filters as it is typed, just slowly enough not to fetch on every key.
+    filterForm.addEventListener('input', (event) => {
+      if (!event.target.matches('input[type="search"][data-filter]')) {
+        return;
+      }
+
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(applyFilters, SEARCH_DELAY_MS);
+    });
+
+    filterForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      applyFilters();
+    });
+
+    const clearButton = filterForm.querySelector('[data-clear-filters]');
+
+    if (clearButton) {
+      clearButton.addEventListener('click', () => {
+        filterForm.querySelectorAll('[data-filter]').forEach((field) => {
+          field.value = '';
+        });
+        applyFilters();
+      });
+    }
+  }
+
+  // -------------------------------------------------------- keeping the place
   // The row the reader is looking at: the first one crossing the anchor line. Null
   // when the list is off screen, because then nothing on it has to hold its place.
   function captureAnchor() {
@@ -252,6 +449,7 @@ if (listRegion) {
     listRegion.innerHTML = next.innerHTML;
     restoreAnchor(anchor);
     setLiveState(liveState);
+    setTab(activeTab);
   }
 
   async function refresh() {
@@ -295,6 +493,9 @@ if (listRegion) {
     }, delay);
   }
 
+  refreshListsSoon = (delay = 0) => scheduleRefresh(delay);
+
+  // ------------------------------------------------------------------- socket
   const socket = typeof window.io === 'function' ? window.io({ withCredentials: true }) : null;
 
   if (socket) {
