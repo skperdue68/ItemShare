@@ -327,12 +327,38 @@ try {
       { sourceFile: 'seedDemo.js' }
     );
 
+    const setText = (spec) => (spec.set ? ` [${spec.set}]` : '');
+    const traitText = (spec) => (spec.trait ? `, ${spec.trait}` : '');
+
     console.log(`Seeded ${DEMO_ACCOUNT} into ${guilds.size} guild${guilds.size === 1 ? '' : 's'}:`);
     for (const [guildId, guildName] of guilds) {
       console.log(`  ${guildName || '(unnamed guild)'} ${guildId}`);
     }
+
+    console.log('');
+    console.log(`Shared items (${ITEMS.length}), with the set recorded for set pieces:`);
+    for (const spec of ITEMS) {
+      console.log(
+        `  ${String(spec.count || 1).padStart(3)} x ${spec.name}${setText(spec)} - ` +
+          `${spec.qualityName} ${spec.typeName}${traitText(spec)} (${spec.location})`
+      );
+    }
+
+    console.log('');
+    console.log(`Standing offers (${OFFERS.length}), offered even when no copy is in a bag:`);
+    for (const spec of OFFERS) {
+      console.log(
+        `  ${spec.name}${setText(spec)} - ${spec.qualityName} ${spec.typeName}${traitText(spec)}`
+      );
+    }
+
+    console.log('');
     console.log(
       `${result.itemCount} items and ${result.alwaysShareCount} standing offers are now shared from ${DEMO_ACCOUNT}.`
+    );
+    console.log(
+      'Every set piece above carries its set name, so the site can group and label it; an item with no\n' +
+        'set stays blank there on purpose.'
     );
     console.log('Reload the site: they appear under Request. Take them out with --remove.');
   }

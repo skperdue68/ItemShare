@@ -153,6 +153,10 @@ function buildItem({ accountName, scopeName, itemKey, entry, guilds }) {
     locationKey: text(entry.locationKey),
     locationLabel: text(entry.sharedFrom),
     itemCount: integer(entry.count),
+    // What the bag held and what the owner keeps back. itemCount stays the shareable
+    // number, so every free/held calculation is unchanged; these explain it.
+    heldQuantity: integer(entry.heldCount),
+    reserveQuantity: integer(entry.reserve),
     firstDumpedAt: integer(entry.firstDumpedAt),
     lastDumpedAt: integer(entry.lastDumpedAt),
     guildIds,
@@ -198,6 +202,10 @@ function buildAlwaysShare({ accountName, scopeName, itemKey, entry, guilds }) {
     esoData: esoDetailsJson(entry.esoDetails),
     firstAddedAt: integer(entry.firstAddedAt),
     lastUpdatedAt: integer(entry.lastUpdatedAt),
+    // A standing offer has no count of its own; the reserve is still worth recording
+    // because it is why the offer has nothing to hand over right now.
+    heldQuantity: integer(entry.heldCount),
+    reserveQuantity: integer(entry.reserve),
     guildIds,
   };
 }
