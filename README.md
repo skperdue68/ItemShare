@@ -471,17 +471,28 @@ and stores the bytes in `itemshare_item_icons`. Pages then serve them from
 item fetches nothing at all. Fetching is best effort: a failure is logged, that
 row simply shows no thumbnail, and it is retried later.
 
-When the client records no icon path at all - a share written before 1.5.0, or a
-client without `GetItemIcon` - the item id is used instead: one request to
-`esoitem.uesp.net/itemLink.php?itemid=...` yields the same icon path, which then
-travels the ordinary cache route, so nothing downstream knows the difference.
+When the client records no icon path at all - a share written before 1.5.0, a client
+without `GetItemIcon`, or a set item whose slot getter came back empty - the addon
+asks a link-based getter next (`GetItemLinkIconTextureName` and its older spellings),
+and the site falls back to the item id: `esoitem.uesp.net/itemLink.php?itemid=...`
+first, then `exportJson.php?table=minedItemSummary&id=...`, which often answers for
+set items whose item page carries no icon. Whichever one answers travels the ordinary
+cache route, so nothing downstream knows the difference. A path the client returns
+without its leading slash is repaired rather than dropped.
+
+Two capture mistakes used to keep whole categories of item blank: `GetItemInfo`
+returns the icon as its *third* value (the second is the item link, which is not a
+texture), and nothing ever retried a recorded path that the mirror had no image for,
+so a set item stayed a placeholder for ever while its id was perfectly well known.
 
 Both steps run at upload and again on a timer, because a blank icon never repairs
 itself otherwise. `ICON_BACKFILL_INTERVAL_MS` (default 30 minutes) sets how often
 the retry pass runs and `ICON_BACKFILL_BATCH` (default 20) how many item ids one
-pass may look up; `ICON_BACKFILL_INTERVAL_MS=0` turns the pass off. A pass looks
-only at ids that have no path anywhere, so an item UESP is still refusing simply
-stays queued for the next one.
+pass may look up; `ICON_BACKFILL_INTERVAL_MS=0` turns the pass off. A pass looks at
+ids with no path anywhere *and* at ids whose stored path never produced an image. The
+second kind is only rewritten when UESP answers with a different path, so an item
+UESP is still refusing simply stays queued for the next pass instead of looping on
+the same answer. `node backfillIcons.js --dry-run` lists both groups.
 
 ## Hovering an item
 

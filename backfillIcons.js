@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
 import { describeConnectionFailure, openDatabase, readConfig } from './lib/database.js';
-import { getItemIdsMissingIcons } from './lib/store.js';
+import { getItemIdsMissingIcons, getUncachedIconItems } from './lib/store.js';
 import { backfillItemIcons } from './lib/iconBackfill.js';
 import { resolveIconPathByItemId } from './lib/icons.js';
 
@@ -95,11 +95,18 @@ async function main() {
 
     if (dryRun) {
       const missing = await getItemIdsMissingIcons(connection, limit);
+      const uncached = await getUncachedIconItems(connection, limit);
 
       console.log(
         missing.length
           ? `Missing icons: ${missing.length} item id(s) in this batch: ${missing.join(', ')}`
           : 'Missing icons: none - every item id has an icon path somewhere.'
+      );
+      console.log(
+        uncached.length
+          ? `Unfetchable icons: ${uncached.length} item id(s) whose stored path has no image: ` +
+              uncached.map((row) => `${row.itemId} (${row.icon})`).join(', ')
+          : 'Unfetchable icons: none - every stored path produced an image.'
       );
       console.log('Dry run: nothing looked up, nothing written.');
       return;
