@@ -274,13 +274,50 @@ export async function getItemIdsMissingIcons(connection, limit = 20) {
 }
 
 /**
+ * Rows whose recorded icon path never produced an image: the path is there, but the
+ * mirror has nothing at it, so the page has always shown a blank tile. Set items are
+ * the usual case - the client's path is real in-game but is not mirrored under that
+ * name - and the repair is the one blank rows already get: ask UESP for the canonical
+ * path and replace what is stored.
+ *
+ * @returns {Promise<{itemId: number, icon: string}[]>}
+ */
+export async function getUncachedIconItems(connection, limit = 20) {
+  const batch = Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 200);
+
+  const [rows] = await connection.execute(
+    `SELECT item_id, icon FROM (
+       SELECT i.item_id, i.icon
+         FROM itemshare_shared_items i
+         LEFT JOIN itemshare_item_icons cached ON cached.icon_key = i.icon_key
+        WHERE i.item_id > 0 AND i.icon <> '' AND cached.icon_key IS NULL
+       UNION
+       SELECT a.item_id, a.icon
+         FROM itemshare_always_share a
+         LEFT JOIN itemshare_item_icons cached ON cached.icon_key = a.icon_key
+        WHERE a.item_id > 0 AND a.icon <> '' AND cached.icon_key IS NULL
+     ) AS uncached
+     ORDER BY item_id
+     LIMIT ${batch}`
+  );
+
+  return rows
+    .map((row) => ({ itemId: Number(row.item_id), icon: String(row.icon || '') }))
+    .filter((row) => Number.isFinite(row.itemId) && row.itemId > 0);
+}
+
+/**
  * Writes recovered icon paths onto every row that is still blank for those item
  * ids, in both tables. Guards the rows that already have a path, so a concurrent
  * upload is never overwritten with an older answer.
  *
+ * With `replaceUncached` a path that never produced an image is replaced as well -
+ * a recorded path with no cached PNG is as broken as a blank one, and it is what
+ * kept some items (set items especially) a placeholder for ever.
+ *
  * @returns {Promise<number>} rows touched
  */
-export async function fillIconsByItemId(connection, iconByItemId) {
+export async function fillIconsByItemId(connection, iconByItemId, { replaceUncached = false } = {}) {
   let rows = 0;
 
   for (const [itemId, icon] of iconByItemId || []) {
@@ -299,6 +336,19 @@ export async function fillIconsByItemId(connection, iconByItemId) {
         [path, iconKey, itemId]
       );
       rows += result.affectedRows || 0;
+
+      if (!replaceUncached) {
+        continue;
+      }
+
+      const [replaced] = await connection.execute(
+        `UPDATE ${table} SET icon = ?, icon_key = ?
+          WHERE item_id = ?
+            AND icon IS NOT NULL AND icon <> '' AND icon <> ?
+            AND icon_key NOT IN (SELECT icon_key FROM itemshare_item_icons)`,
+        [path, iconKey, itemId, path]
+      );
+      rows += replaced.affectedRows || 0;
     }
   }
 

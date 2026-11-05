@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.7"
+local ADDON_VERSION = "1.8.8"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -13,6 +13,11 @@ local SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_share2.dds"
 -- The standing-offer variant of the same glyph: the dome closes into a ring, so
 -- "always shared" is readable at 16 px without needing a colour legend.
 local ALWAYS_SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_always.dds"
+-- A reserve gets a badge of its own rather than a tint, and it keeps the glyph it
+-- sits on: the amber tag says "some of this is mine", the parcel underneath still
+-- says whether the offer is a plain share or a standing one.
+local RESERVE_TEXTURE_PATH = "ItemShare/media/itemshare_reserve.dds"
+local ALWAYS_RESERVE_TEXTURE_PATH = "ItemShare/media/itemshare_always_reserve.dds"
 local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
@@ -44,7 +49,45 @@ local CanModifyGuildBankShare
 local SyncSharedItemsWithInventory
 local RebuildSharedItemsWithInventory
 
+-- Declared here because the badge and the list rows are built before the reserve
+-- and standing-offer code they ask about runs for the first time.
+local GetShareReserve
+local ShareableCount
+local GetAlwaysShareTable
+local GetAlwaysShareKey
+local BuildActualInventoryIndex
+local TryRefreshInventoryVisuals
 
+-- Which of the four badges belongs on an item: standing offer or plain share, with
+-- an amber tag on either when a reserve is set on it.
+local function GetShareBadgeTexture(itemLink, isAlways)
+    local reserve = (GetShareReserve and GetShareReserve(itemLink)) or 0
+    if reserve > 0 then
+        return isAlways and ALWAYS_RESERVE_TEXTURE_PATH or RESERVE_TEXTURE_PATH
+    end
+    return isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH
+end
+
+-- One wording for "keeping some back", so the bag badge, the list window and the
+-- chat messages cannot drift apart.
+local function DescribeReserveLine(itemLink, entry)
+    local reserve = (GetShareReserve and GetShareReserve(itemLink)) or 0
+    if reserve <= 0 then
+        return nil
+    end
+
+    local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
+    if held <= 0 then
+        return string.format("|cD8A24FKeeping %d back|r.", reserve)
+    end
+
+    return string.format(
+        "|cD8A24FKeeping %d back|r - offering %d of %d held.",
+        reserve,
+        math.max(0, held - reserve),
+        held
+    )
+end
 
 ItemShare.ui = {
     listWindow = nil,
@@ -88,16 +131,73 @@ local function ApplySavedListWindowPosition(window)
     window:SetAnchor(TOPLEFT, GuiRoot, TOPLEFT, state.left, state.top)
 end
 
-local function GetSortedSharedEntries()
+-- The window lists what is actually on offer. A standing offer counts as on offer
+-- as soon as a copy is in a bag we can read, even when no copy was ever marked by
+-- hand, so the always-share table is folded in here. Both sources are counted the
+-- same way - what is held above the reserve - and an item with nothing above its
+-- reserve is not listed at all, because offering zero is not an offer.
+local function GetShareListEntries()
     local entries = {}
+    local linksListed = {}
 
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        local copy = {}
-        for k, v in pairs(entry) do
-            copy[k] = v
+        local count = math.max(0, tonumber(entry.count or 0) or 0)
+        if count > 0 then
+            local copy = {}
+            for k, v in pairs(entry) do
+                copy[k] = v
+            end
+            copy.itemKey = itemKey
+            copy.count = count
+            entries[#entries + 1] = copy
+
+            local link = tostring(entry.itemLink or "")
+            if link ~= "" then
+                linksListed[link] = true
+            end
         end
-        copy.itemKey = itemKey
-        entries[#entries + 1] = copy
+    end
+
+    local alwaysShare = ItemShare.savedVars.alwaysShare
+    if type(alwaysShare) == "table" then
+        local waiting = {}
+        for link, alwaysEntry in pairs(alwaysShare) do
+            if type(alwaysEntry) == "table" and not linksListed[tostring(link)] then
+                waiting[#waiting + 1] = alwaysEntry
+            end
+        end
+
+        if #waiting > 0 and BuildActualInventoryIndex then
+            -- Only asked when a standing offer is missing from the list, so an
+            -- ordinary refresh stays as cheap as it was.
+            local index = BuildActualInventoryIndex()
+            for _, alwaysEntry in ipairs(waiting) do
+                local link = tostring(alwaysEntry.itemLink or "")
+                local held = math.max(0, tonumber(index.countsByLink[link] or 0) or 0)
+                local offered = ShareableCount(link, held)
+
+                if link ~= "" and offered > 0 then
+                    local location = index.locationsByLink and index.locationsByLink[link] or nil
+                    entries[#entries + 1] = {
+                        itemKey = link,
+                        itemLink = link,
+                        itemName = tostring(alwaysEntry.itemName or link),
+                        itemType = alwaysEntry.itemType,
+                        itemTypeName = alwaysEntry.itemTypeName,
+                        quality = alwaysEntry.quality,
+                        trait = alwaysEntry.trait,
+                        heldCount = held,
+                        reserve = GetShareReserve(link),
+                        count = offered,
+                        sharedFrom = location and tostring(location.sharedFrom or "-") or "Not in a bag",
+                        locationKey = location and tostring(location.locationKey or "") or "",
+                        bagId = location and location.bagId or nil,
+                        slotIndex = location and location.slotIndex or nil,
+                        alwaysOnly = true,
+                    }
+                end
+            end
+        end
     end
 
     table.sort(entries, function(a, b)
@@ -542,6 +642,26 @@ local function GetOrCreateShareListRow(index)
             return
         end
 
+        -- A row that only stands for a standing offer has nothing in the shared
+        -- table to remove, so toggling it off means stopping the offer.
+        if row.isAlwaysOnly then
+            local alwaysKey = GetAlwaysShareKey(row.itemLink)
+            local alwaysEntry = GetAlwaysShareTable()[alwaysKey]
+
+            if alwaysEntry == nil then
+                return
+            end
+
+            GetAlwaysShareTable()[alwaysKey] = nil
+            TryRefreshInventoryVisuals()
+            RefreshShareListWindowIfVisible()
+            dmsg(string.format(
+                "Stopped always sharing %s.",
+                tostring(alwaysEntry.itemName or row.itemLink or "item")
+            ))
+            return
+        end
+
         if row.isShared then
             local currentEntry = row.entryKey and ItemShare.savedVars.sharedItems[row.entryKey] or row.entryData
             RemoveItemFromShareByKey(row.entryKey, currentEntry, false)
@@ -589,11 +709,24 @@ local function GetOrCreateShareListRow(index)
     statusIcon:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
-        if row.itemLink and IsItemLinkAlwaysShared(row.itemLink) then
-            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
+
+        local link = row.itemLink or (row.entryData and row.entryData.itemLink)
+        local lines = {}
+
+        if link and IsItemLinkAlwaysShared(link) then
+            lines[#lines + 1] = "|cFFD266Always shared|r"
+            lines[#lines + 1] = "You offer this whenever you have one."
         else
-            SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+            lines[#lines + 1] = "|c00FF00Shared Item|r"
+            lines[#lines + 1] = "This item is available to others."
         end
+
+        local reserveLine = DescribeReserveLine(link, row.entryData)
+        if reserveLine then
+            lines[#lines + 1] = reserveLine
+        end
+
+        SetTooltipText(InformationTooltip, table.concat(lines, "\n"))
     end)
 
     statusIcon:SetHandler("OnMouseExit", function()
@@ -671,7 +804,7 @@ RefreshShareListWindow = function()
         return
     end
 
-    local entries = GetSortedSharedEntries()
+    local entries = GetShareListEntries()
     local rowHeight = 24
     local contentWidth = math.max((ItemShare.ui.listScroll and ItemShare.ui.listScroll:GetWidth()) or 660, 660)
 
@@ -691,14 +824,21 @@ RefreshShareListWindow = function()
         end
         row.itemLabel:SetText(displayText)
         row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
-        row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
+
+        -- The reserve is part of what the row has to say: "12" alone does not
+        -- explain why a stack of 20 offers 8.
+        local locationText = tostring(entry.sharedFrom or "-")
+        local reserve = tonumber(entry.reserve or 0) or 0
+        if reserve > 0 then
+            locationText = string.format("%s - keep %d", locationText, reserve)
+        end
+        row.locationLabel:SetText(locationText)
         row.isShared = true
+        row.isAlwaysOnly = entry.alwaysOnly and true or false
         -- Rows are recycled, so the badge is set from the entry on every refresh.
         -- Leaving it to creation time meant a removed standing offer kept its gold
         -- icon in this window until the row happened to be reused for something else.
-        row.statusIcon:SetTexture(IsItemLinkAlwaysShared(entry.itemLink)
-                and ALWAYS_SHARE_TEXTURE_PATH
-            or SHARE_TEXTURE_PATH)
+        row.statusIcon:SetTexture(GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink)))
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
             row:RefreshAppearance()
@@ -1248,32 +1388,74 @@ local function GetItemFurnitureDataIdSafe(bagId, slotIndex)
     return tonumber(GetItemFurnitureDataId(bagId, slotIndex)) or 0
 end
 
--- The icon path is the only thing that lets the site cache an image, so it is
--- worth asking more than one getter: GetItemIcon is not exposed on every client,
--- and GetItemInfo still returns the icon file as its second value. A getter that
--- answers with something that is not a texture path counts as no answer.
-local function LooksLikeIconPath(value)
-    return type(value) == "string"
-        and value ~= ""
-        and string.find(value, "/", 1, true) ~= nil
-end
+-- The icon path is the only thing that lets the site cache an image, so more than
+-- one getter is asked. GetItemIcon is not exposed on every client and does not
+-- answer for every slot; GetItemInfo returns the icon as its *third* value, not its
+-- second, so reading the second value returned the item link and quietly left the
+-- icon blank. Link-based getters are asked last: they need no live bag slot, which
+-- is exactly what a set item filed from a bank or a house chest can lack when the
+-- slot getters come back empty.
+local ITEM_ICON_LINK_GETTERS = {
+    "GetItemLinkIconTextureName",
+    "GetItemLinkIcon",
+    "GetItemLinkTextureName",
+}
 
-local function GetItemIconPathSafe(bagId, slotIndex)
-    if type(GetItemIcon) == "function" then
-        local ok, icon = pcall(GetItemIcon, bagId, slotIndex)
-        if ok and LooksLikeIconPath(icon) then
-            return tostring(icon)
-        end
+-- Accepts only what can be a texture path: some getters answer with a bare icon
+-- name, which the site cannot turn into an image. A path missing its leading slash
+-- is repaired rather than thrown away.
+local function NormalizeIconTexturePath(value)
+    local text = type(value) == "string" and string.match(value, "^%s*(.-)%s*$") or ""
+
+    if text == "" or string.find(text, "/", 1, true) == nil then
+        return ""
+    end
+    if string.sub(text, 1, 1) ~= "/" then
+        text = "/" .. text
     end
 
-    if type(GetItemInfo) == "function" then
-        local ok, _, icon = pcall(GetItemInfo, bagId, slotIndex)
-        if ok and LooksLikeIconPath(icon) then
-            return tostring(icon)
+    return text
+end
+
+local function GetItemIconFromLinkSafe(itemLink)
+    local link = tostring(itemLink or "")
+
+    if link == "" then
+        return ""
+    end
+
+    for _, getterName in ipairs(ITEM_ICON_LINK_GETTERS) do
+        local getter = _G[getterName]
+        if type(getter) == "function" then
+            local ok, icon = pcall(getter, link)
+            local path = ok and NormalizeIconTexturePath(icon) or ""
+            if path ~= "" then
+                return path
+            end
         end
     end
 
     return ""
+end
+
+local function GetItemIconPathSafe(bagId, slotIndex, itemLink)
+    if type(GetItemIcon) == "function" then
+        local ok, icon = pcall(GetItemIcon, bagId, slotIndex)
+        local path = ok and NormalizeIconTexturePath(icon) or ""
+        if path ~= "" then
+            return path
+        end
+    end
+
+    if type(GetItemInfo) == "function" then
+        local ok, _, _, icon = pcall(GetItemInfo, bagId, slotIndex)
+        local path = ok and NormalizeIconTexturePath(icon) or ""
+        if path ~= "" then
+            return path
+        end
+    end
+
+    return GetItemIconFromLinkSafe(itemLink)
 end
 
 -- The item id lives inside the link: |H0:item:43532:370:50:...|h|h
@@ -1430,7 +1612,7 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         itemName = itemName,
         itemLink = itemLink,
         itemId = GetItemIdFromLink(itemLink),
-        icon = GetItemIconPathSafe(bagId, slotIndex),
+        icon = GetItemIconPathSafe(bagId, slotIndex, itemLink),
         itemType = itemType,
         itemTypeName = itemTypeName,
         quality = quality,
@@ -1538,7 +1720,7 @@ local function GetShareReserveTable()
     return ItemShare.savedVars.reserves
 end
 
-local function GetShareReserve(itemLink)
+GetShareReserve = function(itemLink)
     local link = tostring(itemLink or "")
     if link == "" then
         return 0
@@ -1567,7 +1749,7 @@ end
 -- What is offered is what is held above the reserve. Twenty held with twelve kept
 -- shares eight; eight held with twelve kept shares nothing, and the share entry
 -- stays at zero so the marking comes back by itself when more are acquired.
-local function ShareableCount(itemLink, heldCount)
+ShareableCount = function(itemLink, heldCount)
     local held = math.max(0, math.floor(tonumber(heldCount) or 0))
     return math.max(0, held - GetShareReserve(itemLink))
 end
@@ -1606,7 +1788,7 @@ IsItemLinkAlwaysShared = function(itemLink)
     return alwaysShare[tostring(itemLink or "")] ~= nil
 end
 
-local function TryRefreshInventoryVisuals()
+TryRefreshInventoryVisuals = function()
     if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
         return
     end
@@ -1731,11 +1913,32 @@ local function EnsureShareMarker(control)
         -- the pointer takes the pointer off the badge, which closes the tooltip and
         -- puts the pointer back on it: hovering the left edge flashed nonstop.
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
+
+        local lines = {}
         if self.ItemShareAlways then
-            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
+            lines[#lines + 1] = "|cFFD266Always shared|r"
+            lines[#lines + 1] = "You offer this whenever you have one."
         else
-            SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+            lines[#lines + 1] = "|c00FF00Shared Item|r"
+            lines[#lines + 1] = "This item is available to others."
         end
+
+        local reserve = tonumber(self.ItemShareReserve) or 0
+        if reserve > 0 then
+            local held = tonumber(self.ItemShareHeld) or 0
+            if held > 0 then
+                lines[#lines + 1] = string.format(
+                    "|cD8A24FKeeping %d back|r - offering %d of %d held.",
+                    reserve,
+                    tonumber(self.ItemShareOffered) or 0,
+                    held
+                )
+            else
+                lines[#lines + 1] = string.format("|cD8A24FKeeping %d back|r.", reserve)
+            end
+        end
+
+        SetTooltipText(InformationTooltip, table.concat(lines, "\n"))
     end)
 
     marker:SetHandler("OnMouseExit", function()
@@ -1780,12 +1983,17 @@ local function UpdateSharedRowMarker(control, slotData)
     -- that is what the offer means. It used to show nothing at all in that state,
     -- which made the gold icon look as if it did not exist.
     local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
+    local reserve = (itemLink and GetShareReserve(itemLink)) or 0
 
     if isShared or isAlways then
-        -- Same glyph with a closed ring and a gold tint for a standing offer, so the
-        -- bag and the share list never disagree.
-        marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
+        -- Same glyph with a closed ring and a gold tint for a standing offer, and an
+        -- amber tag on either when a reserve is set, so the bag and the share list
+        -- never disagree.
+        marker:SetTexture(GetShareBadgeTexture(itemLink, isAlways))
         marker.ItemShareAlways = isAlways and true or false
+        marker.ItemShareReserve = reserve
+        marker.ItemShareHeld = tonumber(sharedEntry and (sharedEntry.heldCount or sharedEntry.count) or 0) or 0
+        marker.ItemShareOffered = tonumber(sharedEntry and sharedEntry.count or 0) or 0
     end
 
     marker:SetHidden(not (isShared or isAlways))
@@ -2012,7 +2220,7 @@ end
 -- "Always share" is a standing offer rather than an inventory entry: it says "if
 -- I ever have this again, offer it". It lives in its own table so the rebuild
 -- pass, which prunes anything missing from a readable bag, can never delete it.
-local function GetAlwaysShareTable()
+GetAlwaysShareTable = function()
     if not ItemShare.savedVars then
         return {}
     end
@@ -2024,7 +2232,7 @@ end
 
 -- Keyed by item link, not by the inventory key: the offer is about the item, and
 -- it has to survive the item being in a different bag or in no bag at all.
-local function GetAlwaysShareKey(itemLink)
+GetAlwaysShareKey = function(itemLink)
     return tostring(itemLink or "")
 end
 
@@ -2307,9 +2515,10 @@ local function GetTrackedBagIds()
     return bagIds
 end
 
-local function BuildActualInventoryIndex()
+BuildActualInventoryIndex = function()
     local countsByEntryKey = {}
     local countsByLink = {}
+    local locationsByLink = {}
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
@@ -2345,6 +2554,15 @@ local function BuildActualInventoryIndex()
                             itemData = itemData,
                         }
                         countsByLink[itemData.itemLink] = (countsByLink[itemData.itemLink] or 0) + stackCount
+                        if not locationsByLink[itemData.itemLink] then
+                            locationsByLink[itemData.itemLink] = {
+                                sharedFrom = locationLabel,
+                                locationKey = locationKey,
+                                bagId = bagId,
+                                slotIndex = slotIndex,
+                                itemData = itemData,
+                            }
+                        end
 
                         if tonumber(itemData.furnitureDataId) > 0 then
                             local furnitureDataId = tonumber(itemData.furnitureDataId)
@@ -2389,6 +2607,7 @@ local function BuildActualInventoryIndex()
         observableLocationKeys = observableLocationKeys,
         countsByEntryKey = countsByEntryKey,
         countsByLink = countsByLink,
+        locationsByLink = locationsByLink,
         bagCountsByFurnitureDataId = bagCountsByFurnitureDataId,
         placedCountsByFurnitureDataId = placedCountsByFurnitureDataId,
         placedCountsByName = placedCountsByName,

@@ -11,16 +11,31 @@ import { createHash } from 'node:crypto';
 const ICON_BASE = 'https://esoicons.uesp.net';
 const MAX_ICON_BYTES = 512 * 1024;
 
+/**
+ * The game path for an icon, with the leading slash the mirror needs.
+ *
+ * Some client getters answer without it (`esoui/art/icons/x.dds`), and that used to
+ * be dropped by every step below, which left the item permanently blank even though
+ * the path was correct. Repairing it once here keeps the key and the URL agreeing.
+ */
+export function gameIconPath(value) {
+  const path = String(value || '').trim();
+  if (!path) {
+    return '';
+  }
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
 /** Stable cache key for an icon path. */
 export function iconCacheKey(iconPath) {
-  const path = String(iconPath || '').trim();
+  const path = gameIconPath(iconPath);
   return path ? createHash('sha1').update(path, 'utf8').digest('hex') : '';
 }
 
 /** UESP PNG URL for a game icon path, or '' when the path is unusable. */
 export function iconSourceUrl(iconPath) {
-  const path = String(iconPath || '').trim();
-  if (!path.startsWith('/')) {
+  const path = gameIconPath(iconPath);
+  if (!path) {
     return '';
   }
   return `${ICON_BASE}${path.replace(/\.dds$/i, '.png')}`;
@@ -37,13 +52,7 @@ export function iconSourceUrl(iconPath) {
  * @returns {Promise<{fetched: number, skipped: number, failed: number}>}
  */
 export async function cacheItemIcons(connection, iconPaths, { limit = 60, fetcher = fetch } = {}) {
-  const paths = [
-    ...new Set(
-      (iconPaths || [])
-        .map((path) => String(path || '').trim())
-        .filter((path) => path.startsWith('/'))
-    ),
-  ];
+  const paths = [...new Set((iconPaths || []).map(gameIconPath).filter(Boolean))];
 
   if (paths.length === 0) {
     return { fetched: 0, skipped: 0, failed: 0 };
@@ -169,10 +178,51 @@ export function normalizeIconPath(value) {
   return '';
 }
 
+const ITEM_EXPORT_URL = 'https://esoitem.uesp.net/exportJson.php';
+
+/**
+ * Second source for one item's icon, through UESP's item database rather than its
+ * item page. Set items are why this exists: their item page can answer without an
+ * icon, while the mined summary row for the same id still carries one.
+ */
+export async function resolveIconPathFromItemExport(
+  itemId,
+  { fetcher = fetch, timeoutMs = 8000 } = {}
+) {
+  const id = Number(itemId);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return '';
+  }
+
+  try {
+    const response = await fetcher(
+      `${ITEM_EXPORT_URL}?table=minedItemSummary&id=${encodeURIComponent(id)}`,
+      {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { 'User-Agent': 'ItemShare icon lookup' },
+      }
+    );
+
+    if (!response.ok) {
+      return '';
+    }
+
+    // The row's field names have moved before, so the path is found in the payload
+    // rather than read from one guessed property.
+    return normalizeIconPath(await response.text());
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Asks UESP for one item's icon path. Best effort: a missing page, a redirect, a
  * network failure or a page that no longer embeds an icon all return '' rather
  * than throwing, because an icon is never worth failing an upload over.
+ *
+ * Two endpoints are tried: the item link page first, then the item database, which
+ * often answers for items the page has no icon for.
  */
 export async function resolveIconPathByItemId(itemId, { fetcher = fetch, timeoutMs = 8000 } = {}) {
   const id = Number(itemId);
@@ -191,7 +241,12 @@ export async function resolveIconPathByItemId(itemId, { fetcher = fetch, timeout
       return '';
     }
 
-    return normalizeIconPath(await response.text());
+    const fromItemPage = normalizeIconPath(await response.text());
+    if (fromItemPage) {
+      return fromItemPage;
+    }
+
+    return resolveIconPathFromItemExport(id, { fetcher, timeoutMs });
   } catch {
     return '';
   }
