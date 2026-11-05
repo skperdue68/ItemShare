@@ -97,6 +97,9 @@ function authArea(user, providers) {
             <span class="account-menu-name">${name}</span>
             <span class="account-menu-note">signed in via ${provider}</span>
           </div>
+          <button class="account-menu-item" type="button" role="menuitem" data-open-accounts>
+            ESO accounts
+          </button>
           <form method="post" action="/logout">
             <button class="account-menu-item" type="submit" role="menuitem">Log out</button>
           </form>
@@ -247,12 +250,24 @@ function accountsCard(accounts, user) {
       </div>`
     : '';
 
+  // Behind the profile menu rather than on the page: which accounts are linked, when
+  // each last uploaded and which guilds they are in is reference material, not
+  // something to read past on the way to the item list.
   return `
-    <section class="card">
-      <h2>${heading}</h2>
-      ${note}
-      ${blocks}
-    </section>`;
+    <div class="modal-backdrop" id="accountsModal" data-accounts-modal hidden>
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="accountsTitle">
+        <div class="modal-head">
+          <h2 id="accountsTitle">${heading}</h2>
+          <button class="modal-close" type="button" data-close-accounts aria-label="Close">&times;</button>
+        </div>
+        <p class="muted">
+          The ESO accounts linked to this login, when each last uploaded, and the guilds
+          they belong to. Nothing here needs doing while you are asking for items.
+        </p>
+        ${note}
+        ${blocks}
+      </div>
+    </div>`;
 }
 
 // The windows the Added filter offers. Anything else in the address bar falls back
@@ -400,9 +415,21 @@ function ownerCell(item) {
 // because the viewer and the owner share a guild.
 
 /**
+ * What is free and what is held. Both sides come from the same subtraction, so they
+ * can never add up to more than the owner reported: five copies with two asked for
+ * shows three free and two held, and a request that is still being picked counts as
+ * held because somebody is standing on it.
+ */
+function availability(item) {
+  const total = Number(item.item_count) || 0;
+  const reserved = Math.min(Math.max(Number(item.reserved) || 0, 0), Math.max(total, 0));
+  return { total, reserved, free: Math.max(0, total - reserved) };
+}
+
+/**
  * The button that starts a request, or the reason there is none. data-max is what is
- * left after the requests already waiting - not the raw count - so the dialog can
- * never offer more than the owner still has unspoken for.
+ * left after everything held - unsent baskets included - so the dialog can never
+ * offer a copy that is not there.
  */
 function requestCell(item, { mine }) {
   if (mine) {
@@ -410,18 +437,21 @@ function requestCell(item, { mine }) {
     return asked > 0 ? `<span class="reserved-note">${asked} asked for</span>` : '';
   }
 
-  const total = Number(item.item_count) || 0;
-  const reserved = Number(item.reserved) || 0;
-  const available = Math.max(0, total - reserved);
-  const note = reserved > 0 ? `<span class="reserved-note">${reserved} already asked for</span>` : '';
+  const { total, reserved, free } = availability(item);
+  const note =
+    reserved > 0
+      ? `<span class="reserved-note">${reserved} held${
+          Number(item.draft_count) > 0 ? ' &middot; being picked' : ''
+        }</span>`
+      : '';
 
-  if (available <= 0) {
-    return `<span class="claimed-note">All claimed</span>${note}`;
+  if (free <= 0) {
+    return `<span class="claimed-note">All held</span>${note}`;
   }
 
   return `<button class="request-button" type="button" data-request data-kind="inventory" data-id="${Number(
     item.id
-  )}" data-max="${available}" data-stack="${total}" data-name="${escapeHtml(
+  )}" data-max="${free}" data-stack="${total}" data-name="${escapeHtml(
     item.item_name || ''
   )}">Request</button>${note}`;
 }
@@ -456,7 +486,8 @@ function inventoryRows(items, { mine }) {
           <td class="seen-cell" title="The day ${escapeHtml(
             item.account_name
           )} first shared it">${added || '&mdash;'}</td>
-          <td class="num">${Number(item.item_count) || 0}</td>
+          <td class="num">${availability(item).free}</td>
+          <td class="num held-cell">${availability(item).reserved || '&mdash;'}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
           <td>${escapeHtml(item.trait || '')}</td>
           <td>${ownerCell(item)}</td>
@@ -490,7 +521,7 @@ function inventoryTable(items, { mine, filters = {} }) {
         .map(
           ([typeName, rows]) => `
         <tr class="type-row">
-          <td colspan="7">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
+          <td colspan="8">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
         </tr>
         ${inventoryRows(rows, { mine })}`
         )
@@ -504,7 +535,8 @@ function inventoryTable(items, { mine, filters = {} }) {
           <tr>
             ${sortHeader('Item', 'name', filters)}
             ${sortHeader('Added', 'added', filters, 'seen-cell')}
-            <th class="num">Qty</th>
+            <th class="num" title="Copies nobody is holding">Free</th>
+            <th class="num" title="Copies held by a request, sent or still being picked">Held</th>
             <th>Type</th>
             <th>Trait</th>
             <th>Offered by</th>
@@ -594,10 +626,12 @@ export function listRegionSignature({ accounts = [], facets = {} } = {}) {
 
 function requestStatusPill(request) {
   const labels = {
+    draft: 'Not sent',
     pending: 'Waiting',
     cancelled: 'Cancelled',
     fulfilled: 'Handed over',
     declined: 'Declined',
+    expired: 'Timed out',
   };
   const status = String(request.status || 'pending');
 
@@ -608,8 +642,10 @@ function requestStatusPill(request) {
 
 function myRequestRows(requests) {
   return requests
-    .map(
-      (request) => `
+    .map((request) => {
+      const isDraft = request.status === 'draft';
+
+      return `
         <tr data-my-request data-request-id="${Number(request.id)}"
             data-status="${escapeHtml(request.status)}"
             data-request-name="${escapeHtml(request.item_name || 'that item')}"
@@ -621,32 +657,103 @@ function myRequestRows(requests) {
             <span class="item-meta">${metaLine([
               request.item_type_name,
               request.item_kind === 'offer' ? 'from a standing offer' : 'from their bags',
-              request.status !== 'pending' ? request.status_reason : '',
+              request.status !== 'pending' && !isDraft ? request.status_reason : '',
             ])}</span>
           </td>
           <td><span class="owner">${escapeHtml(request.owner_account_name)}</span></td>
           <td class="num">${Number(request.quantity) || 1}</td>
           <td>${requestStatusPill(request)}</td>
           <td class="action-cell">${
-            request.status === 'pending'
+            isDraft
               ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
                   request.id
-                )}">Cancel</button>`
-              : ''
+                )}">Remove</button>`
+              : request.status === 'pending'
+                ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
+                    request.id
+                  )}">Cancel</button>`
+                : ''
           }</td>
-        </tr>`
-    )
+        </tr>`;
+    })
     .join('');
 }
 
+/** seconds -> m:ss, for the one clock the whole basket shares. */
+export function formatCountdown(seconds) {
+  const total = Math.max(0, Math.trunc(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The basket: everything picked but not sent, with the one clock they all share.
+ *
+ * It is separate from the table of sent requests below it because the two mean
+ * different things - nobody has been asked for these yet, and the countdown is the
+ * whole point of them.
+ */
+/**
+ * The bar that says "you are holding these, send them before the clock runs out".
+ *
+ * It sits above the tabs rather than inside *Your requests*, because the moment a
+ * request is picked is the moment the clock starts: someone who never opens that tab
+ * still has to see the timer and the way to send.
+ */
+function draftBasketBar(drafts, basket) {
+  const seconds = Math.max(0, Number(basket?.secondsLeft) || 0);
+  const copies = drafts.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
+
+  return `
+    <div class="draft-basket" data-basket data-items="${drafts.length}"
+         data-seconds="${seconds}" data-expires-in="${seconds}">
+      <div class="draft-basket-text">
+        <strong>${drafts.length} item${drafts.length === 1 ? '' : 's'} held for you${
+          copies > drafts.length ? ` (${copies} copies)` : ''
+        }</strong>
+        <span class="muted">
+          Nobody has been asked yet. Send them before the clock runs out, or the items go
+          back to being available to everyone else.
+        </span>
+      </div>
+      <div class="draft-basket-actions">
+        <span class="countdown" data-countdown aria-label="Time left to send">${formatCountdown(
+          seconds
+        )}</span>
+        <button class="primary-button" type="button" data-submit-requests>Send requests</button>
+      </div>
+    </div>`;
+}
+
+/** The items in the basket, each removcable until the basket is sent. */
+function draftTable(drafts) {
+  return `
+    <div class="table-shell">
+      <table>
+        <thead>
+          <tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Status</th>
+              <th class="action-cell"><span class="visually-hidden">Actions</span></th></tr>
+        </thead>
+        <tbody>${myRequestRows(drafts)}</tbody>
+      </table>
+    </div>`;
+}
+
 function myRequestsPanel(requests) {
-  if (!requests || requests.length === 0) {
+  const all = requests || [];
+  const drafts = all.filter((request) => request.status === 'draft');
+  const sent = all.filter((request) => request.status !== 'draft');
+
+  if (all.length === 0) {
     return `<p class="muted">You have not asked for anything yet. Everything other members of your guilds are sharing is on the Request tab, where you can ask for one, for a number, or for the whole stack.</p>`;
   }
 
-  return `
+  const sentTable =
+    sent.length === 0
+      ? ''
+      : `${drafts.length > 0 ? '<h3 class="subhead">Already sent</h3>' : ''}
     <p class="muted">
-      First asked, first served. What you ask for is held for you until the owner hands it
+      First sent, first served. What you ask for is held for you until the owner hands it
       over; if their file no longer contains the item, or the rest of the stack goes first,
       the request closes here and says why.
     </p>
@@ -656,9 +763,11 @@ function myRequestsPanel(requests) {
           <tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Status</th>
               <th class="action-cell"><span class="visually-hidden">Actions</span></th></tr>
         </thead>
-        <tbody>${myRequestRows(requests)}</tbody>
+        <tbody>${myRequestRows(sent)}</tbody>
       </table>
     </div>`;
+
+  return `${drafts.length > 0 ? `<h3 class="subhead">Not sent yet</h3>${draftTable(drafts)}` : ''}${sentTable}`;
 }
 
 /**
@@ -676,6 +785,7 @@ export function renderListRegion({
   facets,
   filters,
   requests,
+  basket,
 }) {
   if (!accounts || accounts.length === 0) {
     return '';
@@ -687,13 +797,16 @@ export function renderListRegion({
   const othersOffers = (alwaysShare || []).filter((item) => !myAccounts.has(item.account_name));
   const myOffers = (alwaysShare || []).filter((item) => myAccounts.has(item.account_name));
   const myRequests = requests || [];
+  const unsent = myRequests.filter((request) => request.status === 'draft');
 
   const activeFilters = Boolean(
     filters?.type || filters?.owner || filters?.search || filters?.added
   );
   const requestCount = requestable.length + othersOffers.length;
   const offerCount = myItems.length + myOffers.length;
-  const waitingCount = myRequests.filter((request) => request.status === 'pending').length;
+  const waitingCount = myRequests.filter(
+    (request) => request.status === 'pending' || request.status === 'draft'
+  ).length;
 
   const empty = (fallback) =>
     `<p class="muted">${
@@ -730,6 +843,7 @@ export function renderListRegion({
       listRegionSignature({ accounts, facets })
     )}">
       <section class="card">
+        ${unsent.length > 0 ? draftBasketBar(unsent, basket) : ''}
         <div class="list-head">
           <div class="tabs" role="tablist" aria-label="Item lists">
             <button class="tab" type="button" role="tab" id="tabRequest" aria-controls="panelRequest"
@@ -866,6 +980,7 @@ export function renderPage({
   facets,
   filters,
   requests,
+  basket,
   dbError,
 }) {
   const canUpload = !dbError && (!providers || providers.length === 0 || user);
@@ -882,7 +997,7 @@ export function renderPage({
     ${accountsCard(accounts, user)}
 
     ${bar ? `<section class="card card-filters">${bar}</section>` : ''}
-    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters, requests })}`;
+    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters, requests, basket })}`;
 
   return pageShell({ user, providers, content });
 }
