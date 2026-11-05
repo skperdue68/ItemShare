@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 
 import { iconCacheKey } from './icons.js';
+import { sanitizeAvatarUrl } from './identity.js';
 
 const ITEM_COLUMNS = [
   'account_name',
@@ -464,13 +465,14 @@ export async function replaceAccounts(
  */
 export async function signInWithProvider(
   connection,
-  { provider, providerUserId, username, email, emailVerified }
+  { provider, providerUserId, username, email, emailVerified, avatarUrl = '' }
 ) {
   const providerKey = String(provider);
   const subject = String(providerUserId);
   const address = email || '';
   const verified = Boolean(emailVerified);
   const name = username || '';
+  const picture = sanitizeAvatarUrl(avatarUrl);
 
   const [identityRows] = await connection.execute(
     'SELECT user_id FROM itemshare_user_identities WHERE provider = ? AND provider_user_id = ?',
@@ -497,8 +499,8 @@ export async function signInWithProvider(
 
   if (userId === null) {
     const [inserted] = await connection.execute(
-      'INSERT INTO itemshare_users (display_name, email, email_verified) VALUES (?, ?, ?)',
-      [name, address, verified ? 1 : 0]
+      'INSERT INTO itemshare_users (display_name, email, email_verified, avatar_url) VALUES (?, ?, ?, ?)',
+      [name, address, verified ? 1 : 0, picture]
     );
     userId = Number(inserted.insertId);
     matched = 'created';
@@ -507,9 +509,10 @@ export async function signInWithProvider(
       `UPDATE itemshare_users
           SET display_name = IF(? = '', display_name, ?),
               email = IF(? = '', email, ?),
-              email_verified = IF(? = 1, 1, email_verified)
+              email_verified = IF(? = 1, 1, email_verified),
+              avatar_url = IF(? = '', avatar_url, ?)
         WHERE id = ?`,
-      [name, name, address, address, verified ? 1 : 0, userId]
+      [name, name, address, address, verified ? 1 : 0, picture, picture, userId]
     );
   }
 
@@ -525,7 +528,7 @@ export async function signInWithProvider(
     [providerKey, subject, userId, name, address, verified ? 1 : 0]
   );
 
-  return { userId, displayName: name, email: address, emailVerified: verified, matched };
+  return { userId, displayName: name, email: address, emailVerified: verified, avatarUrl: picture, matched };
 }
 
 /** Email for an ESO account's owner, for request notifications. */

@@ -757,3 +757,26 @@ a.primary-button {
   align-items: center;
   text-decoration: none;
 }
+
+/* Profile picture layered over the initials, so a failed load still looks right. */
+.avatar-with-photo {
+  position: relative;
+  overflow: hidden;
+}
+
+.avatar-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.avatar-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}

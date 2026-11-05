@@ -124,3 +124,9 @@ if (accountMenuButton && accountMenuPanel) {
     }
   });
 }
+
+// A profile picture can stop loading (revoked URL, offline, provider outage). Drop
+// the image so the initials underneath show rather than a broken-image marker.
+document.querySelectorAll('.avatar-photo').forEach((photo) => {
+  photo.addEventListener('error', () => photo.remove());
+});

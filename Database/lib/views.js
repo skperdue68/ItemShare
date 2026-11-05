@@ -52,13 +52,24 @@ function authArea(user, providers) {
   if (user) {
     const name = escapeHtml(user.username || 'signed in');
     const provider = escapeHtml(user.providerLabel || user.provider || 'sign-in');
+    const initials = escapeHtml(initialsFor(user.username));
+
+    // The picture sits on top of the initials, so if it fails to load the initials are
+    // already there. app.js removes a broken image; without scripts the alt text is
+    // empty, so nothing worse than a blank circle appears.
+    const avatar = user.avatarUrl
+      ? `<span class="avatar avatar-with-photo" aria-hidden="true">
+            <span class="avatar-initials">${initials}</span>
+            <img class="avatar-photo" src="${escapeHtml(user.avatarUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          </span>`
+      : `<span class="avatar" aria-hidden="true">${initials}</span>`;
 
     return `
       <div class="account-menu">
         <button class="avatar-button" type="button" id="accountMenuButton"
                 aria-haspopup="true" aria-expanded="false" aria-controls="accountMenuPanel"
                 title="${name}">
-          <span class="avatar" aria-hidden="true">${escapeHtml(initialsFor(user.username))}</span>
+          ${avatar}
           <span class="avatar-caret" aria-hidden="true"></span>
           <span class="visually-hidden">Account menu for ${name}</span>
         </button>
