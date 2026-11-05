@@ -1,3 +1,7 @@
+# ItemShare
+
+An ESO addon that marks tradeable items as shareable and writes them to `ItemShareSavedVars`, which the ItemShare website reads. This repository holds the addon only; the website is a separate project.
+
 Requires LibCustomMenu
 
 Download and extract to your ESO AddOns Directory
