@@ -237,12 +237,10 @@
 <tr><td><code>/itemshare reserve &lt;amount&gt; &lt;part of the name&gt;</code></td><td>Keeps that many back and offers the rest.</td></tr>
 <tr><td><code>/itemshare noreserve &lt;part of the name&gt;</code></td><td>Shares the whole stack again.</td></tr>
 <tr><td><code>/itemshare reserves</code></td><td>Lists every item with a reserve, and what it is offering.</td></tr>
-<tr><td><code>/itemshare stamp</code></td><td>Refreshes the guild list that shares are matched against.</td></tr>
-            <tr><td><code>/itemshare export</code></td><td>Writes a website-compatible copy of your shares to <code>ItemShareExport.lua</code> for upload. Alias: <code>compat</code>.</td></tr>
 <tr><td><code>/itemshare guildbank</code></td><td>Toggles sharing from the guild bank, which is off by default.</td></tr>
 </table>
 <p>
-Guild names and IDs are stored once, by guild ID, and every share is matched to them; the addon no longer copies the list onto each item. Because the website reads the older layout, <code>/itemshare export</code> writes a complete compatibility copy to a second saved-variables file, <code>ItemShareExport.lua</code>. Upload that file until the site reads the guild table directly.
+Guild names and IDs are stored once, by guild ID, and every share is matched to the guilds of the character that shared it. The list is not copied onto each item, so a renamed guild or a character leaving one updates everything that points at it.
 </p>
 
 
