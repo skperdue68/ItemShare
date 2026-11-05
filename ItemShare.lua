@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.4"
+local ADDON_VERSION = "1.10.5"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -55,6 +55,7 @@ local RemoveAlwaysShareForItemLink
 local SaveAlwaysShareEntry
 local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
+local BuildSharedItemKey
 local IsSavedEntryEligibleForShare
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
@@ -178,85 +179,64 @@ local function GetShareListEntries()
         return inventoryIndex or nil
     end
 
-    -- Every place a stack of this link was found, not just the one it was marked
-    -- from: a count that includes the bank should say so. The labels come from the
-    -- same pass that produced the count, so the two can never disagree, and a bag
-    -- that could not be read contributes neither.
-    local function JoinLocationLabels(index, link, fallback)
-        local labelsSeen = {}
-        local indexLabels = index and index.locationLabelsByLink and index.locationLabelsByLink[link]
-
-        if type(indexLabels) == "table" then
-            for label in pairs(indexLabels) do
-                local text = tostring(label or "")
-                if text ~= "" then
-                    labelsSeen[text] = true
-                end
-            end
+    -- The place a share was filed from, used to keep the rows apart. Older entries
+    -- stored only the label, so the label stands in for the key when there is none.
+    local function GetEntryLocationKey(entry)
+        local locationKey = tostring(entry and entry.locationKey or "")
+        if locationKey == "" then
+            locationKey = tostring(entry and entry.sharedFrom or "")
         end
-
-        local texts = {}
-        for text in pairs(labelsSeen) do
-            texts[#texts + 1] = text
-        end
-
-        if #texts == 0 then
-            return tostring(fallback or "")
-        end
-
-        table.sort(texts)
-        return table.concat(texts, " + ")
+        return locationKey
     end
 
-    -- One row per item, not one row per stack. A share is filed by the stack it was
-    -- marked from, so two stacks of 20 of the same thing were two rows saying 20
-    -- each when what is actually available is 40. The stacks are folded together
-    -- here, and the count comes from every stack of that link the bags report.
-    local sharesByLink = {}
+    -- One row per item per place, not one row per stack. Stacks of the same thing in
+    -- one bag are one offer - two stacks of soul gems in the bank are 400 to hand
+    -- over - but a share in the bags and a share in the bank stay two rows, because
+    -- that is how they are taken back: one row, one place, one removal. Adding them
+    -- up across places made the count something you could point at in neither bag.
+    local sharesByPlace = {}
     local shareOrder = {}
 
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
         local link = tostring(entry.itemLink or "")
-        local groupKey = link ~= "" and link or tostring(itemKey)
+        local locationKey = GetEntryLocationKey(entry)
+        local groupKey = link ~= "" and (link .. "||" .. locationKey) or tostring(itemKey)
 
-        local group = sharesByLink[groupKey]
+        local group = sharesByPlace[groupKey]
         if not group then
             group = {
-                itemKey = itemKey,
+                itemKey = tostring(itemKey),
                 entry = entry,
                 itemLink = link,
+                locationKey = locationKey,
                 stacksHeld = 0,
-                locations = {},
-                locationTexts = {},
+                stackCount = 0,
             }
-            sharesByLink[groupKey] = group
+            sharesByPlace[groupKey] = group
             shareOrder[#shareOrder + 1] = groupKey
         end
 
         group.stacksHeld = group.stacksHeld + GetEntryHeldCount(entry)
-
-        local from = tostring(entry.sharedFrom or "")
-        if from ~= "" and not group.locations[from] then
-            group.locations[from] = true
-            group.locationTexts[#group.locationTexts + 1] = from
-        end
+        group.stackCount = group.stackCount + 1
     end
 
     table.sort(shareOrder)
 
     for _, groupKey in ipairs(shareOrder) do
-        local group = sharesByLink[groupKey]
+        local group = sharesByPlace[groupKey]
         local entry = group.entry
         local link = group.itemLink
         local reserve = link ~= "" and GetShareReserve(link) or 0
 
         -- The count comes from the shares themselves, not from measuring the bags
-        -- again. Each entry was written with the stack it was filed from, and sync,
-        -- rebuild and the login pass keep those counts in step, so opening this
-        -- window is a read of saved data. That is also why the bank's stack is in
+        -- again. Each entry was written with the whole bag's worth of that item, and
+        -- sync, rebuild and the login pass keep those counts in step, so opening
+        -- this window is a read of saved data. That is also why the bank's row is
         -- here while the bank is shut: it was counted when it was shared.
         local held = group.stacksHeld
-        local count = ShareableCount(link, held)
+        -- The reserve is not taken off here: it belongs to the item, and with rows
+        -- per place it has to come off once across them, not once in each row.
+        local count = held
 
         -- A share that is entirely inside its reserve is still a share: it stays in
         -- the window with nothing on offer, so the reserve can be seen and changed
@@ -269,18 +249,19 @@ local function GetShareListEntries()
 
             copy.itemKey = group.itemKey
             copy.itemLink = link
+            copy.locationKey = group.locationKey
             copy.count = count
             copy.reserve = reserve
             copy.heldCount = held
-            copy.stackCount = #group.locationTexts
+            copy.stackCount = group.stackCount
 
-            -- Every place a shared stack was filed from, in a fixed order. The count
-            -- above adds up those same stacks, so the places named and the stacks
-            -- counted are one list by construction.
-            if #group.locationTexts > 0 then
-                table.sort(group.locationTexts)
-                copy.sharedFrom = table.concat(group.locationTexts, " + ")
+            -- The one place this row counts, and the only place it can be taken back
+            -- from. Naming a single place is what makes the row removable.
+            local label = tostring(copy.sharedFrom or "")
+            if label == "" then
+                label = group.locationKey
             end
+            copy.sharedFrom = label
 
             entries[#entries + 1] = copy
 
@@ -299,35 +280,73 @@ local function GetShareListEntries()
             end
         end
 
-        local index = #waiting > 0 and GetListInventoryIndex() or nil
-        if index then
+        local alwaysIndex = #waiting > 0 and GetListInventoryIndex() or nil
+        if alwaysIndex then
             for _, alwaysEntry in ipairs(waiting) do
                 local link = tostring(alwaysEntry.itemLink or "")
-                local held = math.max(0, tonumber(index.countsByLink[link] or 0) or 0)
-                local offered = ShareableCount(link, held)
-
-                -- A standing offer is a promise, so it stays in the window even when
-                -- there is nothing in a bag to hand over at this moment: the row says
-                -- where it would come from and the badge says the offer still stands.
                 if link ~= "" then
-                    local location = index.locationsByLink and index.locationsByLink[link] or nil
-                    entries[#entries + 1] = {
-                        itemKey = link,
-                        itemLink = link,
-                        itemName = tostring(alwaysEntry.itemName or link),
-                        itemType = alwaysEntry.itemType,
-                        itemTypeName = alwaysEntry.itemTypeName,
-                        quality = alwaysEntry.quality,
-                        trait = alwaysEntry.trait,
-                        heldCount = held,
-                        reserve = GetShareReserve(link),
-                        count = offered,
-                        sharedFrom = JoinLocationLabels(index, link, location and tostring(location.sharedFrom or "") or "Not in a bag"),
-                        locationKey = location and tostring(location.locationKey or "") or "",
-                        bagId = location and location.bagId or nil,
-                        slotIndex = location and location.slotIndex or nil,
-                        alwaysOnly = true,
-                    }
+                    -- A standing offer is about the item, but the number beside it
+                    -- still belongs to one place: a promise held in the bags and in
+                    -- the bank is one row each, each counting only its own stacks,
+                    -- so no row ever adds two storages together.
+                    local places = {}
+                    for entryKey, actualEntry in pairs(alwaysIndex.countsByEntryKey or {}) do
+                        local entryLink, entryLocationKey = string.match(entryKey, "^(.*)||([^|]*)$")
+                        if tostring(entryLink or "") == link and type(actualEntry) == "table" then
+                            places[#places + 1] = {
+                                locationKey = tostring(entryLocationKey or ""),
+                                actual = actualEntry,
+                            }
+                        end
+                    end
+
+                    table.sort(places, function(left, right)
+                        return tostring(left.locationKey or "") < tostring(right.locationKey or "")
+                    end)
+
+                    if #places == 0 then
+                        -- A standing offer is a promise, so it stays in the window
+                        -- even when there is nothing in a bag to hand over at this
+                        -- moment: the row says it is not in a bag and the badge says
+                        -- the offer still stands.
+                        entries[#entries + 1] = {
+                            itemKey = link,
+                            itemLink = link,
+                            itemName = tostring(alwaysEntry.itemName or link),
+                            itemType = alwaysEntry.itemType,
+                            itemTypeName = alwaysEntry.itemTypeName,
+                            quality = alwaysEntry.quality,
+                            trait = alwaysEntry.trait,
+                            heldCount = 0,
+                            reserve = GetShareReserve(link),
+                            count = 0,
+                            sharedFrom = "Not in a bag",
+                            locationKey = "",
+                            alwaysOnly = true,
+                        }
+                    else
+                        for _, place in ipairs(places) do
+                            local held = math.max(0, tonumber(place.actual.count or 0) or 0)
+                            entries[#entries + 1] = {
+                                itemKey = link,
+                                itemLink = link,
+                                itemName = tostring(alwaysEntry.itemName or link),
+                                itemType = alwaysEntry.itemType,
+                                itemTypeName = alwaysEntry.itemTypeName,
+                                quality = alwaysEntry.quality,
+                                trait = alwaysEntry.trait,
+                                heldCount = held,
+                                reserve = GetShareReserve(link),
+                                count = held,
+                                sharedFrom = tostring(place.actual.sharedFrom or place.locationKey or "Not in a bag"),
+                                locationKey = place.locationKey,
+                                bagId = place.actual.bagId,
+                                slotIndex = place.actual.slotIndex,
+                                alwaysOnly = true,
+                            }
+                        end
+                    end
+
                     linksListed[link] = true
                 end
             end
@@ -352,11 +371,18 @@ local function GetShareListEntries()
 
     if #reserveLinks > 0 then
         table.sort(reserveLinks)
-        local index = GetListInventoryIndex()
+        local reserveIndex = GetListInventoryIndex()
         for _, link in ipairs(reserveLinks) do
-            local location = index and index.locationsByLink and index.locationsByLink[link] or nil
+            local location = reserveIndex and reserveIndex.locationsByLink and reserveIndex.locationsByLink[link] or nil
             local itemData = location and location.itemData or nil
-            local held = math.max(0, tonumber(index and index.countsByLink[link] or 0) or 0)
+            -- One place, one place's count: the reserve is about the item, but the
+            -- number shown must not total bags the row does not name.
+            local held = 0
+            if location then
+                local locationEntry = reserveIndex.countsByEntryKey
+                    and reserveIndex.countsByEntryKey[BuildSharedItemKey(link, tostring(location.locationKey or ""))]
+                held = math.max(0, tonumber(locationEntry and locationEntry.count or 0) or 0)
+            end
 
             entries[#entries + 1] = {
                 itemKey = link,
@@ -374,7 +400,7 @@ local function GetShareListEntries()
                 -- Nothing is on offer from a reserved item that is not shared, so the
                 -- count column says zero while the row still shows what is kept back.
                 count = 0,
-                sharedFrom = JoinLocationLabels(index, link, location and tostring(location.sharedFrom or "") or "Not in a bag"),
+                sharedFrom = location and tostring(location.sharedFrom or "Not in a bag") or "Not in a bag",
                 locationKey = location and tostring(location.locationKey or "") or "",
                 bagId = location and location.bagId or nil,
                 slotIndex = location and location.slotIndex or nil,
@@ -403,6 +429,27 @@ local function GetShareListEntries()
 
         return tostring(a.itemLink or "") < tostring(b.itemLink or "")
     end)
+
+    -- The reserve is one number for the item, not one per place: taking it off every
+    -- row would quietly keep back one reserve per bag. It comes off once, from that
+    -- item's rows in the order the window shows them, so the rows still add up to the
+    -- item's total above the reserve and the top row is where the keep was taken.
+    local reserveLeftByLink = {}
+    for _, row in ipairs(entries) do
+        local link = tostring(row.itemLink or "")
+        local reserve = math.max(0, math.floor(tonumber(row.reserve or 0) or 0))
+        if link ~= "" and reserve > 0 and not row.reserveOnly then
+            local reserveLeft = reserveLeftByLink[link]
+            if reserveLeft == nil then
+                reserveLeft = reserve
+            end
+
+            local held = math.max(0, math.floor(tonumber(row.heldCount or 0) or 0))
+            local applied = math.min(reserveLeft, held)
+            reserveLeftByLink[link] = reserveLeft - applied
+            row.count = math.max(0, held - applied)
+        end
+    end
 
     return entries
 end
@@ -1279,7 +1326,7 @@ local function GetBagLocationInfo(bagId)
     return string.format("bag:%s", tostring(bagId)), string.format("Bag %s", tostring(bagId))
 end
 
-local function BuildSharedItemKey(itemLink, locationKey)
+BuildSharedItemKey = function(itemLink, locationKey)
     return string.format("%s||%s", tostring(itemLink or ""), tostring(locationKey or ""))
 end
 
@@ -2194,6 +2241,28 @@ local function HookInventoryRowCallbacks()
     TryRefreshInventoryVisuals()
 end
 
+-- What one bag holds of an item, as one number. Sharing any stack of soul gems in
+-- the bank means sharing every stack of them there: one entry, and a count that is
+-- the whole bag's worth. Without this each click replaced the last one's count, so
+-- two bank stacks of 200 came out as 200 while the badge sat on both of them.
+local function GetLocationShareCount(bagId, itemLink)
+    local link = tostring(itemLink or "")
+    if bagId == nil or link == "" then
+        return 0
+    end
+
+    local bagSize = GetBagSize(bagId) or 0
+    local total = 0
+
+    for slotIndex = 0, bagSize - 1 do
+        if GetNormalizedItemLink(bagId, slotIndex) == link then
+            total = total + GetItemShareCount(bagId, slotIndex)
+        end
+    end
+
+    return total
+end
+
 local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
     if not isEligible then
@@ -2207,7 +2276,12 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
         return
     end
 
-    local stackCount = GetItemShareCount(bagId, slotIndex)
+    -- The whole bag, not the clicked stack: a second stack of the same item adds to
+    -- this share instead of overwriting what the first one recorded.
+    local stackCount = GetLocationShareCount(bagId, itemData.itemLink)
+    if stackCount <= 0 then
+        stackCount = GetItemShareCount(bagId, slotIndex)
+    end
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
     local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
 
@@ -2739,7 +2813,6 @@ BuildActualInventoryIndex = function()
     local countsByEntryKey = {}
     local countsByLink = {}
     local locationsByLink = {}
-    local locationLabelsByLink = {}
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
@@ -2775,8 +2848,6 @@ BuildActualInventoryIndex = function()
                             itemData = itemData,
                         }
                         countsByLink[itemData.itemLink] = (countsByLink[itemData.itemLink] or 0) + stackCount
-                        locationLabelsByLink[itemData.itemLink] = locationLabelsByLink[itemData.itemLink] or {}
-                        locationLabelsByLink[itemData.itemLink][locationLabel] = true
                         if not locationsByLink[itemData.itemLink] then
                             locationsByLink[itemData.itemLink] = {
                                 sharedFrom = locationLabel,
@@ -2828,7 +2899,6 @@ BuildActualInventoryIndex = function()
 
     return {
         observableLocationKeys = observableLocationKeys,
-        locationLabelsByLink = locationLabelsByLink,
         countsByEntryKey = countsByEntryKey,
         countsByLink = countsByLink,
         locationsByLink = locationsByLink,
