@@ -1,6 +1,8 @@
 // Server rendered pages. Styling lives in public/styles.css and follows the
 // GuildSync palette (navy gradient, translucent panels, blue accents).
 
+import { createHash } from 'node:crypto';
+
 export function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -146,13 +148,7 @@ function guildChips(guilds) {
   }
 
   const chips = guilds
-    .map(
-      (guild) => `
-        <span class="chip">
-          ${escapeHtml(guild.guild_name || 'Unknown guild')}
-          <span class="chip-id">${escapeHtml(guild.guild_id)}</span>
-        </span>`
-    )
+    .map((guild) => `<span class="chip">${escapeHtml(guild.guild_name || 'Unknown guild')}</span>`)
     .join('');
 
   return `<div class="chips">${chips}</div>`;
@@ -174,9 +170,13 @@ function accountsCard(accounts, user) {
       <section class="card">
         <h2>Your ESO accounts</h2>
         <p class="muted">
-          No ESO account is linked to your Discord user yet. Upload your
+          No ESO account is linked to your Discord login yet. Upload your
           <code>ItemShareSavedVars.lua</code> file below: every account in that file is
-          linked to this Discord login, and each account keeps its own items and guilds.
+          linked to this login, and each account keeps its own items and guilds.
+        </p>
+        <p class="muted">
+          Nothing is listed until you do. Items are shared through guilds, so until your
+          ESO account and its guilds are known there is nobody to share with you.
         </p>
         <div class="meta-row">${emailLine(user)}</div>
       </section>`;
@@ -242,6 +242,7 @@ function accountsCard(accounts, user) {
 function filterBar(facets, filters) {
   const types = facets?.types || [];
   const owners = facets?.owners || [];
+  const active = filters || { type: '', owner: '', search: '' };
 
   if (types.length === 0 && owners.length === 0) {
     return '';
@@ -250,117 +251,95 @@ function filterBar(facets, filters) {
   const typeOptions = types
     .map(
       (entry) => `
-            <option value="${escapeHtml(entry.name)}"${filters.type === entry.name ? ' selected' : ''}>${escapeHtml(entry.name)} (${entry.total})</option>`
+            <option value="${escapeHtml(entry.name)}"${active.type === entry.name ? ' selected' : ''}>${escapeHtml(entry.name)} (${entry.total})</option>`
     )
     .join('');
 
   const ownerOptions = owners
     .map(
       (owner) => `
-            <option value="${escapeHtml(owner)}"${filters.owner === owner ? ' selected' : ''}>${escapeHtml(owner)}</option>`
+            <option value="${escapeHtml(owner)}"${active.owner === owner ? ' selected' : ''}>${escapeHtml(owner)}</option>`
     )
     .join('');
 
+  // Filters apply as soon as they change (app.js), so there is no button to forget
+  // to press. The submit button exists for the one case that needs it: scripts off.
   return `
-    <form class="filters" method="get" action="/">
+    <form class="filters" method="get" action="/" data-filters>
       <label class="filter">
         <span class="filter-label">Type</span>
-        <select name="type">
+        <select name="type" data-filter>
           <option value="">All types</option>${typeOptions}
         </select>
       </label>
       <label class="filter">
-        <span class="filter-label">Owner</span>
-        <select name="owner">
+        <span class="filter-label">Offered by</span>
+        <select name="owner" data-filter>
           <option value="">Anyone</option>${ownerOptions}
         </select>
       </label>
       <label class="filter filter-search">
         <span class="filter-label">Item name</span>
-        <input type="search" name="q" value="${escapeHtml(filters.search)}" placeholder="sword, ring, motif...">
+        <input type="search" name="q" data-filter value="${escapeHtml(active.search)}" placeholder="sword, ring, motif...">
       </label>
-      <button class="primary-button filter-button" type="submit">Filter</button>
-      <a class="filter-clear" href="/">Clear</a>
+      <noscript><button class="primary-button filter-button" type="submit">Filter</button></noscript>
+      <button class="filter-clear" type="button" data-clear-filters>Clear filters</button>
     </form>`;
 }
 
-function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
-  if (!accounts || accounts.length === 0) {
-    return '';
-  }
+function itemIcon(item) {
+  return Number(item.has_icon) === 1
+    ? `<img class="item-icon" src="/icons/${escapeHtml(item.icon_key)}.png" alt="" width="24" height="24" loading="lazy">`
+    : `<span class="item-icon item-icon-empty" aria-hidden="true"></span>`;
+}
 
-  const heading = `
-    <section class="card">
-      <h2>Shared items in your guilds</h2>`;
+function itemName(item) {
+  const name = escapeHtml(item.item_name);
 
-  const activeFilters = Boolean(filters?.type || filters?.owner || filters?.search);
-  const bar = filterBar(facets, filters || { type: '', owner: '', search: '' });
+  return Number(item.item_id) > 0
+    ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
+    : name;
+}
 
-  if (!sharedItems || sharedItems.length === 0) {
-    return `${heading}
-      ${bar}
-      <p class="muted">
-        ${
-          activeFilters
-            ? 'No items match those filters. Clear them to see everything your guilds share.'
-            : 'Nothing is shared with your guilds yet. If you expected items here, check that both you and the owner uploaded a file from ItemShare 1.3.0+ while in the same guild.'
-        }
-      </p>
-    </section>`;
-  }
+// A detail earns its place only when it says something. The addon stores a "0" for
+// every getter that answered with a number, and "0" is not a label, so those are
+// dropped rather than printed next to the set name.
+function metaLine(parts) {
+  return parts
+    .filter((part) => part !== null && part !== undefined && !['', '0'].includes(String(part).trim()))
+    .map((part) => escapeHtml(part))
+    .join(' &middot; ');
+}
 
-  const myAccounts = new Set(accounts.map((account) => account.accountName));
+function ownerCell(item) {
+  return `<span class="owner">${escapeHtml(item.account_name)}</span>
+                <span class="owner-character">${escapeHtml(item.character_name || '')}</span>`;
+}
 
-  // An entry with no guild link reaches nobody through the guild join, so the
-  // owner gets it back here, labelled, instead of it quietly disappearing.
-  const unattributedCount = sharedItems.filter(
-    (item) => !item.guild_names && myAccounts.has(item.account_name)
-  ).length;
+// Guild names are deliberately absent: every row on this page is already there
+// because the viewer and the owner share a guild.
+function inventoryRows(items, { mine }) {
+  return items
+    .map((item) => {
+      const unattributed = !item.guild_names;
+      const details = metaLine([
+        item.set_name,
+        item.style_name,
+        item.enchant_name ? `Enchant: ${item.enchant_name}` : '',
+        Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
+        Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
+        item.location_label ? `owner had it in ${item.location_label}` : '',
+        seenDate(item.last_dumped_at) ? `last seen ${seenDate(item.last_dumped_at)}` : '',
+      ]);
 
-  const rowsFor = (items) =>
-    items
-      .map((item) => {
-        const isMine = myAccounts.has(item.account_name);
-        const icon =
-          Number(item.has_icon) === 1
-            ? `<img class="item-icon" src="/icons/${escapeHtml(item.icon_key)}.png" alt="" width="24" height="24" loading="lazy">`
-            : `<span class="item-icon item-icon-empty" aria-hidden="true"></span>`;
-
-        const name = escapeHtml(item.item_name);
-        const linkedName =
-          Number(item.item_id) > 0
-            ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
-            : name;
-
-        const unattributed = !item.guild_names;
-        const details = [
-          unattributed && isMine
-            ? 'no guild recorded - run /itemshare stamp in game, then upload again'
-            : '',
-          item.set_name,
-          item.quality_name,
-          item.weapon_type || item.armor_type || item.apparel_slot || item.equip_type,
-          item.trait,
-          item.enchant_name ? `Enchant: ${item.enchant_name}` : '',
-          Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
-          Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
-          item.style_name,
-          item.location_label ? `in ${item.location_label}` : '',
-          seenDate(item.last_dumped_at) ? `seen ${seenDate(item.last_dumped_at)}` : '',
-        ]
-          .filter(Boolean)
-          .map((part) => escapeHtml(part))
-          .join(' &middot; ');
-
-        return `
-        <tr>
+      return `
+        <tr data-item-key="inv:${escapeHtml(item.item_key_hash || item.id)}">
           <td>
             <div class="item-cell">
-              ${icon}
+              ${itemIcon(item)}
               <div class="item-cell-text">
-                <span class="item-name" style="color:${qualityColor(item.quality)}">${linkedName}</span>
-                ${isMine ? '<span class="own-tag">You</span>' : ''}
-                ${unattributed ? '<span class="own-tag">Unattributed</span>' : ''}
+                <span class="item-name" style="color:${qualityColor(item.quality)}">${itemName(item)}</span>
+                ${mine && unattributed ? '<span class="own-tag">Unattributed</span>' : ''}
                 ${details ? `<span class="item-meta">${details}</span>` : ''}
               </div>
             </div>
@@ -368,127 +347,180 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
           <td class="num">${Number(item.item_count) || 0}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
           <td>${escapeHtml(item.trait || '')}</td>
-          <td>${item.guild_names ? escapeHtml(item.guild_names) : '<span class="muted">none &mdash; unattributed</span>'}</td>
-          <td>
-            <span class="owner">${escapeHtml(item.account_name)}</span>
-            <span class="owner-character">${escapeHtml(item.character_name || '')}</span>
-          </td>
+          <td>${ownerCell(item)}</td>
         </tr>`;
-      })
-      .join('');
+    })
+    .join('');
+}
 
+function typeGroups(items) {
   const groups = new Map();
-  for (const item of sharedItems) {
-    const typeName = item.item_type_name || 'Other';
-    if (!groups.has(typeName)) {
-      groups.set(typeName, []);
+
+  for (const item of items) {
+    const name = item.item_type_name || 'Other';
+    if (!groups.has(name)) {
+      groups.set(name, []);
     }
-    groups.get(typeName).push(item);
+    groups.get(name).push(item);
   }
 
-  const body = [...groups.entries()]
+  return [...groups.entries()];
+}
+
+function inventoryTable(items, options) {
+  const body = typeGroups(items)
     .map(
-      ([typeName, items]) => `
+      ([typeName, rows]) => `
         <tr class="type-row">
-          <td colspan="6">${escapeHtml(typeName)} <span class="type-count">${items.length}</span></td>
+          <td colspan="5">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
         </tr>
-        ${rowsFor(items)}`
+        ${inventoryRows(rows, options)}`
     )
     .join('');
 
-  return `${heading}
-    <p class="muted">
-      ${sharedItems.length} item${sharedItems.length === 1 ? '' : 's'} across ${groups.size}
-      type${groups.size === 1 ? '' : 's'}, grouped by type and alphabetical inside each group.
-      Quantities are what each owner last reported.
-      ${
-        unattributedCount > 0
-          ? `${unattributedCount} of them ${unattributedCount === 1 ? 'has' : 'have'} no guild
-             recorded, so ${unattributedCount === 1 ? 'it is' : 'they are'} visible only to the owner
-             until the addon stamps them.`
-          : ''
-      }
-    </p>
-    ${bar}
+  return `
     <div class="table-shell">
       <table>
         <thead>
-          <tr><th>Item</th><th class="num">Qty</th><th>Type</th><th>Trait</th><th>Guilds</th><th>Owner</th></tr>
+          <tr><th>Item</th><th class="num">Qty</th><th>Type</th><th>Trait</th><th>Offered by</th></tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
-    </div>
-  </section>`;
+    </div>`;
 }
 
-function alwaysShareCard({ accounts, alwaysShare }) {
-  if (!accounts || accounts.length === 0 || !alwaysShare || alwaysShare.length === 0) {
-    return '';
-  }
-
-  const myAccounts = new Set(accounts.map((account) => account.accountName));
-
-  const rows = alwaysShare
+function offerRows(items) {
+  return items
     .map((item) => {
-      const isMine = myAccounts.has(item.account_name);
-      const icon =
-        Number(item.has_icon) === 1
-          ? `<img class="item-icon" src="/icons/${escapeHtml(item.icon_key)}.png" alt="" width="24" height="24" loading="lazy">`
-          : `<span class="item-icon item-icon-empty" aria-hidden="true"></span>`;
-
-      const name = escapeHtml(item.item_name);
-      const linkedName =
-        Number(item.item_id) > 0
-          ? `<a class="item-name-link" href="https://esoitem.uesp.net/itemLink.php?itemid=${Number(item.item_id)}" target="_blank" rel="noopener noreferrer">${name}</a>`
-          : name;
-
-      const details = [
+      const details = metaLine([
         item.item_type_name,
         item.set_name,
         item.trait,
+        Number(item.in_inventory) === 1 ? 'has one in a bag right now' : '',
         Number(item.first_added_at) > 0 ? `offered since ${seenDate(item.first_added_at)}` : '',
-      ]
-        .filter(Boolean)
-        .map((part) => escapeHtml(part))
-        .join(' &middot; ');
+      ]);
 
       return `
-        <tr>
+        <tr data-item-key="offer:${escapeHtml(item.item_key_hash || item.id)}">
           <td>
             <div class="item-cell">
-              ${icon}
+              ${itemIcon(item)}
               <div class="item-cell-text">
-                <span class="item-name" style="color:${qualityColor(item.quality)}">${linkedName}</span>
-                ${isMine ? '<span class="own-tag">You</span>' : ''}
-                ${Number(item.in_inventory) === 1 ? '<span class="own-tag">Has one now</span>' : ''}
+                <span class="item-name" style="color:${qualityColor(item.quality)}">${itemName(item)}</span>
                 ${details ? `<span class="item-meta">${details}</span>` : ''}
               </div>
             </div>
           </td>
-          <td>${item.guild_names ? escapeHtml(item.guild_names) : '<span class="muted">none &mdash; unattributed</span>'}</td>
-          <td>
-            <span class="owner">${escapeHtml(item.account_name)}</span>
-            <span class="owner-character">${escapeHtml(item.character_name || '')}</span>
-          </td>
+          <td>${ownerCell(item)}</td>
         </tr>`;
     })
     .join('');
+}
+
+function offerTable(items) {
+  return `
+    <div class="table-shell">
+      <table>
+        <thead><tr><th>Item</th><th>Offered by</th></tr></thead>
+        <tbody>${offerRows(items)}</tbody>
+      </table>
+    </div>`;
+}
+
+/**
+ * Stable identity for one rendered list: the accounts, item types and owners in it.
+ * The page embeds it and a live refresh compares it, so a change that adds or
+ * removes a filter option rebuilds the page instead of leaving the controls stale.
+ */
+export function listRegionSignature({ accounts = [], facets = {} } = {}) {
+  const payload = JSON.stringify({
+    accounts: (accounts || []).map((account) => account.accountName),
+    types: ((facets && facets.types) || []).map((entry) => entry.name),
+    owners: (facets && facets.owners) || [],
+  });
+
+  return createHash('sha1').update(payload).digest('hex').slice(0, 12);
+}
+
+/**
+ * The two lists, inside one element the browser can replace without touching the
+ * filters, the upload card or the reader's place in either list.
+ *
+ * Request is what other people share and you can ask for; Offering is your own. The
+ * split is why no row needs a "You" tag: which tab it is in already says whose it is.
+ */
+export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters }) {
+  if (!accounts || accounts.length === 0) {
+    return '';
+  }
+
+  const myAccounts = new Set(accounts.map((account) => account.accountName));
+  const requestable = (sharedItems || []).filter((item) => !myAccounts.has(item.account_name));
+  const mine = (sharedItems || []).filter((item) => myAccounts.has(item.account_name));
+  const othersOffers = (alwaysShare || []).filter((item) => !myAccounts.has(item.account_name));
+  const myOffers = (alwaysShare || []).filter((item) => myAccounts.has(item.account_name));
+
+  const activeFilters = Boolean(filters?.type || filters?.owner || filters?.search);
+  const requestCount = requestable.length + othersOffers.length;
+  const offerCount = mine.length + myOffers.length;
+
+  const empty = (fallback) =>
+    `<p class="muted">${
+      activeFilters ? 'No items match those filters. Clear them to see everything.' : fallback
+    }</p>`;
+
+  const requestBody =
+    requestCount === 0
+      ? empty('Nothing is being shared by other members of your guilds right now. Whatever they share appears here on its own.')
+      : `${requestable.length > 0 ? inventoryTable(requestable, { mine: false }) : ''}${
+          othersOffers.length > 0
+            ? `<h3 class="subhead">Standing offers</h3>
+               <p class="muted">They will hand these out whenever they have one, even when it is not in a bag today.</p>
+               ${offerTable(othersOffers)}`
+            : ''
+        }`;
+
+  const offerBody =
+    offerCount === 0
+      ? empty('You are not offering anything yet. Upload your file and the items you share in game appear here.')
+      : `${mine.length > 0 ? inventoryTable(mine, { mine: true }) : ''}${
+          myOffers.length > 0
+            ? `<h3 class="subhead">Your standing offers</h3>
+               ${offerTable(myOffers)}`
+            : ''
+        }`;
 
   return `
-    <section class="card">
-      <h2>Always shared</h2>
-      <p class="muted">
-        ${alwaysShare.length} standing offer${alwaysShare.length === 1 ? '' : 's'}: these people will
-        hand the item out whenever they have one. They are not counted in anyone's inventory —
-        "Has one now" simply means a copy is in a bag the owner has shared from.
-      </p>
-      <div class="table-shell">
-        <table>
-          <thead><tr><th>Item</th><th>Guilds</th><th>Owner</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </section>`;
+    <div class="item-lists" id="itemLists" data-signature="${escapeHtml(listRegionSignature({ accounts, facets }))}">
+      <section class="card">
+        <div class="list-head">
+          <div class="tabs" role="tablist" aria-label="Item lists">
+            <button class="tab" type="button" role="tab" id="tabRequest" aria-controls="panelRequest"
+                    aria-selected="true" data-tab="request">
+              Request <span class="tab-count">${requestCount}</span>
+            </button>
+            <button class="tab" type="button" role="tab" id="tabOffer" aria-controls="panelOffer"
+                    aria-selected="false" tabindex="-1" data-tab="offer">
+              Offering <span class="tab-count">${offerCount}</span>
+            </button>
+          </div>
+          <span class="live-pill" data-live="wait" hidden>Live</span>
+        </div>
+
+        <div class="list-panel" id="panelRequest" role="tabpanel" aria-labelledby="tabRequest" data-panel="request">
+          ${
+            requestCount > 0
+              ? `<p class="muted">${requestable.length} item${requestable.length === 1 ? '' : 's'} shared by other members of your guilds. Quantities are what each owner last reported.</p>`
+              : ''
+          }
+          ${requestBody}
+        </div>
+
+        <div class="list-panel" id="panelOffer" role="tabpanel" aria-labelledby="tabOffer" data-panel="offer" hidden>
+          ${offerBody}
+        </div>
+      </section>
+    </div>`;
 }
 
 // One shell for every page. Without this a failed sign-in, a wrong address or a
@@ -523,7 +555,10 @@ ${content}
     <span>ItemShare &middot; uploads replace your guilds and items in full</span>
   </footer>
 
-  <script src="/app.js"></script>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/app.js" defer></script>
 </body>
 </html>`;
 }
@@ -556,37 +591,39 @@ export function renderMessagePage({
   return pageShell({ user, providers, content, title: title || `${heading} \u00b7 ItemShare` });
 }
 
+function uploadCard() {
+  return `
+    <section class="card">
+      <h2>Share your file</h2>
+      <p class="muted">
+        Drop <code>ItemShareSavedVars.lua</code> here or click to choose it - it uploads as
+        soon as it is picked, and replaces your guilds and items in full. The file lives in
+        <code>Documents\\Elder Scrolls Online\\live\\SavedVariables\\</code>.
+      </p>
+      <label class="drop-zone" id="dropZone" for="savedvars">
+        <span class="drop-title">Drop the file here, or click to choose it</span>
+        <span class="drop-file" id="fileName">No file selected</span>
+        <input id="savedvars" name="savedvars" type="file" accept=".lua,.txt,text/plain">
+      </label>
+    </section>`;
+}
+
 export function renderPage({ user, providers, accounts, sharedItems, alwaysShare, facets, filters, dbError }) {
   const canUpload = !dbError && (!providers || providers.length === 0 || user);
+  // Nothing is listed before the first upload: an account with no guilds shares no
+  // guild with anybody, so it has nothing it could legitimately be shown.
+  const initialized = Boolean(accounts && accounts.length > 0);
+  const bar = initialized ? filterBar(facets, filters) : '';
 
   const content = `
     ${statusCard({ dbError, providers, user })}
 
-    ${
-      canUpload
-        ? `<section class="card">
-      <h2>Upload ItemShareSavedVars.lua</h2>
-      <p class="muted">
-        Select the file from
-        <code>Documents\\Elder Scrolls Online\\live\\SavedVariables\\ItemShareSavedVars.lua</code>.
-        Your guilds and items are replaced in full, and the list below refreshes.
-      </p>
-      <label class="drop-zone" id="dropZone" for="savedvars">
-        <span class="drop-title">Drop the file here or click to browse</span>
-        <span class="drop-file" id="fileName">No file selected</span>
-        <input id="savedvars" name="savedvars" type="file" accept=".lua,.txt,text/plain">
-      </label>
-      <div class="actions">
-        <button id="uploadButton" class="primary-button" type="button">Upload and replace</button>
-      </div>
-      <div id="status" class="status" role="status"></div>
-    </section>`
-        : ''
-    }
+    ${canUpload ? uploadCard() : ''}
 
     ${accountsCard(accounts, user)}
-    ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
-    ${alwaysShareCard({ accounts, alwaysShare })}`;
+
+    ${bar ? `<section class="card card-filters">${bar}</section>` : ''}
+    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters })}`;
 
   return pageShell({ user, providers, content });
 }

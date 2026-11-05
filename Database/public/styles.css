@@ -780,3 +780,201 @@ a.primary-button {
   object-fit: cover;
   border-radius: 50%;
 }
+
+/* Live updates. The pill stays hidden until the socket has something to say, so a
+   reader without scripts is never told a list is live when it cannot be. */
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.live-pill[hidden] {
+  display: none;
+}
+
+.live-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.live-pill[data-live="live"] {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+}
+
+.live-pill[data-live="live"]::before {
+  opacity: 1;
+  background: #4ade80;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.16);
+}
+
+.live-pill[data-live="wait"] {
+  color: #fcd34d;
+  border-color: rgba(252, 211, 77, 0.4);
+}
+
+.live-pill[data-live="off"] {
+  color: var(--muted);
+}
+
+/* Tabs and the filter card. The filter row lives outside #itemLists on purpose: a
+   live update must never wipe out what someone is typing there. */
+.card-filters {
+  padding: 14px 18px;
+}
+
+.card-filters .filters {
+  margin: 0;
+}
+
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: rgba(6, 14, 32, 0.55);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: #e5e7eb;
+}
+
+.tab[aria-selected="true"] {
+  color: #ffffff;
+  background: linear-gradient(180deg, var(--accent-top) 0%, var(--accent-bottom) 100%);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.28);
+}
+
+.tab-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: inherit;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.tab[aria-selected="true"] .tab-count {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.list-panel[hidden] {
+  display: none;
+}
+
+.subhead {
+  margin: 20px 0 6px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted-strong);
+}
+
+.filter-clear {
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-clear:hover {
+  color: #f8fafc;
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
+/* Upload progress and result, floating above the page and gone on its own. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 50;
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 12px 18px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 12px;
+  background: rgba(9, 17, 35, 0.97);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-line;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translate(-50%, 12px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.toast.ok {
+  border-color: rgba(74, 222, 128, 0.5);
+  color: #bbf7d0;
+}
+
+.toast.err {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: var(--danger);
+}
+
+.toast.info {
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.drop-zone.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}

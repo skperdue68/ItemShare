@@ -6,6 +6,7 @@
 //   npm start            (reads Database/.env)
 
 import { existsSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import express from 'express';
@@ -30,8 +31,9 @@ import {
   signInWithProvider,
 } from './lib/store.js';
 import { buildProviders } from './lib/providers.js';
+import { attachRealtime } from './lib/realtime.js';
 import { MariaDbSessionStore } from './lib/sessionStore.js';
-import { renderMessagePage, renderPage } from './lib/views.js';
+import { renderListRegion, renderMessagePage, renderPage } from './lib/views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,17 +81,25 @@ const sessionStore = new MariaDbSessionStore({ withConnection: withDatabase, ttl
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
-app.use(
-  session({
-    secret: SESSION_SECRET,
-    store: sessionStore,
-    resave: false,
-    saveUninitialized: false,
-    rolling: true,
-    cookie: { httpOnly: true, sameSite: 'lax', secure: false, maxAge: SESSION_TTL_MS },
-  })
-);
+
+// One instance serves both the pages and the socket handshake, so a socket can tell
+// who is behind it exactly the way a request does: from the same signed cookie.
+const sessionMiddleware = session({
+  secret: SESSION_SECRET,
+  store: sessionStore,
+  resave: false,
+  saveUninitialized: false,
+  rolling: true,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: false, maxAge: SESSION_TTL_MS },
+});
+app.use(sessionMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Socket.IO rides on the same HTTP server as Express, under /socket.io, so live
+// updates need no second port, no extra proxy rule and no separate auth.
+const httpServer = createServer(app);
+const realtime = attachRealtime({ httpServer, sessionMiddleware });
+const notifyItemsChanged = realtime.notifyChange;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -136,15 +146,21 @@ async function withDatabase(handler) {
   }
 }
 
-app.get('/', async (req, res) => {
-  const user = req.session.user || null;
-  const filters = {
-    type: readParam(req.query.type),
-    owner: readParam(req.query.owner),
-    search: readParam(req.query.q),
+function readFilters(query) {
+  return {
+    type: readParam(query.type),
+    owner: readParam(query.owner),
+    search: readParam(query.q),
   };
+}
 
-  const base = {
+// The item list is loaded twice: once as part of the page, and once on its own when
+// a live update says something changed. Both go through here, so a pushed refresh
+// can never disagree with a page load about who is allowed to see what.
+async function collectViewerData(req, filters) {
+  const user = req.session ? req.session.user || null : null;
+
+  const data = {
     user,
     providers: enabledProviders,
     accounts: [],
@@ -175,22 +191,41 @@ app.get('/', async (req, res) => {
       }
 
       for (const accountName of accountNames) {
-        base.accounts.push({
+        data.accounts.push({
           accountName,
           ...(await getAccountSummary(connection, accountName)),
           guilds: await getViewerGuilds(connection, [accountName]),
         });
       }
 
-      base.facets = await getViewerFacets(connection, accountNames);
-      base.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
-      base.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
+      data.facets = await getViewerFacets(connection, accountNames);
+      data.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
+      data.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
     });
   } catch (error) {
-    base.dbError = error.message;
+    data.dbError = error.message;
   }
 
-  res.type('html').send(renderPage(base));
+  return data;
+}
+
+app.get('/', async (req, res) => {
+  res.type('html').send(renderPage(await collectViewerData(req, readFilters(req.query))));
+});
+
+// The live update: the same list the page was built from, as a fragment, using the
+// filters this browser already has. A non-200 means "leave the screen alone" - a
+// database hiccup must not replace a good list with an error card.
+app.get('/items', async (req, res) => {
+  const data = await collectViewerData(req, readFilters(req.query));
+
+  if (data.dbError) {
+    res.status(503).json({ error: data.dbError });
+    return;
+  }
+
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(renderListRegion(data));
 });
 
 // Icons were fetched from UESP once, at upload time, and live in MariaDB now.
@@ -432,6 +467,10 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       );
     });
 
+    // The rows are committed, so the new list is real. Announce it before the icon
+    // work, which can take a moment, so nobody waits on UESP to see their items.
+    notifyItemsChanged('upload');
+
     // One fetch per new icon, ever: afterwards /icons serves the stored bytes.
     let icons = { fetched: 0, skipped: 0, failed: 0 };
 
@@ -442,6 +481,12 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
 
       if (icons.fetched || icons.failed) {
         console.log(`Icons: fetched ${icons.fetched}, already stored ${icons.skipped}, failed ${icons.failed}`);
+      }
+
+      if (icons.fetched) {
+        // Rows that had no picture a moment ago have one now, so open pages have to
+        // draw them a second time.
+        notifyItemsChanged('icons');
       }
     } catch (error) {
       console.warn(`Could not cache item icons: ${error.message}`);
@@ -490,6 +535,10 @@ async function backfillIcons(reason) {
         `Icons: ${reason} backfill looked up ${result.itemIds}, resolved ${result.resolved}, ` +
           `filled ${result.rows} rows, fetched ${result.icons.fetched} images`
       );
+
+      if (result.rows > 0) {
+        notifyItemsChanged('icons');
+      }
     }
   } catch (error) {
     console.warn(`Could not backfill item icons: ${error.message}`);
@@ -575,8 +624,9 @@ setInterval(() => {
   sessionStore.prune().catch(() => {});
 }, 1000 * 60 * 60 * 12);
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`ItemShare upload site listening on http://localhost:${PORT}`);
+  console.log('Live updates: socket.io on /socket.io');
   console.log(
     enabledProviders.length
       ? `Sign-in providers: ${enabledProviders.map((provider) => provider.label).join(', ')}`
