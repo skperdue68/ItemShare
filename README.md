@@ -28,7 +28,8 @@ You can use commands
 /ishare reserve <amount> <part of the name> - keeps that many back and offers the rest.
 /ishare noreserve <part of the name> - shares the whole stack again.
 /ishare reserves - lists every item with a reserve, and what it is offering.
-/ishare stamp - gives guild data to shares written before 1.6.0 so they appear on the site.
+/ishare stamp - refreshes the guild list your shares are matched against.
+/ishare export (or compat) - writes a website-compatible copy of your shares to `ItemShareExport.lua` for upload; upload that file instead of `ItemShareSavedVars.lua` for this release.
 /ishare guildbank - toggles sharing from the guild bank.
 
 The window and the item menus cover the same ground without typing:

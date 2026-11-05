@@ -178,9 +178,14 @@ A number that is not a whole number of at least 1 is refused instead of being sa
 <tr><td><code>/itemshare reserve &lt;amount&gt; &lt;name&gt;</code></td><td>Keep that many back and offer the rest</td></tr>
 <tr><td><code>/itemshare noreserve &lt;name&gt;</code></td><td>Share the whole stack again</td></tr>
 <tr><td><code>/itemshare reserves</code></td><td>List every item with a reserve, and what it offers</td></tr>
-<tr><td><code>/itemshare stamp</code></td><td>Give guild data to shares written before 1.6.0 so they appear on the site</td></tr>
+<tr><td><code>/itemshare stamp</code></td><td>Refresh the guild list that shares are matched against</td></tr>
+<tr><td><code>/itemshare export</code></td><td>Write a website-compatible copy of your shares to <code>ItemShareExport.lua</code> for upload</td></tr>
 <tr><td><code>/itemshare guildbank</code></td><td>Toggle sharing from the guild bank (off by default)</td></tr>
 </table>
+<p>
+Guild names and IDs are stored once, by guild ID, and every share is matched to them; the addon no longer copies the list onto each item. Because the website reads the older layout, <code>/itemshare export</code> writes a complete compatibility copy to a second saved-variables file, <code>ItemShareExport.lua</code>. Upload that file until the site reads the guild table directly.
+</p>
+
 
 <p><strong>Alias:</strong> <code>/ishare</code></p>
 </div>
