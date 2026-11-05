@@ -1208,13 +1208,6 @@ function uploadCard() {
   return `
     <section class="card">
       <h2>Share your file</h2>
-      <p class="muted">
-        Drop <code>ItemShareSavedVars.lua</code> here or click to choose it - it uploads as
-        soon as it is picked. Everything in the file is written first and only then are the
-        items it no longer mentions removed, so nothing blinks out of the list in between.
-        The file lives in
-        <code>Documents\\Elder Scrolls Online\\live\\SavedVariables\\</code>.
-      </p>
       ${uploadZone()}
     </section>`;
 }
