@@ -19,11 +19,14 @@ import { describeConnectionFailure, openDatabase, readConfig } from './lib/datab
 import { cacheItemIcons, getCachedIcon, resolveMissingIconPaths } from './lib/icons.js';
 import { backfillItemIcons } from './lib/iconBackfill.js';
 import {
+  DEFAULT_HOLD_MINUTES,
   cancelOwnRequest,
   createRequest,
+  expireDueDrafts,
   fillKnownIcons,
   getAccountSummary,
   getAlwaysShareForViewer,
+  getDraftBasket,
   getRequesterRequests,
   getSharedItemsForViewer,
   getViewerAccounts,
@@ -32,6 +35,7 @@ import {
   linkAccountToUser,
   replaceAccounts,
   signInWithProvider,
+  submitDrafts,
 } from './lib/store.js';
 import { buildProviders } from './lib/providers.js';
 import { attachRealtime } from './lib/realtime.js';
@@ -80,6 +84,19 @@ const SESSION_SECRET = process.env.SESSION_SECRET || `itemshare-${Math.random().
 // the floor.
 const SESSION_TTL_DAYS = Math.max(Number(process.env.SESSION_TTL_DAYS || 30) || 30, 1);
 const SESSION_TTL_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+// How long an unsent request holds its item. The window is for gathering a few asks
+// and sending them together - not for sitting on somebody's stack - and every add
+// or removal starts it again. The sweeper below enforces it even when the person
+// has closed the tab.
+const HOLD_MINUTES = Math.min(
+  Math.max(
+    Math.trunc(Number(process.env.REQUEST_HOLD_MINUTES || DEFAULT_HOLD_MINUTES)) ||
+      DEFAULT_HOLD_MINUTES,
+    1
+  ),
+  120
+);
 const sessionStore = new MariaDbSessionStore({ withConnection: withDatabase, ttlMs: SESSION_TTL_MS });
 
 const app = express();
@@ -200,6 +217,7 @@ async function collectViewerData(req, filters) {
     sharedItems: [],
     alwaysShare: [],
     requests: [],
+    basket: { count: 0, quantity: 0, secondsLeft: 0, holdMinutes: HOLD_MINUTES },
     facets: { types: [], owners: [] },
     filters,
     dbError: null,
@@ -225,6 +243,9 @@ async function collectViewerData(req, filters) {
       data.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
       data.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
       data.requests = user ? await getRequesterRequests(connection, user.id) : [];
+      data.basket = user
+        ? await getDraftBasket(connection, user.id)
+        : { count: 0, quantity: 0, secondsLeft: 0, holdMinutes: HOLD_MINUTES };
     });
   } catch (error) {
     data.dbError = error.message;
@@ -291,6 +312,7 @@ app.post('/requests', async (req, res) => {
         itemKind,
         itemId,
         quantity,
+        holdMinutes: HOLD_MINUTES,
       });
     });
 
@@ -311,17 +333,52 @@ app.post('/requests/:id/cancel', async (req, res) => {
   }
 
   try {
-    const done = await withDatabase((connection) =>
-      cancelOwnRequest(connection, { userId: user.id, requestId: Number(req.params.id) })
+    const outcome = await withDatabase((connection) =>
+      cancelOwnRequest(connection, {
+        userId: user.id,
+        requestId: Number(req.params.id),
+        holdMinutes: HOLD_MINUTES,
+      })
     );
 
-    if (!done) {
+    if (!outcome.cancelled) {
       res.status(404).json({ error: 'That request is not waiting any more.' });
       return;
     }
 
     notifyItemsChanged('request');
-    res.json({ ok: true });
+    res.json({ ok: true, ...outcome });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+// Sending the basket. Everything held turns into a real request at once, so the
+// owner is asked in one go rather than once per row the person happened to click.
+app.post('/requests/submit', async (req, res) => {
+  const user = req.session ? req.session.user || null : null;
+
+  if (!user) {
+    res.status(401).json({ error: 'Sign in before sending a request.' });
+    return;
+  }
+
+  try {
+    const outcome = await withDatabase(async (connection) => {
+      const sent = await submitDrafts(connection, { userId: user.id });
+      return { sent, basket: await getDraftBasket(connection, user.id) };
+    });
+
+    if (outcome.sent === 0) {
+      res.status(409).json({
+        error: 'Nothing was still waiting to be sent - the clock had already run out.',
+        ...outcome,
+      });
+      return;
+    }
+
+    notifyItemsChanged('request');
+    res.json({ ok: true, ...outcome });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
@@ -725,6 +782,48 @@ setInterval(() => {
   sessionStore.prune().catch(() => {});
 }, 1000 * 60 * 60 * 12);
 
+// The countdown has to keep running when nobody is looking. A draft is held in
+// MariaDB with its own deadline, and this pass is what releases the ones that ran
+// out - including for someone who requested an item and then closed the browser.
+//
+// Ten seconds is far below the five minutes someone is given, so the release is
+// prompt without making the sweep a load of its own; a pass that overlaps itself is
+// skipped rather than queued.
+const SWEEP_INTERVAL_MS = Number(process.env.REQUEST_SWEEP_INTERVAL_MS || 10000);
+let sweepRunning = false;
+
+async function sweepExpiredRequests() {
+  if (sweepRunning) {
+    return;
+  }
+
+  sweepRunning = true;
+
+  try {
+    const released = await withDatabase((connection) => expireDueDrafts(connection));
+
+    if (released > 0) {
+      console.log(
+        `Requests: released ${released} unsubmitted reservation${released === 1 ? '' : 's'} that timed out`
+      );
+      notifyItemsChanged('request');
+    }
+  } catch (error) {
+    // A database that is down is not a reason to stop the clock; the holding check
+    // in every query already treats a lapsed draft as free, so the next pass can
+    // catch up with the row itself.
+  } finally {
+    sweepRunning = false;
+  }
+}
+
+if (SWEEP_INTERVAL_MS > 0) {
+  // unref'd on purpose: this is housekeeping, not the reason the process exists, so
+  // it must not keep the server alive on its own.
+  setInterval(sweepExpiredRequests, SWEEP_INTERVAL_MS).unref();
+  sweepExpiredRequests();
+}
+
 httpServer.listen(PORT, () => {
   console.log(`ItemShare upload site listening on http://localhost:${PORT}`);
   console.log('Live updates: socket.io on /socket.io');
@@ -735,6 +834,11 @@ httpServer.listen(PORT, () => {
   );
   console.log(`Env file: ${hasEnvFile ? envPath : `${envPath} not found - copy .env.example to .env`}`);
   console.log(`Sign-in stays active for ${SESSION_TTL_DAYS} days (SESSION_TTL_DAYS), stored in MariaDB`);
+  console.log(
+    SWEEP_INTERVAL_MS > 0
+      ? `Unsent requests: held for ${HOLD_MINUTES} minute${HOLD_MINUTES === 1 ? '' : 's'} (REQUEST_HOLD_MINUTES), swept every ${Math.round(SWEEP_INTERVAL_MS / 1000)}s`
+      : 'Unsent requests: expiry sweep disabled (REQUEST_SWEEP_INTERVAL_MS=0)'
+  );
   console.log(`Database target: ${readConfig().database}`);
 
   if (ICON_BACKFILL_INTERVAL_MS > 0) {

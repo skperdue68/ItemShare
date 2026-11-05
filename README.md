@@ -162,21 +162,39 @@ still unspoken for rather than the raw `item_count`, so two people can never be
 promised the same five. A standing offer has no count behind it, so it always means
 one copy.
 
-A request is a **reservation, not a delivery**:
+A request is a **reservation, not a delivery**, and it reserves from the moment it is
+picked rather than from the moment it is sent:
 
-- Pending requests are summed per item and the row shows what is left. Once every
-  copy is spoken for the button becomes *All claimed*.
-- After every upload the owner's pending requests are settled oldest first, because
-  they were promised first. One whose item has gone, or whose turn the stack no
-  longer reaches, is cancelled with a sentence the requester can read: "Ghost Bane
-  now has 2 of Briarheart Dagger, which does not cover the 3 you asked for." A row
-  that merely moved (the item changed character, or was re-shared) is re-pointed by
+- The list has two quantity columns. **Free** is what nobody is holding, **Held** is
+  what a request is standing on, and they always add up to what the owner reported.
+  Once nothing is free the button becomes *All held*.
+- Asking puts the item in a **basket** with a five minute clock (`REQUEST_HOLD_MINUTES`).
+  Everything picked shares one timer, and adding or removing anything starts it again.
+  *Your requests* shows the countdown next to a **Send requests** button; until it is
+  pressed nobody has been asked, but the copies are held, so two people cannot be
+  offered the same one.
+- When the clock runs out the basket is cancelled with the reason shown, and the
+  items are free again. That happens **server-side on a timer**
+  (`REQUEST_SWEEP_INTERVAL_MS`, default 10 s), so it also happens to someone who
+  requested an item and closed the tab: nothing is held because a browser forgot to
+  tell anyone. Every query also treats a lapsed reservation as free, so the
+  arithmetic is right even between two sweeps.
+- Each item in the basket can be removed before sending, which also restarts the
+  clock for the rest.
+- After every upload the owner's requests are settled oldest first, because they were
+  promised first. One whose item has gone, or whose turn the stack no longer reaches,
+  is cancelled with a sentence the requester can read: "Ghost Bane now has 2 of
+  Briarheart Dagger, which does not cover the 3 you asked for." A row that merely
+  moved (the item changed character, or was re-shared) is re-pointed by
   `item_key_hash` instead of being cancelled.
-- *Your requests* lists what you asked for, waiting first, with the reason anything
-  closed. When a live update brings back a cancellation the page also says so in a
-  toast, once: opening the page does not replay old ones.
+- *Your requests* lists the basket first and then what has been sent, with the reason
+  anything closed. When a live update brings back a cancellation the page also says so
+  in a toast, once: opening the page does not replay old ones.
 - A requester can cancel their own waiting request. The owner sees "2 asked for" on
   the row.
+- Leaving the page with a basket still holding items raises a styled warning
+  ("You have unsubmitted item requests") before following a link, with the browser's
+  own unload prompt as the fallback for closing the tab or posting a form.
 
 Everything here is recorded server-side; the browser never decides how many are
 left. Handing an item over in game is not recorded yet, so nothing moves from
