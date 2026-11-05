@@ -170,7 +170,14 @@ async function emailOwners({ user, submitted, contacts }) {
 
     const group = groups.get(contact.email);
     group.owners.add(String(row.owner_account_name));
-    group.items.push({ name: row.item_name || 'Item', quantity: Number(row.quantity) || 1 });
+    group.items.push({
+      name: row.item_name || 'Item',
+      quantity: Number(row.quantity) || 1,
+      type: row.item_type_name || '',
+      trait: row.trait || '',
+      enchant: row.enchant_name || '',
+      quality: Number(row.quality) || 0,
+    });
   }
 
   if (groups.size === 0) {

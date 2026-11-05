@@ -222,6 +222,13 @@ Sending the basket emails the owner of each item: one message per person, headed
 and a failed send is logged rather than turned into an error - the request already
 exists either way.
 
+Each line also carries what tells two copies of a name apart: the item's type, its
+trait and its enchantment, with the name in its quality colour. That is copied onto
+the request when it is made (migration 015 adds `enchant_name`), because the next
+upload rewrites the item rows the request came from. An owner with three Briarheart
+swords and two Twice-Born rings can therefore see exactly which one was asked for
+without opening the site.
+
 Delivery is Resend over its HTTP API, so nothing has to be installed:
 
 ```
