@@ -18,6 +18,10 @@ local ALWAYS_SHARE_TEXTURE_PATH = "ItemShare/media/itemshare_always.dds"
 -- says whether the offer is a plain share or a standing one.
 local RESERVE_TEXTURE_PATH = "ItemShare/media/itemshare_reserve.dds"
 local ALWAYS_RESERVE_TEXTURE_PATH = "ItemShare/media/itemshare_always_reserve.dds"
+-- A reserve on an item that is not shared at all: the amber tag with no parcel under
+-- it. Without a badge of its own a reserve on an unshared item was invisible, so the
+-- only way to find out it needed clearing was to remember setting it.
+local RESERVE_ONLY_TEXTURE_PATH = "ItemShare/media/itemshare_reserve_only.dds"
 local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
@@ -1938,7 +1942,10 @@ local function EnsureShareMarker(control)
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
 
         local lines = {}
-        if self.ItemShareAlways then
+        if self.ItemShareReserveOnly then
+            lines[#lines + 1] = "|cD8A24FShare reserve|r"
+            lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
+        elseif self.ItemShareAlways then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
         else
@@ -1959,6 +1966,10 @@ local function EnsureShareMarker(control)
             else
                 lines[#lines + 1] = string.format("|cD8A24FKeeping %d back|r.", reserve)
             end
+        end
+
+        if self.ItemShareReserveOnly then
+            lines[#lines + 1] = "Right-click it - Share Reserve - to change or clear it."
         end
 
         SetTooltipText(InformationTooltip, table.concat(lines, "\n"))
@@ -2015,11 +2026,21 @@ local function UpdateSharedRowMarker(control, slotData)
         marker:SetTexture(GetShareBadgeTexture(itemLink, isAlways))
         marker.ItemShareAlways = isAlways and true or false
         marker.ItemShareReserve = reserve
+        marker.ItemShareReserveOnly = false
         marker.ItemShareHeld = tonumber(sharedEntry and (sharedEntry.heldCount or sharedEntry.count) or 0) or 0
         marker.ItemShareOffered = tonumber(sharedEntry and sharedEntry.count or 0) or 0
+    elseif reserve > 0 then
+        -- Reserved, but nothing is on offer: the amber tag alone, so the reserve is
+        -- visible on the item and can be found and cleared rather than forgotten.
+        marker:SetTexture(RESERVE_ONLY_TEXTURE_PATH)
+        marker.ItemShareAlways = false
+        marker.ItemShareReserve = reserve
+        marker.ItemShareReserveOnly = true
+        marker.ItemShareHeld = 0
+        marker.ItemShareOffered = 0
     end
 
-    marker:SetHidden(not (isShared or isAlways))
+    marker:SetHidden(not (isShared or isAlways or reserve > 0))
 end
 
 local function HookInventoryRowCallbacks()
@@ -2495,7 +2516,7 @@ local function AddInventoryContextMenu(slot)
             end
         end, MENU_ADD_OPTION_LABEL)
     else
-        AddCustomMenuItem("Keep Some Back (Share Reserve)...", function()
+        AddCustomMenuItem("Share Reserve", function()
             if OpenShareReserveDialog then
                 OpenShareReserveDialog(bagId, slotIndex)
             end
@@ -3121,7 +3142,7 @@ local function BuildReserveDialog()
     -- Remembered before anything below can throw, so a half-built window is never
     -- created a second time under the same name.
     reserveDialog = { window = window }
-    window:SetDimensions(380, 196)
+    window:SetDimensions(380, 236)
     window:SetAnchor(CENTER, GuiRoot, CENTER, 0, 0)
     window:SetMouseEnabled(true)
     window:SetClampedToScreen(true)
@@ -3165,7 +3186,7 @@ local function BuildReserveDialog()
     prompt:SetText("Keep how many back? They are not offered while you hold this many or fewer.")
     prompt:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 64)
     prompt:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 64)
-    prompt:SetHeight(30)
+    prompt:SetHeight(34)
     prompt:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
 
     local editBox = nil
@@ -3186,8 +3207,19 @@ local function BuildReserveDialog()
         return nil
     end
 
-    editBox:SetDimensions(110, 26)
-    editBox:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 100)
+    -- A frame drawn here rather than by the template: the template gives an edit box
+    -- the client's own background only when it is set up as a backdrop control, so on
+    -- its own it looked like a gap in the dialog.
+    local editFrame = wm:CreateControl(nil, window, CT_BACKDROP)
+    editFrame:SetDimensions(96, 30)
+    editFrame:SetAnchor(TOP, window, TOP, 0, 104)
+    editFrame:SetCenterColor(0, 0, 0, 0.7)
+    editFrame:SetEdgeColor(0.7, 0.7, 0.7, 1)
+    editFrame:SetEdgeTexture(nil, 1, 1, 1, 0)
+
+    editBox:SetDimensions(80, 24)
+    editBox:SetAnchor(TOP, editFrame, TOP, 0, 3)
+    editBox:SetColor(1, 1, 1, 1)
     if editBox.SetMaxChars then
         editBox:SetMaxChars(6)
     end
@@ -3195,14 +3227,18 @@ local function BuildReserveDialog()
     local status = wm:CreateControl(nil, window, CT_LABEL)
     status:SetFont("ZoFontGameSmall")
     status:SetColor(0.85, 0.85, 0.85, 1)
-    status:SetAnchor(TOPLEFT, window, TOPLEFT, 138, 104)
-    status:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 104)
+    status:SetAnchor(TOPLEFT, window, TOPLEFT, 16, 144)
+    status:SetAnchor(TOPRIGHT, window, TOPRIGHT, -16, 144)
     status:SetHeight(20)
+    status:SetHorizontalAlignment(TEXT_ALIGN_CENTER)
 
+    -- Two buttons on one row inside the frame. The close button and Escape are the way
+    -- out, so a third Cancel beside them only crowded the row; offsets are negative
+    -- because a positive BOTTOM offset moves a control down, out of the window.
     local keepButton = wm:CreateControl(nil, window, CT_BUTTON)
-    keepButton:SetDimensions(130, 28)
-    keepButton:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, 14)
-    keepButton:SetFont("ZoFontGameSmall")
+    keepButton:SetDimensions(140, 32)
+    keepButton:SetAnchor(BOTTOM, window, BOTTOM, -78, -16)
+    keepButton:SetFont("ZoFontGame")
     keepButton:SetText("Keep This Many")
     keepButton:SetNormalTexture("/esoui/art/buttons/accept_up.dds")
     keepButton:SetPressedTexture("/esoui/art/buttons/accept_down.dds")
@@ -3210,24 +3246,14 @@ local function BuildReserveDialog()
     keepButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
 
     local clearButton = wm:CreateControl(nil, window, CT_BUTTON)
-    clearButton:SetDimensions(120, 28)
-    clearButton:SetAnchor(BOTTOM, window, BOTTOM, 0, 14)
-    clearButton:SetFont("ZoFontGameSmall")
+    clearButton:SetDimensions(120, 32)
+    clearButton:SetAnchor(BOTTOM, window, BOTTOM, 78, -16)
+    clearButton:SetFont("ZoFontGame")
     clearButton:SetText("Clear Reserve")
     clearButton:SetNormalTexture("/esoui/art/buttons/decline_up.dds")
     clearButton:SetPressedTexture("/esoui/art/buttons/decline_down.dds")
     clearButton:SetMouseOverTexture("/esoui/art/buttons/decline_over.dds")
     clearButton:SetClickSound(SOUNDS.DIALOG_DECLINE)
-
-    local cancelButton = wm:CreateControl(nil, window, CT_BUTTON)
-    cancelButton:SetDimensions(90, 28)
-    cancelButton:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, 14)
-    cancelButton:SetFont("ZoFontGameSmall")
-    cancelButton:SetText("Cancel")
-    cancelButton:SetNormalTexture("/esoui/art/buttons/normal_up.dds")
-    cancelButton:SetPressedTexture("/esoui/art/buttons/normal_down.dds")
-    cancelButton:SetMouseOverTexture("/esoui/art/buttons/normal_over.dds")
-    cancelButton:SetHandler("OnClicked", CloseReserveDialog)
 
     keepButton:SetHandler("OnClicked", function()
         local pending = reserveDialog and reserveDialog.pending
@@ -3379,7 +3405,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
-        dmsg("Right-click an item - Keep Some Back (Share Reserve)... asks for a number")
+        dmsg("Right-click an item - Share Reserve asks for a number to keep back")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
@@ -3489,7 +3515,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
-        dmsg("Right-click an item - Keep Some Back (Share Reserve)... asks for a number")
+        dmsg("Right-click an item - Share Reserve asks for a number to keep back")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
