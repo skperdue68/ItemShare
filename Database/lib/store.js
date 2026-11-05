@@ -644,7 +644,8 @@ export async function getSubmittedRequests(connection, userId, ids) {
   }
 
   const [rows] = await connection.execute(
-    `SELECT id, owner_account_name, item_name, quantity, requester_account_name
+    `SELECT id, owner_account_name, item_name, quantity, requester_account_name,
+            item_type_name, trait, enchant_name, quality
        FROM itemshare_requests
       WHERE requester_user_id = ? AND status = 'pending' AND submitted_at IS NOT NULL
         AND id IN (${inClause(wanted)})
@@ -707,6 +708,8 @@ export async function getViewerAccounts(connection, userId) {
 function viewerAccountNames(accountNames) {
   return [...new Set((accountNames || []).map((name) => String(name || '').trim()).filter(Boolean))];
 }
+
+import { filterList } from './filters.js';
 
 function inClause(values) {
   return values.map(() => '?').join(', ');
@@ -873,7 +876,8 @@ async function attachRequestCounts(connection, rows, kind) {
             COALESCE(SUM(CASE WHEN ${holdingSql()} THEN quantity ELSE 0 END), 0) AS reserved,
             COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS request_count,
             COALESCE(SUM(CASE WHEN status = 'draft' AND expires_at > NOW() THEN 1 ELSE 0 END), 0)
-              AS draft_count
+              AS draft_count,
+            MAX(CASE WHEN status = 'pending' THEN submitted_at END) AS last_sent_at
        FROM itemshare_requests
       WHERE item_kind = ? AND status IN ('draft', 'pending')
         AND ${column} IN (${inClause(ids)})
@@ -888,6 +892,114 @@ async function attachRequestCounts(connection, rows, kind) {
     row.reserved = Number(count?.reserved || 0);
     row.request_count = Number(count?.request_count || 0);
     row.draft_count = Number(count?.draft_count || 0);
+    row.last_sent_at = count?.last_sent_at || null;
+  }
+
+  return rows;
+}
+
+/**
+ * How long a row that has just run out stays on screen. The page fades it over the
+ * same window, so the row goes rather than vanishing; app.js mirrors this number.
+ */
+export const EXHAUSTED_ROW_LINGER_MS = 5000;
+
+/**
+ * Drops rows that have nothing left to offer, after a last look.
+ *
+ * A row is finished when every copy is held by requests that were actually sent -
+ * not while somebody is still picking, because a draft hold can lapse and the copy
+ * come back. It is kept for a few seconds after the last send so the page can fade
+ * it and the rows beneath close the gap, then it stops being sent at all.
+ */
+export function dropExhaustedRows(rows, now = Date.now()) {
+  return (rows || []).filter((row) => {
+    const free = (Number(row.item_count) || 0) - (Number(row.reserved) || 0);
+
+    if (free > 0 || Number(row.draft_count) > 0) {
+      return true;
+    }
+
+    const lastSent = row.last_sent_at ? new Date(row.last_sent_at).getTime() : 0;
+    const remaining = lastSent ? EXHAUSTED_ROW_LINGER_MS - (now - lastSent) : 0;
+
+    row.exhausted = Math.max(0, Math.round(remaining));
+
+    return remaining > 0;
+  });
+}
+
+/**
+ * How many copies of a row one person may end up holding, their own basket
+ * included. Free copies plus what they have already reserved is the whole row less
+ * everybody else's holds.
+ */
+export function requestRoom({ total, reserved, alreadyHeld = 0 }) {
+  const free = Math.max(0, (Number(total) || 0) - (Number(reserved) || 0));
+  return free + Math.max(0, Number(alreadyHeld) || 0);
+}
+
+/**
+ * The count a basket row ends up with after asking again for the same item.
+ *
+ * The number the person picks is the total they want, not an extra: asking for the
+ * whole stack while two are already in the basket leaves one row holding the whole
+ * stack, rather than two rows adding up to seven. It never goes down by asking, and
+ * never past what the row can give.
+ */
+export function combineQuantity({ wanted, alreadyHeld = 0, room }) {
+  const held = Math.max(0, Math.trunc(Number(alreadyHeld) || 0));
+  const asked = Math.max(1, Math.trunc(Number(wanted) || 1));
+  return Math.min(Math.max(asked, held), Math.max(Number(room) || 0, held));
+}
+
+/** This person's live draft for one row, if they already have one. */
+async function ownDraftForTarget(connection, userId, itemKind, targetId) {
+  const column = itemKind === 'offer' ? 'always_share_id' : 'shared_item_id';
+  const [rows] = await connection.execute(
+    `SELECT id, quantity
+       FROM itemshare_requests
+      WHERE requester_user_id = ? AND item_kind = ? AND ${column} = ?
+        AND status = 'draft' AND expires_at > NOW()
+      ORDER BY id ASC
+      LIMIT 1`,
+    [Number(userId), itemKind, Number(targetId)]
+  );
+
+  return rows[0] || null;
+}
+
+/**
+ * How much of each visible row is already in *this viewer's* basket. The total held
+ * count is everybody's; this is what the viewer may ask for on top of, because
+ * asking again tops their own row up instead of starting another.
+ */
+async function attachViewerDrafts(connection, rows, viewerNames) {
+  for (const row of rows || []) {
+    row.my_draft_quantity = 0;
+  }
+
+  const names = (viewerNames || []).filter(Boolean);
+  const ids = (rows || []).map((row) => Number(row.id)).filter(Number.isFinite);
+
+  if (names.length === 0 || ids.length === 0) {
+    return rows;
+  }
+
+  const [drafts] = await connection.execute(
+    `SELECT shared_item_id AS target_id, COALESCE(SUM(quantity), 0) AS held
+       FROM itemshare_requests
+      WHERE item_kind = 'inventory' AND status = 'draft' AND expires_at > NOW()
+        AND requester_account_name IN (${inClause(names)})
+        AND shared_item_id IN (${inClause(ids)})
+      GROUP BY shared_item_id`,
+    [...names, ...ids]
+  );
+
+  const byId = new Map(drafts.map((row) => [Number(row.target_id), Number(row.held) || 0]));
+
+  for (const row of rows || []) {
+    row.my_draft_quantity = byId.get(Number(row.id)) || 0;
   }
 
   return rows;
@@ -907,13 +1019,18 @@ export async function getSharedItemsForViewer(
   const filters = [itemsVisibilityClause(names)];
   const params = [...names, ...names];
 
-  if (type) {
-    filters.push('i.item_type_name = ?');
-    params.push(type);
+  // A filter can hold several values at once: each one narrows the list instead of
+  // replacing the last choice, so "Weapon" and "Armor" together show both.
+  const types = filterList(type);
+  const owners = filterList(owner);
+
+  if (types.length > 0) {
+    filters.push(`i.item_type_name IN (${inClause(types)})`);
+    params.push(...types);
   }
-  if (owner) {
-    filters.push('i.account_name = ?');
-    params.push(owner);
+  if (owners.length > 0) {
+    filters.push(`i.account_name IN (${inClause(owners)})`);
+    params.push(...owners);
   }
   if (search) {
     filters.push('i.item_name LIKE ?');
@@ -967,7 +1084,8 @@ export async function getSharedItemsForViewer(
     params
   );
 
-  return attachRequestCounts(connection, rows, 'inventory');
+  const counted = dropExhaustedRows(await attachRequestCounts(connection, rows, 'inventory'));
+  return attachViewerDrafts(connection, counted, names);
 }
 
 /**
@@ -990,13 +1108,16 @@ export async function getAlwaysShareForViewer(
   const filters = [alwaysShareVisibilityClause(names)];
   const params = [...names, ...names];
 
-  if (type) {
-    filters.push('a.item_type_name = ?');
-    params.push(type);
+  const types = filterList(type);
+  const owners = filterList(owner);
+
+  if (types.length > 0) {
+    filters.push(`a.item_type_name IN (${inClause(types)})`);
+    params.push(...types);
   }
-  if (owner) {
-    filters.push('a.account_name = ?');
-    params.push(owner);
+  if (owners.length > 0) {
+    filters.push(`a.account_name IN (${inClause(owners)})`);
+    params.push(...owners);
   }
   if (search) {
     filters.push('a.item_name LIKE ?');
@@ -1314,7 +1435,7 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
   if (itemKind === 'offer') {
     const [rows] = await connection.execute(
       `SELECT DISTINCT a.id, a.account_name, a.item_name, a.item_id, a.item_key_hash,
-              a.icon_key, a.quality, a.item_type_name, a.trait,
+              a.icon_key, a.quality, a.item_type_name, a.trait, a.enchant_name,
               -- A standing offer is a promise, not a copy. There is nothing to hand
               -- over unless the owner has one in a bag at this moment, so the count
               -- is computed here rather than assumed from the offer existing.
@@ -1335,7 +1456,7 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
 
   const [rows] = await connection.execute(
     `SELECT DISTINCT i.id, i.account_name, i.item_name, i.item_id, i.item_key_hash,
-            i.icon_key, i.quality, i.item_type_name, i.trait, i.item_count
+            i.icon_key, i.quality, i.item_type_name, i.trait, i.enchant_name, i.item_count
        ${visibleItemsFrom(names)}
       WHERE ${itemsVisibilityClause(names)} AND i.id = ?
       LIMIT 1`,
@@ -1374,7 +1495,10 @@ async function closestRequesterAccount(connection, mine, ownerAccountName) {
  * not against the raw count, so two people cannot both be promised the same five.
  * A standing offer is a promise rather than a count, so it always means one.
  *
- * @returns {Promise<{id: number, quantity: number, itemName: string, ownerAccountName: string}>}
+ * Asking again for a row already in the basket updates that draft instead of adding a
+ * second one, so the quantity returned is the total the single row now holds.
+ *
+ * @returns {Promise<{id: number, quantity: number, itemName: string, ownerAccountName: string, combined?: boolean}>}
  */
 export async function createRequest(
   connection,
@@ -1397,23 +1521,29 @@ export async function createRequest(
   }
 
   let wanted = Math.max(1, Math.trunc(Number(quantity) || 1));
+  let existingDraft = null;
+  let room = wanted;
 
   if (kind === 'inventory') {
     const total = Number(target.item_count) || 0;
     const reserved = await reservedQuantity(connection, 'inventory', Number(target.id));
-    const available = Math.max(0, total - reserved);
+    existingDraft = await ownDraftForTarget(connection, userId, 'inventory', Number(target.id));
+    const alreadyHeld = existingDraft ? Number(existingDraft.quantity) || 0 : 0;
+    room = requestRoom({ total, reserved, alreadyHeld });
 
-    if (available <= 0) {
+    if (room <= 0) {
       const error = new Error('Every copy of that item has already been asked for.');
       error.statusCode = 409;
       throw error;
     }
 
-    if (wanted > available) {
+    if (wanted > room) {
       const error = new Error(
-        available === 1
-          ? 'Only one is left to ask for.'
-          : `Only ${available} are left to ask for${reserved > 0 ? ` (${reserved} of ${total} already requested)` : ''}.`
+        alreadyHeld > 0
+          ? `You already hold ${alreadyHeld}; ${room} in total is all you can have of the ${total} shared.`
+          : room === 1
+            ? 'Only one is left to ask for.'
+            : `Only ${room} are left to ask for${reserved > 0 ? ` (${reserved} of ${total} already requested)` : ''}.`
       );
       error.statusCode = 409;
       throw error;
@@ -1432,6 +1562,33 @@ export async function createRequest(
     }
   }
 
+  // Asking again for something already in the basket tops that row up: one row per
+  // item, holding the total wanted, so the basket never shows the same thing twice.
+  if (existingDraft) {
+    const combined = combineQuantity({
+      wanted,
+      alreadyHeld: Number(existingDraft.quantity) || 0,
+      room,
+    });
+
+    await connection.execute(
+      `UPDATE itemshare_requests
+          SET quantity = ?
+        WHERE id = ? AND requester_user_id = ? AND status = 'draft'`,
+      [combined, Number(existingDraft.id), Number(userId)]
+    );
+    await resetBasketClock(connection, userId, minutes);
+
+    return {
+      id: Number(existingDraft.id),
+      quantity: combined,
+      itemName: target.item_name || 'that item',
+      ownerAccountName: target.account_name,
+      combined: true,
+      basket: await getDraftBasket(connection, userId),
+    };
+  }
+
   const requesterAccount =
     (await closestRequesterAccount(connection, mine, target.account_name)) || mine[0] || '';
 
@@ -1439,7 +1596,7 @@ export async function createRequest(
     `INSERT INTO itemshare_requests
        (requester_user_id, requester_account_name, owner_account_name, item_kind,
         shared_item_id, always_share_id, item_key_hash, item_name, icon_key, item_id, quality,
-        item_type_name, trait, quantity, status, expires_at)
+        item_type_name, trait, enchant_name, quantity, status, expires_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NOW() + INTERVAL ${holdMinutes(
        minutes
      )} MINUTE)`,
@@ -1457,6 +1614,7 @@ export async function createRequest(
       Number(target.quality) || 0,
       target.item_type_name || '',
       target.trait || '',
+      target.enchant_name || '',
       wanted,
     ]
   );
@@ -1505,7 +1663,7 @@ export async function getRequesterRequests(connection, userId) {
  * the same window, and the server stops returning it just after, so a refresh does
  * not bring it back.
  */
-export const BASKET_CANCEL_LINGER_SECONDS = 30;
+export const BASKET_CANCEL_LINGER_SECONDS = 5;
 
 /**
  * What is in the basket: everything held but unsent, plus anything removed from it

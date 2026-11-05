@@ -13,7 +13,36 @@
 // browsers: the layout is a table with inline styles, and there is a plain-text copy
 // for clients that refuse HTML.
 
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+
 const ENDPOINT = 'https://api.resend.com/emails';
+
+// Quality colours that survive a white mail body: the game's own white would vanish
+// there, so the ordinary tier is a dark grey instead.
+const QUALITY_COLOURS = {
+  1: '#4a4a4a',
+  2: '#2e8b3a',
+  3: '#2f6fed',
+  4: '#7a3fd1',
+  5: '#a87400',
+};
+
+function qualityColour(quality) {
+  return QUALITY_COLOURS[Number(quality) || 0] || '#3c4557';
+}
+
+/**
+ * What tells two copies of the same name apart: its type, its trait and, when it has
+ * one, its enchantment. Two Briarheart swords with different traits are the same
+ * name, so this is the line the owner actually needs to pick the right one.
+ */
+function itemDetailText(item) {
+  return [item.type, item.trait, item.enchant ? `Enchant: ${item.enchant}` : '']
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' \u00b7 ');
+}
 
 function escape(value) {
   return String(value ?? '')
@@ -24,14 +53,53 @@ function escape(value) {
     .replace(/'/g, '&#39;');
 }
 
+// Where mail leaves the machine. On a Linux host that already runs a mail server,
+// the standard `sendmail` interface is enough: no account, no key and no HTTP
+// service in the middle. Resend stays available for hosts without one (Windows
+// during development, for example). EMAIL_TRANSPORT forces a choice, or none.
+const SENDMAIL_CANDIDATES = ['/usr/sbin/sendmail', '/usr/lib/sendmail', '/usr/bin/sendmail'];
+
+function findSendmail(env) {
+  const configured = String(env.SENDMAIL_PATH || '').trim();
+
+  if (configured) {
+    return existsSync(configured) ? configured : '';
+  }
+
+  return SENDMAIL_CANDIDATES.find((path) => existsSync(path)) || '';
+}
+
 export function emailConfig(env = process.env) {
   const apiKey = String(env.RESEND_API_KEY || '').trim();
   const from = String(env.EMAIL_FROM || '').trim();
   const siteUrl = String(env.BASE_URL || '')
     .trim()
     .replace(/\/+$/, '');
+  const sendmail = findSendmail(env);
+  const wanted = String(env.EMAIL_TRANSPORT || '').trim().toLowerCase();
 
-  return { apiKey, from, siteUrl, configured: Boolean(apiKey && from) };
+  let provider = '';
+
+  if (wanted === 'sendmail') {
+    provider = sendmail && from ? 'sendmail' : '';
+  } else if (wanted === 'resend') {
+    provider = apiKey && from ? 'resend' : '';
+  } else if (wanted !== 'none') {
+    // Default: the host's own mail server when there is one, otherwise Resend.
+    provider = sendmail && from ? 'sendmail' : apiKey && from ? 'resend' : '';
+  }
+
+  const reason = !from
+    ? 'set EMAIL_FROM in Database/.env to the address mail should come from'
+    : provider
+      ? ''
+      : `no mail transport - ${
+          process.platform === 'win32'
+            ? 'Windows has no sendmail, so set RESEND_API_KEY'
+            : 'no sendmail was found on this host'
+        }`;
+
+  return { apiKey, from, siteUrl, sendmail, provider, reason, configured: Boolean(provider) };
 }
 
 /**
@@ -53,17 +121,27 @@ export function renderRequestEmail({
   const when = sentAt instanceof Date ? sentAt.toUTCString() : String(sentAt);
 
   const rows = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const details = itemDetailText(item);
+
+      return `
               <tr>
-                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px">${escape(
-                  item.name
-                )}</td>
-                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px;text-align:right;font-variant-numeric:tabular-nums">${
+                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px">
+                  <span style="color:${qualityColour(
+                    item.quality
+                  )};font-weight:600">${escape(item.name)}</span>${
+                    details
+                      ? `<div style="margin-top:2px;font-size:12px;color:#6b7280">${escape(
+                          details
+                        )}</div>`
+                      : ''
+                  }
+                </td>
+                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;vertical-align:top">${
                   Number(item.quantity) || 1
                 }</td>
-              </tr>`
-    )
+              </tr>`;
+    })
     .join('');
 
   const html = `<!DOCTYPE html>
@@ -122,7 +200,10 @@ export function renderRequestEmail({
     '',
     `${who} asked you for these items from ${ownerAccount} on ItemShare:`,
     '',
-    ...items.map((item) => `  ${Number(item.quantity) || 1} x ${item.name}`),
+    ...items.map((item) => {
+      const details = itemDetailText(item);
+      return `  ${Number(item.quantity) || 1} x ${item.name}${details ? ` - ${details}` : ''}`;
+    }),
     '',
     `Mail ${total === 1 ? 'it' : 'them'} to ${who} in game when you are next online.`,
     `Sent ${when}.`,
@@ -134,19 +215,108 @@ export function renderRequestEmail({
   return { subject, html, text };
 }
 
+function headerSafe(value) {
+  return String(value ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
 /**
- * Sends one message. Returns `{ ok }` or `{ ok: false, error }` rather than throwing:
- * a mail provider having a bad day must never turn a sent request into an error page.
+ * The message a mail server expects on stdin: headers, then the plain-text part and
+ * the HTML part as alternatives, so each client shows whichever it can.
  */
-export async function sendEmail({ to, subject, html, text }, config = emailConfig()) {
-  if (!config.configured) {
-    return { ok: false, error: 'email is not configured' };
-  }
+export function buildMimeMessage({ to, from, subject, html, text, date = new Date() }) {
+  const boundary = `itemshare-${date.getTime().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
 
-  if (!to) {
-    return { ok: false, error: 'no address to send to' };
-  }
+  return [
+    `From: ${headerSafe(from)}`,
+    `To: ${headerSafe(to)}`,
+    `Subject: ${headerSafe(subject)}`,
+    `Date: ${date.toUTCString()}`,
+    `Message-ID: <${date.getTime()}.${Math.random().toString(36).slice(2, 10)}@itemshare.local>`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="utf-8"',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    text || '',
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="utf-8"',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    html || '',
+    '',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+}
 
+/**
+ * Hands the message to the host's mail server through `sendmail -t`, which reads the
+ * recipients from the headers. Never throws: a broken or missing MTA has to leave the
+ * request itself untouched, exactly like a failing HTTP provider would.
+ */
+function sendWithSendmail({ to, subject, html, text }, config) {
+  return new Promise((resolve) => {
+    const message = buildMimeMessage({ to, from: config.from, subject, html, text });
+    let finished = false;
+    const finish = (result) => {
+      if (!finished) {
+        finished = true;
+        resolve(result);
+      }
+    };
+
+    let child;
+
+    try {
+      child = spawn(config.sendmail, ['-t', '-i'], { stdio: ['pipe', 'ignore', 'pipe'] });
+    } catch (error) {
+      finish({ ok: false, error: error.message });
+      return;
+    }
+
+    let stderr = '';
+    const killer = setTimeout(() => child.kill('SIGKILL'), 15000);
+    const guard = setTimeout(
+      () => finish({ ok: false, error: 'sendmail did not finish in time' }),
+      20000
+    );
+
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => {
+      clearTimeout(killer);
+      clearTimeout(guard);
+      finish({ ok: false, error: error.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(killer);
+      clearTimeout(guard);
+      finish(
+        code === 0
+          ? { ok: true, id: 'sendmail' }
+          : {
+              ok: false,
+              error: `sendmail exited ${code}${stderr ? `: ${stderr.trim().slice(0, 200)}` : ''}`,
+            }
+      );
+    });
+
+    // A mail server that exits before reading everything closes the pipe; that is
+    // its answer, not a crash on this side.
+    child.stdin.on('error', () => {});
+    child.stdin.end(message);
+  });
+}
+
+async function sendWithResend({ to, subject, html, text }, config) {
   try {
     const response = await fetch(ENDPOINT, {
       method: 'POST',
@@ -167,4 +337,23 @@ export async function sendEmail({ to, subject, html, text }, config = emailConfi
   } catch (error) {
     return { ok: false, error: error.message };
   }
+}
+
+/**
+ * Sends one message through whichever transport is configured. Returns `{ ok }` or
+ * `{ ok: false, error }` rather than throwing: mail having a bad day must never turn
+ * a sent request into an error page.
+ */
+export async function sendEmail({ to, subject, html, text }, config = emailConfig()) {
+  if (!config.configured) {
+    return { ok: false, error: config.reason || 'email is not configured' };
+  }
+
+  if (!to) {
+    return { ok: false, error: 'no address to send to' };
+  }
+
+  return config.provider === 'sendmail'
+    ? sendWithSendmail({ to, subject, html, text }, config)
+    : sendWithResend({ to, subject, html, text }, config);
 }

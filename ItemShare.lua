@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.2"
+local ADDON_VERSION = "1.8.6"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -18,6 +18,7 @@ local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 local defaults = {
     sharedItems = {},
     alwaysShare = {},
+    reserves = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
     characterGuilds = {},
@@ -35,6 +36,7 @@ local dmsg
 local RemoveItemFromShareByKey
 local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
+local IsSavedEntryEligibleForShare
 local RefreshShareListWindow
 local RefreshShareListWindowIfVisible
 local IsItemLinkAlwaysShared
@@ -547,6 +549,14 @@ local function GetOrCreateShareListRow(index)
             row.isShared = false
             updateRowSharedVisuals()
         elseif row.entryData then
+            -- Re-adding from the list window is still a marking: an item that has
+            -- become bound since it was filed must not slip back in this way.
+            local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
+            if not isEligible then
+                dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
+                return
+            end
+
             local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
             if savedEntry then
                 row.entryData = savedEntry
@@ -579,7 +589,11 @@ local function GetOrCreateShareListRow(index)
     statusIcon:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
         InitializeTooltip(InformationTooltip, self, TOPLEFT, 0, 0)
-        SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        if row.itemLink and IsItemLinkAlwaysShared(row.itemLink) then
+            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one, in a bag or not.")
+        else
+            SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
+        end
     end)
 
     statusIcon:SetHandler("OnMouseExit", function()
@@ -1439,6 +1453,29 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     }
 end
 
+-- The item link carries the item's own bound state, which still answers when the
+-- slot cannot: a guild bank tab that is not open, a house bank the client has not
+-- loaded, a saved row whose bag was reorganised. It is a second opinion behind
+-- IsItemBound, never a replacement for it.
+local function IsItemLinkBound(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" or type(GetItemLinkBoundStatus) ~= "function" then
+        return false
+    end
+
+    local status = GetItemLinkBoundStatus(link)
+    if status == nil then
+        return false
+    end
+
+    -- The named constant is preferred so a client that renumbers the enum is still
+    -- read correctly; every version defines BOUND_STATUS_UNBOUND as 0.
+    if BOUND_STATUS_UNBOUND ~= nil then
+        return status ~= BOUND_STATUS_UNBOUND
+    end
+    return tonumber(status) ~= 0
+end
+
 local function IsItemEligibleForShare(bagId, slotIndex)
     if bagId == nil or slotIndex == nil then
         return false, "Invalid inventory slot."
@@ -1446,10 +1483,87 @@ local function IsItemEligibleForShare(bagId, slotIndex)
     if IsItemBound(bagId, slotIndex) then
         return false, "Item is already bound."
     end
+    if IsItemLinkBound(GetNormalizedItemLink(bagId, slotIndex)) then
+        return false, "Item is already bound."
+    end
     if IsItemBoPAndTradeable(bagId, slotIndex) then
         return false, "Item is restricted to temporary group sharing."
     end
     return true, nil
+end
+
+-- A row in the share list keeps the bag and slot it was filed from, but that slot
+-- may hold something else by now. The slot check only counts when it still holds
+-- this item; otherwise the link's own bound state is the honest answer.
+IsSavedEntryEligibleForShare = function(entry)
+    if not entry then
+        return false, "No item data."
+    end
+
+    local itemLink = tostring(entry.itemLink or "")
+    if itemLink == "" then
+        return false, "No item link."
+    end
+
+    local bagId = tonumber(entry.bagId)
+    local slotIndex = tonumber(entry.slotIndex)
+
+    if bagId and slotIndex and GetNormalizedItemLink(bagId, slotIndex) == itemLink then
+        return IsItemEligibleForShare(bagId, slotIndex)
+    end
+
+    if IsItemLinkBound(itemLink) then
+        return false, "Item is already bound."
+    end
+
+    return true, nil
+end
+
+-- "Share reserve": keep this many for yourself and offer only what you have above
+-- it. Keyed by item link, like a standing offer, so the number follows the item
+-- between bags and survives it leaving them entirely.
+local function GetShareReserveTable()
+    if not ItemShare.savedVars then
+        return {}
+    end
+    if type(ItemShare.savedVars.reserves) ~= "table" then
+        ItemShare.savedVars.reserves = {}
+    end
+    return ItemShare.savedVars.reserves
+end
+
+local function GetShareReserve(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return 0
+    end
+
+    local reserve = tonumber(GetShareReserveTable()[link]) or 0
+    return math.max(0, math.floor(reserve))
+end
+
+local function SetShareReserve(itemLink, reserve)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return
+    end
+
+    local amount = math.max(0, math.floor(tonumber(reserve) or 0))
+    local reserves = GetShareReserveTable()
+
+    if amount <= 0 then
+        reserves[link] = nil
+    else
+        reserves[link] = amount
+    end
+end
+
+-- What is offered is what is held above the reserve. Twenty held with twelve kept
+-- shares eight; eight held with twelve kept shares nothing, and the share entry
+-- stays at zero so the marking comes back by itself when more are acquired.
+local function ShareableCount(itemLink, heldCount)
+    local held = math.max(0, math.floor(tonumber(heldCount) or 0))
+    return math.max(0, held - GetShareReserve(itemLink))
 end
 
 local function IsItemLinkSharedInLocation(itemLink, locationKey)
@@ -1643,17 +1757,29 @@ local function UpdateSharedRowMarker(control, slotData)
 
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     local locationKey = select(1, GetBagLocationInfo(bagId))
-    local isShared = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
+    local isSharedInList = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
+    local sharedEntry = isSharedInList
+            and ItemShare.savedVars
+            and ItemShare.savedVars.sharedItems
+            and ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
+        or nil
+    -- A share that is entirely inside its reserve offers nothing, and the site does
+    -- not list it, so it gets no badge: the badge would promise a copy nobody can
+    -- ask for.
+    local isShared = sharedEntry ~= nil and (tonumber(sharedEntry.count or 0) or 0) > 0
+    -- A standing offer deserves its badge even when no copy is in a bag right now:
+    -- that is what the offer means. It used to show nothing at all in that state,
+    -- which made the gold icon look as if it did not exist.
+    local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
 
-    if isShared then
-        -- Same glyph with a closed ring and a gold tint when the item is also a
-        -- standing offer, so the bag and the share list never disagree.
-        local isAlways = IsItemLinkAlwaysShared(itemLink)
+    if isShared or isAlways then
+        -- Same glyph with a closed ring and a gold tint for a standing offer, so the
+        -- bag and the share list never disagree.
         marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
         marker.ItemShareAlways = isAlways and true or false
     end
 
-    marker:SetHidden(not isShared)
+    marker:SetHidden(not (isShared or isAlways))
 end
 
 local function HookInventoryRowCallbacks()
@@ -1713,7 +1839,20 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
 
     local stackCount = GetItemShareCount(bagId, slotIndex)
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
-    SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
+    local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
+    local reserve = savedEntry and tonumber(savedEntry.reserve) or 0
+
+    if reserve > 0 then
+        dmsg(string.format(
+            "%s %s: keeping %d back, so %d of %d held are shared.",
+            existing and "Updated" or "Added",
+            itemData.itemName,
+            reserve,
+            tonumber(savedEntry.count) or 0,
+            stackCount
+        ))
+        return
+    end
 
     dmsg(string.format(
         "%s shared item %s from %s (stack size: %d)",
@@ -1741,6 +1880,12 @@ end
 
 SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     if not itemData or not itemData.itemKey then
+        return nil
+    end
+
+    -- Every path that files an item ends here, so the rule lives here as well: a
+    -- bound item is not offerable, whichever way it was reached.
+    if IsItemLinkBound(itemData.itemLink) then
         return nil
     end
 
@@ -1792,7 +1937,12 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.slotIndex = itemData.slotIndex
     entry.locationKey = itemData.locationKey
     entry.sharedFrom = itemData.sharedFrom
-    entry.count = tonumber(count or 0) or 0
+    -- What the bag reported is kept beside what is actually offered, so the number
+    -- on the site and the number kept back can never drift apart.
+    local heldCount = math.max(0, math.floor(tonumber(count) or 0))
+    entry.heldCount = heldCount
+    entry.reserve = GetShareReserve(itemData.itemLink)
+    entry.count = ShareableCount(itemData.itemLink, heldCount)
     entry.firstDumpedAt = tonumber(firstDumpedAt or entry.firstDumpedAt or now) or now
     entry.lastDumpedAt = now
 
@@ -1871,6 +2021,10 @@ end
 
 local function SaveAlwaysShareEntry(itemData)
     if not itemData or not itemData.itemLink or itemData.itemLink == "" then
+        return nil
+    end
+
+    if IsItemLinkBound(itemData.itemLink) then
         return nil
     end
 
@@ -2363,7 +2517,10 @@ SyncSharedItemsWithInventory = function(quiet)
             local previousLocationKey = tostring(entry.locationKey or "")
             local targetItemKey = tostring(currentItemKey or itemKey)
 
-            entry.count = actualCount
+            local reserve = GetShareReserve(entry.itemLink)
+            entry.heldCount = actualCount
+            entry.reserve = reserve
+            entry.count = ShareableCount(entry.itemLink, actualCount)
             entry.sharedFrom = currentLocation
             entry.locationKey = currentLocationKey
             entry.itemKey = targetItemKey
@@ -2376,13 +2533,13 @@ SyncSharedItemsWithInventory = function(quiet)
                 sharedItems[itemKey] = entry
             end
 
-            if previousCount ~= actualCount
+            if previousCount ~= entry.count
                 or previousLocation ~= currentLocation
                 or previousItemKey ~= targetItemKey
                 or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
                 if not quiet then
-                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, actualCount, currentLocation))
+                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, entry.count, currentLocation))
                 end
             else
                 unchangedCount = unchangedCount + 1
@@ -2490,7 +2647,9 @@ RebuildSharedItemsWithInventory = function(quiet)
                 end
                 entry = rebuiltEntry
             else
-                entry.count = actualCount
+                entry.heldCount = actualCount
+                entry.reserve = GetShareReserve(entry.itemLink)
+                entry.count = ShareableCount(entry.itemLink, actualCount)
                 entry.sharedFrom = currentLocation
                 entry.locationKey = currentLocationKey
                 entry.itemKey = targetItemKey
@@ -2550,6 +2709,101 @@ local function ScheduleAutoReconcile(reason)
     end, 4000)
 end
 
+local function SharedEntriesMatching(searchText)
+    local needle = string.lower(zo_strtrim(tostring(searchText or "")))
+    local matches = {}
+
+    if needle == "" then
+        return matches
+    end
+
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        if string.find(string.lower(tostring(entry.itemName or "")), needle, 1, true) then
+            matches[#matches + 1] = entry
+        end
+    end
+
+    return matches
+end
+
+local function SetShareReserveByName(searchText, amount)
+    local matches = SharedEntriesMatching(searchText)
+
+    if #matches == 0 then
+        dmsg(string.format("No shared item matches \"%s\".", tostring(searchText)))
+        return
+    end
+    if #matches > 1 then
+        dmsg(string.format(
+            "%d shared items match \"%s\"; use more of the name.",
+            #matches,
+            tostring(searchText)
+        ))
+        return
+    end
+
+    local entry = matches[1]
+    SetShareReserve(entry.itemLink, amount)
+
+    -- The count comes from what the file already recorded, so it is right even when
+    -- the bag holding the item is not readable this session. The next rebuild
+    -- corrects it from live inventory data.
+    local held = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
+    entry.heldCount = held
+    entry.reserve = GetShareReserve(entry.itemLink)
+    entry.count = ShareableCount(entry.itemLink, held)
+
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
+
+    if entry.reserve > 0 then
+        dmsg(string.format(
+            "%s: keeping %d back, sharing %d of %d held.",
+            tostring(entry.itemName or "that item"),
+            entry.reserve,
+            entry.count,
+            held
+        ))
+    else
+        dmsg(string.format(
+            "%s: sharing everything held (%d).",
+            tostring(entry.itemName or "that item"),
+            entry.count
+        ))
+    end
+end
+
+local function PrintShareReserves()
+    local entries = {}
+
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        if (tonumber(entry.reserve or 0) or 0) > 0 then
+            entries[#entries + 1] = entry
+        end
+    end
+
+    if #entries == 0 then
+        dmsg("No item has a share reserve. Set one with /itemshare reserve <amount> <part of the name>.")
+        return
+    end
+
+    table.sort(entries, function(a, b)
+        return string.lower(tostring(a.itemName or "")) < string.lower(tostring(b.itemName or ""))
+    end)
+
+    dmsg(string.format("Share reserves (%d):", #entries))
+    for _, entry in ipairs(entries) do
+        dmsg(string.format(
+            "  %s: keep %d, sharing %d of %d held",
+            tostring(entry.itemName or "Unknown Item"),
+            tonumber(entry.reserve) or 0,
+            tonumber(entry.count) or 0,
+            tonumber(entry.heldCount or entry.count or 0) or 0
+        ))
+    end
+    dmsg("Clear one with /itemshare noreserve <part of the name>.")
+end
+
 local function OnSlashCommand(arg)
     local rawArg = zo_strtrim(arg or "")
     local lowerArg = zo_strlower(rawArg)
@@ -2567,6 +2821,9 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
+        dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
+        dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
@@ -2617,6 +2874,17 @@ local function OnSlashCommand(arg)
         PrintAlwaysShareItems()
     elseif string.match(lowerArg, "^noalways%s+") then
         RemoveAlwaysShareByName(zo_strtrim(rawArg:sub(9)))
+    elseif lowerArg == "reserves" then
+        PrintShareReserves()
+    elseif string.match(lowerArg, "^noreserve%s+") then
+        SetShareReserveByName(zo_strtrim(rawArg:sub(11)), 0)
+    elseif string.match(lowerArg, "^reserve%s+") then
+        local amount, needle = rawArg:match("^%s*[Rr]eserve%s+(%d+)%s+(.+)$")
+        if not amount then
+            dmsg("Usage: /itemshare reserve <amount to keep> <part of the item name>")
+        else
+            SetShareReserveByName(zo_strtrim(needle), tonumber(amount) or 0)
+        end
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
@@ -2662,6 +2930,9 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare sharelink - Put the spreadsheet URL into chat")
         dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
         dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
+        dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
+        dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare stamp     - Give guilds to shares written before 1.6.0 so they appear on the site")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end

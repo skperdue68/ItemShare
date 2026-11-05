@@ -56,10 +56,143 @@ default, so the site runs without a `.env` on a local root/no-password server.
 | `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | `$BASE_URL/auth/google/callback` | Must match the Google client's redirect URI |
-| `BASE_URL` | `http://localhost:$PORT` | Public address used to build the default redirect URIs |
+| `BASE_URL` | `http://localhost:$PORT` | Public address used to build the default redirect URIs and the email's site link |
+| `SESSION_TTL_DAYS` | `30` | How long a sign-in lasts |
+| `REQUEST_HOLD_MINUTES` | `5` | How long a picked item is held before it goes back |
+| `REQUEST_SWEEP_INTERVAL_MS` | `10000` | How often lapsed baskets are released |
+| `SIMULATE_TOKEN` | empty | Lets `npm run simulate` push live updates to open pages |
+| `EMAIL_FROM` | empty | Sender address for request emails; blank disables sending |
+| `EMAIL_TRANSPORT` | automatic | `sendmail`, `resend` or `none` |
+| `SENDMAIL_PATH` | automatic | Where the host's `sendmail` is |
+| `RESEND_API_KEY` | empty | Only for hosts without a local mail server |
+| `ICON_BACKFILL_INTERVAL_MS` | `1800000` | How often missing icons are retried |
+| `ICON_BACKFILL_BATCH` | `20` | How many item ids one retry pass may look up |
 
 The MariaDB account needs CREATE privileges on first run (to create the database
 and `itemshare_*` tables). After that, ordinary read/write is enough.
+
+## Deploying it on a Linux host
+
+What a real host needs: Node 20 or newer, MariaDB, and (later, if you want the
+request emails) a mail server. Nothing else - no build step, no bundler, no
+front-end toolchain.
+
+**1. Get the code and dependencies.**
+
+```bash
+sudo useradd --system --home /opt/itemshare --shell /usr/sbin/nologin itemshare
+sudo mkdir -p /opt/itemshare && sudo chown itemshare: /opt/itemshare
+git clone https://github.com/skperdue68/ItemShare.git /opt/itemshare
+cd /opt/itemshare/Database
+npm ci                      # from package-lock.json; no global tools needed
+```
+
+**2. Make the database account.** Run this once as root on the MariaDB server;
+`ALL` on `itemshare.*` includes the CREATE the first boot needs to make the
+database itself:
+
+```sql
+CREATE USER 'itemshare'@'localhost' IDENTIFIED BY 'a-long-password';
+GRANT ALL PRIVILEGES ON itemshare.* TO 'itemshare'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+**3. Write `.env`.**
+
+```bash
+cd /opt/itemshare/Database
+cp .env.example .env
+chmod 600 .env
+openssl rand -hex 32        # paste into SESSION_SECRET
+```
+
+Then edit it: `MARIADB_USER`, `MARIADB_PASSWORD`, `BASE_URL` (the public https
+address), `SESSION_SECRET`, and the provider ids if you want sign-in. Leave the
+email settings blank for now - see step 6.
+
+**4. Run it as a service.** `/etc/systemd/system/itemshare.service`:
+
+```ini
+[Unit]
+Description=ItemShare upload site
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=itemshare
+WorkingDirectory=/opt/itemshare/Database
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now itemshare
+journalctl -u itemshare -f
+```
+
+Use `command -v node` for `ExecStart`; it is `/usr/bin/node` for a distro package
+and something else for nvm or a tarball install. On boot the log should name the
+migrations it applied (`013_itemshare_request_details.sql`, `014_itemshare_item_tips.sql`,
+`015_itemshare_request_enchant.sql`) and then `ItemShare upload site listening on ...`.
+
+**5. Put it behind TLS.** The site speaks plain HTTP on `PORT`; terminate TLS at a
+proxy. A minimal nginx site (the single location covers the live-update socket):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    client_max_body_size 16m;   # uploads are capped at 12 MB
+}
+```
+
+Set `BASE_URL` to that https address and restart, or the sign-in redirect URI and
+the email's link will point at localhost.
+
+**6. Add the email when you are ready.** Requests work before this: they are
+recorded, and the log says `Email: N request emails not sent - set EMAIL_FROM ...`.
+On the host, give the machine a mail server (`sudo apt install postfix`, or `msmtp`
+configured to relay), check it with
+`echo test | sendmail -t you@example.com`, then set `EMAIL_FROM` to an address that
+server may send as and `sudo systemctl restart itemshare`. Nothing else changes: no
+code, no migrations, no dependency. If the host cannot send mail directly (port 25
+blocked, or this is Windows), set `RESEND_API_KEY` and an `EMAIL_FROM` on a domain
+verified in Resend instead, optionally with `EMAIL_TRANSPORT=resend`.
+
+**7. Optional companions.**
+
+- `npm run simulate` in a second terminal (or another unit) keeps a few fake people
+  browsing; set `SIMULATE_TOKEN` first so open pages refresh live.
+- `npm run seed:demo` puts a demo guildmate in the list without a second upload.
+- `npm run backfill` retries item icons by hand; the site does it on a timer too.
+
+**8. Updating.**
+
+```bash
+cd /opt/itemshare
+git pull
+cd Database && npm ci
+sudo systemctl restart itemshare      # applies any new migrations on boot
+```
+
+**9. Backups.** Everything is in one database: `mysqldump itemshare > itemshare-$(date +%F).sql`.
+Uploads themselves are not stored on disk - a saved variables file is parsed and
+the rows are kept, so the database dump is the whole backup.
+
+**After deploying, check:** the page loads over https, a sign-in round trip
+completes, an upload lands, the Request tab shows items, picking one shows the
+basket clock, sending it appears in *Your requests* with a send time, and
+`SELECT filename FROM itemshare_schema_migrations;` lists migrations through `015`.
 
 ### Sign-in providers (optional, either or both)
 
@@ -148,9 +281,13 @@ the item: an upload rewrites it, so moving something in game and saving again up
 it here without anyone touching the site.
 
 A filter bar above the table narrows the list by item type, owner account, how
-recently it was added (the last day, 7 days, 30 days) and item name. Filters are
-ordinary query parameters (`/?type=Weapon&owner=@Name&added=7&q=sword&sort=added&dir=desc`),
-so a filtered, sorted view can be bookmarked.
+recently it was added (the last day, 7 days, 30 days) and item name. Type and owner
+accept several values at once: each is a menu of tick boxes, and everything ticked
+appears as a chip on one long row under the controls, where clicking a chip takes
+just that value off again. "Clear filters" empties the whole row. Filters are
+ordinary query parameters, repeated once per value
+(`/?type=Weapon&type=Armor&owner=@Name&added=7&q=sword&sort=added&dir=desc`), so a
+filtered, sorted view can be bookmarked and still works with scripts off.
 
 The list refreshes automatically after an upload, and a request being cancelled
 reaches the person who asked the same way.
@@ -163,9 +300,12 @@ is readable without a guild overlap, so an account in no guilds sees nothing.
 ## Asking for something
 
 Every row in *Request* has a **Request** button. It opens a small dialog offering one,
-the whole stack, or any number in between. The largest number offered is what is
-still unspoken for rather than the raw `item_count`, so two people can never be
-promised the same five. A standing offer has no count behind it, so it always means one copy, and it can
+everything you can hold, or any number in between. The largest number offered is what
+you may end up holding, which is the copies nobody has claimed plus whatever you have
+already put in your own basket, and never more than the raw `item_count` - so two
+people can never be promised the same five, and asking again for a stack you already
+took part of still works. A number picked there is the total you want to hold, so the
+same item stays one row in the basket. A standing offer has no count behind it, so it always means one copy, and it can
 only be asked for while the owner has one in a bag right now. When they do not, the
 row says *Not in a bag right now* instead of offering a button that cannot be
 honoured, and the server refuses the same request either way.
@@ -195,8 +335,19 @@ picked rather than from the moment it is sent:
   arithmetic is right even between two sweeps.
 - Each item in the basket can be removed before sending, which also restarts the
   clock for the rest. A removed row stays where it was, marked **Cancelled**, for
-  about half a minute, then fades out and the rows below it close up. It is not added
-  to the history, because it was never sent.
+  about five seconds, then fades out and the rows below it close up. It is not added
+  to the history, because it was never sent. The five seconds belong to the request,
+  not to the row on screen, so a live update that rebuilds the table cannot restart
+  them or lose them.
+- **Asking again for the same item tops the row up.** Taking 2 of a stack of 5 and
+  then asking for the whole stack leaves one basket row holding 5, not two rows
+  holding 7: the number in the dialog is the total you want to hold, and the request
+  button offers that total (your own basket included) rather than only what is
+  unclaimed.
+- A row that runs out - every copy asked for and sent - also stays for about five
+  seconds before fading away, then the request list stops showing it. A row that is
+  only being picked stays visible with *being picked* beside it, because a basket can
+  lapse and the copy come back.
 - After every upload the owner's requests are settled oldest first, because they were
   promised first. One whose item has gone, or whose turn the stack no longer reaches,
   is cancelled with a sentence the requester can read: "Ghost Bane now has 2 of
@@ -222,19 +373,39 @@ Sending the basket emails the owner of each item: one message per person, headed
 and a failed send is logged rather than turned into an error - the request already
 exists either way.
 
-Delivery is Resend over its HTTP API, so nothing has to be installed:
+Each line also carries what tells two copies of a name apart: the item's type, its
+trait and its enchantment, with the name in its quality colour. That is copied onto
+the request when it is made (migration 015 adds `enchant_name`), because the next
+upload rewrites the item rows the request came from. An owner with three Briarheart
+swords and two Twice-Born rings can therefore see exactly which one was asked for
+without opening the site.
+
+On Linux the site sends mail itself, through the mail server the machine already
+runs (`sendmail -t`, which postfix, exim, msmtp and opensmtpd all provide). No
+account, key or third-party service is involved, and nothing is installed by the
+site:
 
 ```
-RESEND_API_KEY=re_...
 EMAIL_FROM=ItemShare <requests@your-domain.example>
-BASE_URL=https://your-site.example
+# BASE_URL=https://your-site.example
 ```
 
-`EMAIL_FROM` has to be on a domain verified in Resend. With either setting blank the
-site still runs and the log says `Email: N request emails not sent - set
-RESEND_API_KEY and EMAIL_FROM in Database/.env`. Only an owner whose ESO account is
-linked to a signed-in person has an address at all, so a request to an unclaimed
-account sends nothing.
+Anything that gives the machine a working `sendmail` is enough - installing postfix
+or msmtp is the usual step on a fresh box, and `echo test | sendmail -t you@example.com`
+is the check. If the binary is somewhere unusual, set `SENDMAIL_PATH`; `EMAIL_TRANSPORT`
+forces `sendmail`, `resend` or `none` when both happen to be available.
+
+Windows has no local mail server, so during development there sending is simply
+skipped: the site works, requests are still recorded, and the log says
+`Email: N request emails not sent - ...` with the reason. Set `RESEND_API_KEY` (and an
+`EMAIL_FROM` on a domain verified in Resend) there - or on a Linux host without an
+MTA - to send over Resend's HTTP API instead; `EMAIL_TRANSPORT=resend` pins that
+choice.
+
+Only an owner whose ESO account is linked to a signed-in person has an address at
+all, so a request to an unclaimed account sends nothing, and a local mail server still
+has to be allowed to send as the `EMAIL_FROM` address (for postfix, that is
+`myorigin`/`myhostname` plus a matching sender domain in your DNS).
 
 ## Making it look busy: simulated people
 
@@ -325,12 +496,18 @@ often it is hovered and the browser never talks to UESP.
 The cache is an optimisation: with an empty table, no network, or UESP refusing the
 request, the card still shows everything the row carries and simply stops there. The
 set name is no longer printed under the item name - it lives in the card, with the
-bonus lines, instead. Clicking a name still opens the UESP page in a new tab, which is
-the place to go when the card is not enough.
+bonus lines, instead. Names are no longer links at all: they keep their quality colour
+and carry no underline, and the card is the only thing that opens from them.
 
 The card is placed beside the pointer rather than under it, flips to the other side
 near a window edge, opens on keyboard focus as well as hover, and ignores the pointer
 entirely so it can never steal the hover that opened it.
+
+ESO writes its own colour codes into item text (`|cffffff10|r` for a number in white,
+`|r` to go back to the card's colour). They are read rather than printed, so the game's
+numbers keep the colour the game gave them, link codes lose their link and keep their
+label, and a code too dark to read on the dark panel is lifted towards white. Text with
+no codes is unaffected.
 
 Item type, quality, trait and icon all come from the addon, not from UESP; only the
 description and set bonuses are looked up.
@@ -508,11 +685,13 @@ handled by one process would otherwise never reach the sockets held by another.
 
 ## Using the site
 
-- **Filters apply as you change them.** Type, "Offered by" and the item name box
-  update the list immediately; there is no Apply button, and "Clear filters" is a
-  button instead of a link. The address bar keeps up, so a reload or a live update
-  uses the same filters. With scripts off, the form's own submit button appears and
-  everything still works.
+- **Filters apply as you change them, and can hold more than one value.** Type and
+  "Offered by" are tick lists; each ticked value becomes a chip on the row underneath,
+  and clicking a chip removes that value and leaves the rest alone. "Clear filters"
+  is a button, coloured like the destructive action it is, and empties every control
+  at once. There is no Apply button. The address bar keeps up, so a reload or a live
+  update uses the same filters. With scripts off, the form's own submit button
+  appears and everything still works.
 - **Uploads start on their own.** Dropping `ItemShareSavedVars.lua` on the upload
   card, or picking it with the file chooser, uploads it straight away. A toast says
   the file has been received and is being processed, then summarises what landed.
