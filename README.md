@@ -16,7 +16,7 @@ You can use commands
 
 /ishare or /itemshare to control functionality
 
-/ishare list - opens or closes the shared items window. Right-click a row there to remove or re-add a share.
+/ishare list - opens or closes the shared items window. Right-click a row there to cycle it: share it, make it a standing offer, or stop offering it.
 /ishare reset (or clear) - clears every share and every standing offer.
 /ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy.
 /ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
@@ -33,7 +33,7 @@ You can use commands
 The window and the item menus cover the same ground without typing:
 
 - Right-click an item in a bag, the bank, house storage or the furnishing vault: **Add to Share**, **Remove from Shared List**, **Always Share This Item**, **Stop Always Sharing**, **Share Reserve** (asks for a number of at least 1) and, when a reserve is set, **Share Reserve: Keep N Back...** and **Clear Share Reserve**.
-- In `/ishare list`, right-click a row to stop sharing it, or to stop the standing offer a row stands for.
+- In `/ishare list`, right-click a row to walk it through the three states and back: not shared, shared, always shared.
 
 You may add items to the shared list from Inventory, House Storage, Your Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
 
@@ -43,7 +43,7 @@ Right-click an item and choose "Always Share This Item" to make it a standing of
 
 The badge on an item icon shows which of the two it is. A green gift means it is shared right now; the same gift in gold with a closed ring means it is always shared, and that gold badge stays on the item even when you have none in your bags. A small amber padlock tag is added to either badge when the item has a share reserve. An item that has a reserve but is not shared at all shows the padlock on its own, so a reserve left behind on something you stopped sharing is still visible - and can be cleared - instead of being forgotten. Hovering the badge says which state it is in and, when there is a reserve, how much is being kept back.
 
-`/ishare list` shows what is on offer right now: every share with something above its reserve, plus any standing offer that has a copy in your bags even if that copy was never marked by hand. A row that offers nothing is not listed at all, a row with a reserve says `keep N` beside its location, and right-clicking a row that only stands for a standing offer stops the offer.
+`/ishare list` shows what is on offer right now: every share with something above its reserve, plus any standing offer that has a copy in your bags even if that copy was never marked by hand. A row that offers nothing is not listed at all, a row with a reserve says `keep N` beside its location, and right-clicking a row steps it on to the next state: not shared, shared, always shared, and back to not shared.
 
 ### Share reserve: share only what you have above a number
 

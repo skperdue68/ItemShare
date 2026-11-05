@@ -52,6 +52,7 @@ local RemoveItemFromShareByKey
 -- has to be able to clear the other from here onwards in the file.
 local RemoveSharesForItemLink
 local RemoveAlwaysShareForItemLink
+local SaveAlwaysShareEntry
 local SaveSharedEntry
 local SaveSharedEntryFromSavedEntry
 local IsSavedEntryEligibleForShare
@@ -403,7 +404,7 @@ local function CreateShareListWindow()
     local instructionLabel = wm:CreateControl(nil, window, CT_LABEL)
     instructionLabel:SetFont("ZoFontGameSmall")
     instructionLabel:SetColor(0.85, 0.85, 0.85, 1)
-    instructionLabel:SetText("Right Click a row to Enable / Disable Sharing from this window")
+    instructionLabel:SetText("Right Click a row to cycle: Share, Always Share, Stop Sharing")
     instructionLabel:SetHorizontalAlignment(TEXT_ALIGN_CENTER)
     instructionLabel:SetAnchor(BOTTOMLEFT, window, BOTTOMLEFT, 16, -48)
     instructionLabel:SetAnchor(BOTTOMRIGHT, window, BOTTOMRIGHT, -16, -48)
@@ -611,73 +612,96 @@ local function GetOrCreateShareListRow(index)
             return
         end
 
-        -- A row that only stands for a standing offer has nothing in the shared
-        -- table to remove, so toggling it off means stopping the offer.
-        if row.isAlwaysOnly then
-            local alwaysKey = GetAlwaysShareKey(row.itemLink)
-            local alwaysEntry = GetAlwaysShareTable()[alwaysKey]
+        -- Right-click walks the three states and comes back round:
+        -- not sharing -> sharing -> always sharing -> not sharing. Every step
+        -- rewrites the tables and then redraws, so the row, the bag badge and the
+        -- next click all agree on where the cycle is.
+        local link = tostring(row.itemLink or (row.entryData and row.entryData.itemLink) or "")
+        if link == "" then
+            return
+        end
 
-            if alwaysEntry == nil then
+        if row.isAlwaysOnly then
+            -- Always sharing -> not sharing.
+            local removed = RemoveAlwaysShareForItemLink(link)
+            if not removed then
                 return
             end
 
-            GetAlwaysShareTable()[alwaysKey] = nil
             TryRefreshInventoryVisuals()
             RefreshShareListWindowIfVisible()
             dmsg(string.format(
-                "Stopped always sharing %s.",
-                tostring(alwaysEntry.itemName or row.itemLink or "item")
+                "Stopped always sharing %s. It is not offered at all now.",
+                tostring(removed.itemName or link)
             ))
             return
         end
 
         if row.isShared then
+            -- Sharing -> always sharing. The share goes in the same step, because an
+            -- item is offered one way at a time.
             local currentEntry = row.entryKey and ItemShare.savedVars.sharedItems[row.entryKey] or row.entryData
-            RemoveItemFromShareByKey(row.entryKey, currentEntry, false)
-            row.entryData = currentEntry or row.entryData
-            row.isShared = false
-            updateRowSharedVisuals()
-        elseif row.entryData then
-            -- Re-adding from the list window is still a marking: an item that has
-            -- become bound since it was filed must not slip back in this way.
-            -- A reserved item that is not in a readable bag has nothing to file: the
-            -- row knows only its link and its reserve, so there is no share to make
-            -- of it until a copy turns up.
-            if row.isReserveOnly
-                and (tonumber(row.entryData.bagId) == nil or tonumber(row.entryData.slotIndex) == nil) then
+            local alwaysEntry = SaveAlwaysShareEntry(currentEntry)
+
+            if not alwaysEntry then
                 dmsg(string.format(
-                    "Cannot share %s yet: no copy of it is in a bag right now.",
-                    tostring(row.entryData.itemName or row.itemLink or "that item")
+                    "Could not always share %s. It is still shared from %s.",
+                    tostring(currentEntry and currentEntry.itemName or link),
+                    tostring(currentEntry and currentEntry.sharedFrom or "-")
                 ))
                 return
             end
 
-            local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
-            if not isEligible then
-                dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
-                return
-            end
-
-            local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
-            if savedEntry then
-                -- Adding from this window is the same choice as adding from a bag: it
-                -- replaces a standing offer instead of sitting beside one.
-                RemoveAlwaysShareForItemLink(savedEntry.itemLink)
-                row.entryData = savedEntry
-                row.entryKey = tostring(BuildSharedItemKey(savedEntry.itemLink, savedEntry.locationKey) or row.entryKey or "")
-                row.isShared = true
-                row.isReserveOnly = false
-                dmsg(string.format(
-                    "Added shared item %s from %s (stack size: %d)",
-                    tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
-                    tostring(savedEntry.sharedFrom or "-"),
-                    GetEntryOfferedCount(savedEntry)
-                ))
-                updateRowSharedVisuals()
-            else
-                dmsg("Could not re-add item from shared list window.")
-            end
+            RemoveSharesForItemLink(link)
+            TryRefreshInventoryVisuals()
+            RefreshShareListWindowIfVisible()
+            dmsg(string.format(
+                "Always sharing %s now. It stays offered even when you do not have one.",
+                tostring(alwaysEntry.itemName or link)
+            ))
+            return
         end
+
+        -- Not sharing -> sharing. The checks below are the same ones the bag menu
+        -- makes, so a bound item cannot slip in through this window.
+        if not row.entryData then
+            return
+        end
+
+        -- A reserved item that is not in a readable bag has nothing to file: the row
+        -- knows only its link and its reserve, so there is no share to make of it
+        -- until a copy turns up.
+        if row.isReserveOnly
+            and (tonumber(row.entryData.bagId) == nil or tonumber(row.entryData.slotIndex) == nil) then
+            dmsg(string.format(
+                "Cannot share %s yet: no copy of it is in a bag right now.",
+                tostring(row.entryData.itemName or link or "that item")
+            ))
+            return
+        end
+
+        local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
+        if not isEligible then
+            dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
+            return
+        end
+
+        local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
+        if not savedEntry then
+            dmsg("Could not re-add item from shared list window.")
+            return
+        end
+
+        RemoveAlwaysShareForItemLink(savedEntry.itemLink)
+        TryRefreshInventoryVisuals()
+        RefreshShareListWindowIfVisible()
+        dmsg(string.format(
+            "Sharing %s from %s (%d offered). Right-click again to always share it.",
+            tostring(savedEntry.itemName or link),
+            tostring(savedEntry.sharedFrom or "-"),
+            GetEntryOfferedCount(savedEntry)
+        ))
+
     end
 
     local function handleRowRightClick(button)
@@ -2286,7 +2310,7 @@ GetAlwaysShareKey = function(itemLink)
     return tostring(itemLink or "")
 end
 
-local function SaveAlwaysShareEntry(itemData)
+SaveAlwaysShareEntry = function(itemData)
     if not itemData or not itemData.itemLink or itemData.itemLink == "" then
         return nil
     end
