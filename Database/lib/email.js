@@ -15,6 +15,32 @@
 
 const ENDPOINT = 'https://api.resend.com/emails';
 
+// Quality colours that survive a white mail body: the game's own white would vanish
+// there, so the ordinary tier is a dark grey instead.
+const QUALITY_COLOURS = {
+  1: '#4a4a4a',
+  2: '#2e8b3a',
+  3: '#2f6fed',
+  4: '#7a3fd1',
+  5: '#a87400',
+};
+
+function qualityColour(quality) {
+  return QUALITY_COLOURS[Number(quality) || 0] || '#3c4557';
+}
+
+/**
+ * What tells two copies of the same name apart: its type, its trait and, when it has
+ * one, its enchantment. Two Briarheart swords with different traits are the same
+ * name, so this is the line the owner actually needs to pick the right one.
+ */
+function itemDetailText(item) {
+  return [item.type, item.trait, item.enchant ? `Enchant: ${item.enchant}` : '']
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' \u00b7 ');
+}
+
 function escape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -53,17 +79,27 @@ export function renderRequestEmail({
   const when = sentAt instanceof Date ? sentAt.toUTCString() : String(sentAt);
 
   const rows = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const details = itemDetailText(item);
+
+      return `
               <tr>
-                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px">${escape(
-                  item.name
-                )}</td>
-                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px;text-align:right;font-variant-numeric:tabular-nums">${
+                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px">
+                  <span style="color:${qualityColour(
+                    item.quality
+                  )};font-weight:600">${escape(item.name)}</span>${
+                    details
+                      ? `<div style="margin-top:2px;font-size:12px;color:#6b7280">${escape(
+                          details
+                        )}</div>`
+                      : ''
+                  }
+                </td>
+                <td style="padding:8px 0;border-bottom:1px solid #e7e9ef;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;vertical-align:top">${
                   Number(item.quantity) || 1
                 }</td>
-              </tr>`
-    )
+              </tr>`;
+    })
     .join('');
 
   const html = `<!DOCTYPE html>
@@ -122,7 +158,10 @@ export function renderRequestEmail({
     '',
     `${who} asked you for these items from ${ownerAccount} on ItemShare:`,
     '',
-    ...items.map((item) => `  ${Number(item.quantity) || 1} x ${item.name}`),
+    ...items.map((item) => {
+      const details = itemDetailText(item);
+      return `  ${Number(item.quantity) || 1} x ${item.name}${details ? ` - ${details}` : ''}`;
+    }),
     '',
     `Mail ${total === 1 ? 'it' : 'them'} to ${who} in game when you are next online.`,
     `Sent ${when}.`,

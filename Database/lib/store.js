@@ -644,7 +644,8 @@ export async function getSubmittedRequests(connection, userId, ids) {
   }
 
   const [rows] = await connection.execute(
-    `SELECT id, owner_account_name, item_name, quantity, requester_account_name
+    `SELECT id, owner_account_name, item_name, quantity, requester_account_name,
+            item_type_name, trait, enchant_name, quality
        FROM itemshare_requests
       WHERE requester_user_id = ? AND status = 'pending' AND submitted_at IS NOT NULL
         AND id IN (${inClause(wanted)})
@@ -1314,7 +1315,7 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
   if (itemKind === 'offer') {
     const [rows] = await connection.execute(
       `SELECT DISTINCT a.id, a.account_name, a.item_name, a.item_id, a.item_key_hash,
-              a.icon_key, a.quality, a.item_type_name, a.trait,
+              a.icon_key, a.quality, a.item_type_name, a.trait, a.enchant_name,
               -- A standing offer is a promise, not a copy. There is nothing to hand
               -- over unless the owner has one in a bag at this moment, so the count
               -- is computed here rather than assumed from the offer existing.
@@ -1335,7 +1336,7 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
 
   const [rows] = await connection.execute(
     `SELECT DISTINCT i.id, i.account_name, i.item_name, i.item_id, i.item_key_hash,
-            i.icon_key, i.quality, i.item_type_name, i.trait, i.item_count
+            i.icon_key, i.quality, i.item_type_name, i.trait, i.enchant_name, i.item_count
        ${visibleItemsFrom(names)}
       WHERE ${itemsVisibilityClause(names)} AND i.id = ?
       LIMIT 1`,
@@ -1439,7 +1440,7 @@ export async function createRequest(
     `INSERT INTO itemshare_requests
        (requester_user_id, requester_account_name, owner_account_name, item_kind,
         shared_item_id, always_share_id, item_key_hash, item_name, icon_key, item_id, quality,
-        item_type_name, trait, quantity, status, expires_at)
+        item_type_name, trait, enchant_name, quantity, status, expires_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NOW() + INTERVAL ${holdMinutes(
        minutes
      )} MINUTE)`,
@@ -1457,6 +1458,7 @@ export async function createRequest(
       Number(target.quality) || 0,
       target.item_type_name || '',
       target.trait || '',
+      target.enchant_name || '',
       wanted,
     ]
   );
