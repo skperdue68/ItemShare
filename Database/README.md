@@ -141,6 +141,12 @@ asked for is the order you get.
 offered it. It is deliberately not the day of their latest upload, so re-uploading a
 long-held item does not make it look new.
 
+`Location` is where the owner's copy was the last time they saved - `Bank`,
+`Inventory (Character Name)`, `Furnishing Vault (...)`. It is a column rather than a
+sentence in the detail line because it is something people scan for, and it follows
+the item: an upload rewrites it, so moving something in game and saving again updates
+it here without anyone touching the site.
+
 A filter bar above the table narrows the list by item type, owner account, how
 recently it was added (the last day, 7 days, 30 days) and item name. Filters are
 ordinary query parameters (`/?type=Weapon&owner=@Name&added=7&q=sword&sort=added&dir=desc`),
@@ -159,8 +165,10 @@ is readable without a guild overlap, so an account in no guilds sees nothing.
 Every row in *Request* has a **Request** button. It opens a small dialog offering one,
 the whole stack, or any number in between. The largest number offered is what is
 still unspoken for rather than the raw `item_count`, so two people can never be
-promised the same five. A standing offer has no count behind it, so it always means
-one copy.
+promised the same five. A standing offer has no count behind it, so it always means one copy, and it can
+only be asked for while the owner has one in a bag right now. When they do not, the
+row says *Not in a bag right now* instead of offering a button that cannot be
+honoured, and the server refuses the same request either way.
 
 When only one copy can be given - a stack of one, or the last copy of a bigger stack
 - there is nothing to choose, so the button sends the request for that one straight
@@ -186,21 +194,57 @@ picked rather than from the moment it is sent:
   tell anyone. Every query also treats a lapsed reservation as free, so the
   arithmetic is right even between two sweeps.
 - Each item in the basket can be removed before sending, which also restarts the
-  clock for the rest.
+  clock for the rest. A removed row stays where it was, marked **Cancelled**, for
+  about half a minute, then fades out and the rows below it close up. It is not added
+  to the history, because it was never sent.
 - After every upload the owner's requests are settled oldest first, because they were
   promised first. One whose item has gone, or whose turn the stack no longer reaches,
   is cancelled with a sentence the requester can read: "Ghost Bane now has 2 of
   Briarheart Dagger, which does not cover the 3 you asked for." A row that merely
   moved (the item changed character, or was re-shared) is re-pointed by
   `item_key_hash` instead of being cancelled.
-- *Your requests* lists the basket first and then what has been sent, with the reason
-  anything closed. When a live update brings back a cancellation the page also says so
-  in a toast, once: opening the page does not replay old ones.
+- *Your requests* holds the basket and, below it, **Already sent**: a history of what
+  you actually asked for, newest first and oldest last. Each row carries the item's
+  picture and trait, and anything that closed says why. When a live update brings back
+  a cancellation the page also says so in a toast, once: opening the page does not
+  replay old ones.
 - A requester can cancel their own waiting request. The owner sees "2 asked for" on
   the row.
 - Leaving the page with a basket still holding items raises a styled warning
   ("You have unsubmitted item requests") before following a link, with the browser's
   own unload prompt as the fallback for closing the tab or posting a form.
+
+## Making it look busy: simulated people
+
+`npm run simulate` (in `Database/`) drives three made-up people through the same store
+code the site uses, so a list with one real owner has traffic on it: they ask for items
+in *your* list, leave some in their baskets, cancel others, and re-save their files so
+items move between bags, the bank and the furnishing vault and stack counts change.
+Every round ends by asking the running site to announce what happened.
+
+```
+npm run simulate                        one round
+npm run simulate -- --rounds 12 --every 4000
+npm run simulate -- --only requests     just asking and cancelling
+npm run simulate -- --only items        just re-saving files
+npm run simulate -- --reset             remove the simulated people and their data
+```
+
+Set `SIMULATE_TOKEN` in `Database/.env` and restart the site to have open pages refresh
+as it runs; without it the data still changes and you see it on the next refresh. The
+three people are identified by a `simulator` identity, so they are the same people on
+every run, and `--reset` takes all of them out again.
+
+Their activity appears in the log as a sentence rather than a revision number:
+
+```
+Live: @DemoTrader asked @YourAccount for 2 x Soul Gem; @QuietSmith saved again: 2 items, now in Bank / Craft Bag - 1 open page told to refresh
+Requests: 3 unsent requests timed out, so the items are free again
+```
+
+"1 open page told to refresh" is the delivery detail: how many browsers were connected
+over the socket at that moment, each of which refetches its own list. It says nothing
+about how many people use the site - closing the page drops it to zero.
 
 Everything here is recorded server-side; the browser never decides how many are
 left. Handing an item over in game is not recorded yet, so nothing moves from

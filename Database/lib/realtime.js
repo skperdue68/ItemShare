@@ -41,31 +41,54 @@ export function attachRealtime({
   let clients = 0;
   let revision = 0;
   let pendingReason = null;
+  let pendingMessages = [];
   let pendingTimer = null;
 
   function flush() {
     pendingTimer = null;
     revision += 1;
 
-    const payload = { revision, reason: pendingReason || 'items', at: Date.now() };
+    const payload = {
+      revision,
+      reason: pendingReason || 'items',
+      message: pendingMessages.join('; '),
+      at: Date.now(),
+    };
     pendingReason = null;
+    pendingMessages = [];
 
     io.emit('items:changed', payload);
 
-    if (clients > 0) {
-      log.log(`Live: revision ${revision} (${payload.reason}) sent to ${clients} page${clients === 1 ? '' : 's'}`);
-    }
+    // Read as a sentence: what happened, then who saw it. "revision 7 (request) sent
+    // to 1 page" answered neither of the questions someone reading the log has.
+    log.log(`Live: ${payload.message || `item list changed (${payload.reason})`} - ${audience()}`);
 
     return payload;
+  }
+
+  /** How many open pages this went to, in words. One socket is one open page. */
+  function audience() {
+    if (clients === 0) {
+      return 'no pages open, so nothing was pushed';
+    }
+
+    return `${clients} open page${clients === 1 ? '' : 's'} told to refresh`;
   }
 
   /**
    * Announces that visible rows may have changed. Calls inside the same short
    * window collapse into one broadcast, because one upload can commit items and
    * then fetch their icons a moment later.
+   *
+   * `message` is the human summary that ends up in the log, so the caller can say
+   * who did what: "@DemoTrader asked for 2 x Soul Gem".
    */
-  function notifyChange(reason = 'items') {
+  function notifyChange(reason = 'items', message = '') {
     pendingReason = reason;
+
+    if (message) {
+      pendingMessages.push(message);
+    }
 
     if (pendingTimer) {
       return;

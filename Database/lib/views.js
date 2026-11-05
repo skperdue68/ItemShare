@@ -466,10 +466,14 @@ function inventoryRows(items, { mine }) {
         item.enchant_name ? `Enchant: ${item.enchant_name}` : '',
         Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
         Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
-        item.location_label ? `owner had it in ${item.location_label}` : '',
       ]);
 
       const added = dayText(item.first_seen_at);
+      // Where the owner's copy sat the last time their file was saved. It is a column
+      // rather than a sentence in the detail line because it is something people
+      // scan for ("is it in the bank or on them?"), and it changes on its own when
+      // they move the item and save again.
+      const location = String(item.location_label || '').trim();
 
       return `
         <tr data-item-key="inv:${escapeHtml(item.item_key_hash || item.id)}">
@@ -490,6 +494,7 @@ function inventoryRows(items, { mine }) {
           <td class="num held-cell">${availability(item).reserved || '&mdash;'}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
           <td>${escapeHtml(item.trait || '')}</td>
+          <td class="location-cell">${location ? escapeHtml(location) : '&mdash;'}</td>
           <td>${ownerCell(item)}</td>
           <td class="action-cell">${requestCell(item, { mine })}</td>
         </tr>`;
@@ -521,7 +526,7 @@ function inventoryTable(items, { mine, filters = {} }) {
         .map(
           ([typeName, rows]) => `
         <tr class="type-row">
-          <td colspan="8">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
+          <td colspan="9">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
         </tr>
         ${inventoryRows(rows, { mine })}`
         )
@@ -539,6 +544,7 @@ function inventoryTable(items, { mine, filters = {} }) {
             <th class="num" title="Copies held by a request, sent or still being picked">Held</th>
             <th>Type</th>
             <th>Trait</th>
+            <th class="location-cell" title="Where the owner's copy was when they last saved; it follows the item when they move it">Location</th>
             <th>Offered by</th>
             <th class="action-cell"><span class="visually-hidden">Ask for it</span></th>
           </tr>
@@ -552,6 +558,13 @@ function offerRequestCell(item, { mine }) {
   if (mine) {
     const asked = Number(item.request_count) || 0;
     return asked > 0 ? `<span class="reserved-note">${asked} asked for</span>` : '';
+  }
+
+  // A standing offer is a promise, not a copy: unless the owner has one in a bag at
+  // this moment there is nothing to hand over, so the row says so instead of
+  // offering a button that cannot be honoured.
+  if (Number(item.in_inventory) !== 1) {
+    return `<span class="claimed-note">Not in a bag right now</span>`;
   }
 
   return `<button class="request-button" type="button" data-request data-kind="offer" data-id="${Number(
@@ -640,39 +653,51 @@ function requestStatusPill(request) {
   )}</span>`;
 }
 
-function myRequestRows(requests) {
+// A request row: the item's picture and trait, who it is from, how many, and what
+// became of it. `basket` rows are the ones still in the basket, which are the only
+// rows that can leave on their own.
+function myRequestRows(requests, { basket = false } = {}) {
   return requests
     .map((request) => {
       const isDraft = request.status === 'draft';
+      const removed = basket && request.status === 'cancelled';
 
       return `
         <tr data-my-request data-request-id="${Number(request.id)}"
+            ${basket ? 'data-basket-row="1"' : ''}
             data-status="${escapeHtml(request.status)}"
             data-request-name="${escapeHtml(request.item_name || 'that item')}"
             data-request-reason="${escapeHtml(request.status_reason || '')}">
           <td>
-            <span class="item-name" style="color:${qualityColor(request.quality)}">${escapeHtml(
+            <div class="item-cell">
+              ${itemIcon(request)}
+              <div class="item-cell-text">
+                <span class="item-name" style="color:${qualityColor(request.quality)}">${escapeHtml(
         request.item_name || 'Item'
       )}</span>
-            <span class="item-meta">${metaLine([
-              request.item_type_name,
-              request.item_kind === 'offer' ? 'from a standing offer' : 'from their bags',
-              request.status !== 'pending' && !isDraft ? request.status_reason : '',
-            ])}</span>
+                <span class="item-meta">${metaLine([
+                  request.item_type_name,
+                  request.trait,
+                  !isDraft && request.status !== 'pending' ? request.status_reason : '',
+                ])}</span>
+              </div>
+            </div>
           </td>
           <td><span class="owner">${escapeHtml(request.owner_account_name)}</span></td>
           <td class="num">${Number(request.quantity) || 1}</td>
           <td>${requestStatusPill(request)}</td>
           <td class="action-cell">${
-            isDraft
-              ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
-                  request.id
-                )}">Remove</button>`
-              : request.status === 'pending'
+            removed
+              ? ''
+              : isDraft
                 ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
                     request.id
-                  )}">Cancel</button>`
-                : ''
+                  )}">Remove</button>`
+                : request.status === 'pending' && !basket
+                  ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
+                      request.id
+                    )}">Cancel</button>`
+                  : ''
           }</td>
         </tr>`;
     })
@@ -725,8 +750,7 @@ function draftBasketBar(drafts, basket) {
     </div>`;
 }
 
-/** The items in the basket, each removcable until the basket is sent. */
-function draftTable(drafts) {
+function requestTable(rows, options = {}) {
   return `
     <div class="table-shell">
       <table>
@@ -734,40 +758,48 @@ function draftTable(drafts) {
           <tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Status</th>
               <th class="action-cell"><span class="visually-hidden">Actions</span></th></tr>
         </thead>
-        <tbody>${myRequestRows(drafts)}</tbody>
+        <tbody>${myRequestRows(rows, options)}</tbody>
       </table>
     </div>`;
 }
 
-function myRequestsPanel(requests) {
-  const all = requests || [];
-  const drafts = all.filter((request) => request.status === 'draft');
-  const sent = all.filter((request) => request.status !== 'draft');
+/**
+ * Two lists that mean different things. The basket is what is still held but not
+ * asked, including anything removed a moment ago so the removal can be seen; below
+ * it is the history of everything actually sent, newest first.
+ */
+function myRequestsPanel(requests, basketRows = []) {
+  const history = requests || [];
+  const basket = basketRows || [];
+  const live = basket.filter((row) => row.status === 'draft');
 
-  if (all.length === 0) {
+  if (history.length === 0 && basket.length === 0) {
     return `<p class="muted">You have not asked for anything yet. Everything other members of your guilds are sharing is on the Request tab, where you can ask for one, for a number, or for the whole stack.</p>`;
   }
 
-  const sentTable =
-    sent.length === 0
+  const basketSection =
+    basket.length === 0
       ? ''
-      : `${drafts.length > 0 ? '<h3 class="subhead">Already sent</h3>' : ''}
-    <p class="muted">
-      First sent, first served. What you ask for is held for you until the owner hands it
-      over; if their file no longer contains the item, or the rest of the stack goes first,
-      the request closes here and says why.
-    </p>
-    <div class="table-shell">
-      <table>
-        <thead>
-          <tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Status</th>
-              <th class="action-cell"><span class="visually-hidden">Actions</span></th></tr>
-        </thead>
-        <tbody>${myRequestRows(sent)}</tbody>
-      </table>
-    </div>`;
+      : `<h3 class="subhead">In your basket</h3>
+    <p class="muted">${
+      live.length > 0
+        ? 'Nobody has been asked yet. Remove anything you change your mind about, or send the lot before the clock runs out.'
+        : 'Nothing is waiting to be sent. Items removed a moment ago stay here briefly, marked cancelled, then go.'
+    }</p>
+    ${requestTable(basket, { basket: true })}`;
 
-  return `${drafts.length > 0 ? `<h3 class="subhead">Not sent yet</h3>${draftTable(drafts)}` : ''}${sentTable}`;
+  const historySection =
+    history.length === 0
+      ? ''
+      : `<h3 class="subhead">Already sent</h3>
+    <p class="muted">
+      Newest first. What you ask for is held for you until the owner hands it over; if
+      their file no longer contains the item, or the rest of the stack goes first, the
+      request closes here and says why.
+    </p>
+    ${requestTable(history)}`;
+
+  return `${basketSection}${historySection}`;
 }
 
 /**
@@ -786,6 +818,7 @@ export function renderListRegion({
   filters,
   requests,
   basket,
+  basketRows = [],
 }) {
   if (!accounts || accounts.length === 0) {
     return '';
@@ -797,16 +830,16 @@ export function renderListRegion({
   const othersOffers = (alwaysShare || []).filter((item) => !myAccounts.has(item.account_name));
   const myOffers = (alwaysShare || []).filter((item) => myAccounts.has(item.account_name));
   const myRequests = requests || [];
-  const unsent = myRequests.filter((request) => request.status === 'draft');
+  const basketList = basketRows || [];
+  const unsent = basketList.filter((request) => request.status === 'draft');
 
   const activeFilters = Boolean(
     filters?.type || filters?.owner || filters?.search || filters?.added
   );
   const requestCount = requestable.length + othersOffers.length;
   const offerCount = myItems.length + myOffers.length;
-  const waitingCount = myRequests.filter(
-    (request) => request.status === 'pending' || request.status === 'draft'
-  ).length;
+  const waitingCount =
+    unsent.length + myRequests.filter((request) => request.status === 'pending').length;
 
   const empty = (fallback) =>
     `<p class="muted">${
@@ -821,7 +854,7 @@ export function renderListRegion({
       : `${requestable.length > 0 ? inventoryTable(requestable, { mine: false, filters }) : ''}${
           othersOffers.length > 0
             ? `<h3 class="subhead">Standing offers</h3>
-               <p class="muted">They will hand these out whenever they have one, even when it is not in a bag today.</p>
+               <p class="muted">They will hand these out whenever they have one. Ask while a copy is in a bag; when it is not, the row says so.</p>
                ${offerTable(othersOffers, { mine: false, filters })}`
             : ''
         }`;
@@ -878,7 +911,7 @@ export function renderListRegion({
         </div>
 
         <div class="list-panel" id="panelMine" role="tabpanel" aria-labelledby="tabMine" data-panel="mine" hidden>
-          ${myRequestsPanel(myRequests)}
+          ${myRequestsPanel(myRequests, basketList)}
         </div>
       </section>
     </div>`;

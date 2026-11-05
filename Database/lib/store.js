@@ -1255,7 +1255,16 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
   if (itemKind === 'offer') {
     const [rows] = await connection.execute(
       `SELECT DISTINCT a.id, a.account_name, a.item_name, a.item_id, a.item_key_hash,
-              a.quality, a.item_type_name
+              a.icon_key, a.quality, a.item_type_name, a.trait,
+              -- A standing offer is a promise, not a copy. There is nothing to hand
+              -- over unless the owner has one in a bag at this moment, so the count
+              -- is computed here rather than assumed from the offer existing.
+              (SELECT COUNT(*)
+                 FROM itemshare_shared_items own
+                WHERE own.account_name = a.account_name
+                  AND a.item_id > 0
+                  AND own.item_id = a.item_id
+                  AND own.item_count > 0) AS has_copy
          ${visibleAlwaysShareFrom(names)}
         WHERE ${alwaysShareVisibilityClause(names)} AND a.id = ?
         LIMIT 1`,
@@ -1267,7 +1276,7 @@ export async function getRequestTarget(connection, accountNames, itemKind, targe
 
   const [rows] = await connection.execute(
     `SELECT DISTINCT i.id, i.account_name, i.item_name, i.item_id, i.item_key_hash,
-            i.quality, i.item_type_name, i.item_count
+            i.icon_key, i.quality, i.item_type_name, i.trait, i.item_count
        ${visibleItemsFrom(names)}
       WHERE ${itemsVisibilityClause(names)} AND i.id = ?
       LIMIT 1`,
@@ -1352,6 +1361,16 @@ export async function createRequest(
     }
   } else {
     wanted = 1;
+
+    // Asking from a standing offer only makes sense while the owner actually has
+    // one. The list hides the button in that case; this is the rule underneath it.
+    if (!Number(target.has_copy)) {
+      const error = new Error(
+        'Nobody has a copy of that in a bag right now, so there is nothing to hand over yet.'
+      );
+      error.statusCode = 409;
+      throw error;
+    }
   }
 
   const requesterAccount =
@@ -1360,9 +1379,9 @@ export async function createRequest(
   const [inserted] = await connection.execute(
     `INSERT INTO itemshare_requests
        (requester_user_id, requester_account_name, owner_account_name, item_kind,
-        shared_item_id, always_share_id, item_key_hash, item_name, item_id, quality,
-        item_type_name, quantity, status, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NOW() + INTERVAL ${holdMinutes(
+        shared_item_id, always_share_id, item_key_hash, item_name, icon_key, item_id, quality,
+        item_type_name, trait, quantity, status, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NOW() + INTERVAL ${holdMinutes(
        minutes
      )} MINUTE)`,
     [
@@ -1374,9 +1393,11 @@ export async function createRequest(
       kind === 'offer' ? Number(target.id) : null,
       target.item_key_hash || '',
       target.item_name || '',
+      target.icon_key || '',
       Number(target.item_id) || 0,
       Number(target.quality) || 0,
       target.item_type_name || '',
+      target.trait || '',
       wanted,
     ]
   );
@@ -1394,17 +1415,57 @@ export async function createRequest(
   };
 }
 
-/** Everything one person has asked for, still waiting first. */
+/**
+ * The history of what one person has asked for: newest first, oldest last.
+ *
+ * A request that was taken out of the basket before it was ever sent is not history
+ * - it was never asked - so it is excluded here and shown in the basket instead.
+ */
 export async function getRequesterRequests(connection, userId) {
   const [rows] = await connection.execute(
-    `SELECT id, item_kind, item_name, item_id, quality, item_type_name, owner_account_name,
-            requester_account_name, quantity, status, status_reason, created_at, closed_at,
-            submitted_at,
-            TIMESTAMPDIFF(SECOND, NOW(), expires_at) AS seconds_left
-       FROM itemshare_requests
-      WHERE requester_user_id = ?
-      ORDER BY (status = 'draft') DESC, (status = 'pending') DESC, created_at DESC
+    `SELECT r.id, r.item_kind, r.item_name, r.item_id, r.icon_key, r.quality,
+            r.item_type_name, r.trait, r.owner_account_name, r.requester_account_name,
+            r.quantity, r.status, r.status_reason, r.created_at, r.closed_at, r.submitted_at,
+            (ic.icon_key IS NOT NULL) AS has_icon
+       FROM itemshare_requests r
+       LEFT JOIN itemshare_item_icons ic ON ic.icon_key = r.icon_key
+      WHERE r.requester_user_id = ?
+        -- Only requests that were actually sent. A basket item that was removed or
+        -- timed out was never asked for, so it is not part of this history.
+        AND r.submitted_at IS NOT NULL
+      ORDER BY r.created_at DESC, r.id DESC
       LIMIT 50`,
+    [Number(userId)]
+  );
+
+  return rows;
+}
+
+/**
+ * How long a removed basket item stays on screen saying so. The page fades it over
+ * the same window, and the server stops returning it just after, so a refresh does
+ * not bring it back.
+ */
+export const BASKET_CANCEL_LINGER_SECONDS = 30;
+
+/**
+ * What is in the basket: everything held but unsent, plus anything removed from it
+ * in the last half minute so the removal can be seen rather than the row just
+ * vanishing. Oldest first, because items are added to a basket over time.
+ */
+export async function getBasketRows(connection, userId) {
+  const [rows] = await connection.execute(
+    `SELECT r.id, r.item_kind, r.item_name, r.item_id, r.icon_key, r.quality,
+            r.item_type_name, r.trait, r.owner_account_name, r.quantity, r.status,
+            r.status_reason, r.created_at,
+            (ic.icon_key IS NOT NULL) AS has_icon
+       FROM itemshare_requests r
+       LEFT JOIN itemshare_item_icons ic ON ic.icon_key = r.icon_key
+      WHERE r.requester_user_id = ?
+        AND (r.status = 'draft'
+             OR (r.status = 'cancelled' AND r.submitted_at IS NULL
+                 AND r.closed_at > (NOW() - INTERVAL ${BASKET_CANCEL_LINGER_SECONDS} SECOND)))
+      ORDER BY r.created_at ASC, r.id ASC`,
     [Number(userId)]
   );
 
@@ -1424,7 +1485,7 @@ export async function cancelOwnRequest(
   { userId, requestId, holdMinutes: minutes }
 ) {
   const [rows] = await connection.execute(
-    `SELECT id, status FROM itemshare_requests
+    `SELECT id, status, item_name, owner_account_name FROM itemshare_requests
       WHERE id = ? AND requester_user_id = ? AND status IN ('draft', 'pending')
       LIMIT 1`,
     [Number(requestId), Number(userId)]
@@ -1436,6 +1497,8 @@ export async function cancelOwnRequest(
     return {
       cancelled: false,
       wasDraft: false,
+      itemName: '',
+      ownerAccountName: '',
       basket: await getDraftBasket(connection, userId),
     };
   }
@@ -1463,6 +1526,8 @@ export async function cancelOwnRequest(
   return {
     cancelled: true,
     wasDraft,
+    itemName: row.item_name || '',
+    ownerAccountName: row.owner_account_name || '',
     basket: await getDraftBasket(connection, userId),
   };
 }
