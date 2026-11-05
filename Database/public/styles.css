@@ -164,7 +164,7 @@ body {
 .surface {
   flex: 1;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 30px 24px 40px;
   display: flex;
@@ -842,12 +842,33 @@ a.primary-button {
   margin: 0;
 }
 
+/* The tabs are the only thing in this row most of the time, so they sit in the
+   middle; the live pill stays out of that centring at the right edge. */
 .list-head {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.list-head .live-pill {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+}
+
+/* "12 different items shared by other members of your guilds": the answer to
+   "how much is there for me here?", above the tabs and below the basket clock. */
+.offer-summary {
+  margin: 0 0 14px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: #e5ecff;
 }
 
 .tabs {
@@ -900,6 +921,88 @@ a.primary-button {
 
 .list-panel[hidden] {
   display: none;
+}
+
+/* The hover card for an item name. Fixed positioning keeps it beside the pointer
+   as the list moves underneath; pointer-events stays off so it never steals the
+   hover that opened it, and the offset keeps it clear of the name itself. */
+.item-tip-card {
+  position: fixed;
+  z-index: 80;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  background: rgba(8, 15, 30, 0.97);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.item-tip-card[hidden] {
+  display: none;
+}
+
+.item-tip-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.item-tip-name {
+  font-weight: 800;
+}
+
+.item-tip-tag {
+  padding: 1px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.item-tip-meta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.item-tip-text {
+  margin: 8px 0 0;
+}
+
+.item-tip-set {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.item-tip-set-name {
+  font-weight: 700;
+  color: #dbeafe;
+}
+
+.item-tip-set ul {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding-left: 15px;
+}
+
+.item-tip-source {
+  display: block;
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #6b7688;
 }
 
 .subhead {
