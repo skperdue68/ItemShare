@@ -55,7 +55,7 @@
 
 <p>
 On its own, the addon has a very limited role. It simply collects item data and stores it in your SavedVariables.
-That data is then uploaded to the ItemShare site, where it becomes a full item-sharing system.
+That data is then uploaded to the ItemShare website, where it becomes a full item-sharing system. The website is a separate project; this repository contains the addon only.
 </p>
 
 <p>
@@ -93,7 +93,7 @@ The site allows you and others to:
 <li>Right-click an item in your inventory and choose <strong>Add to Share</strong></li>
 <li>Repeat for any items you want to share</li>
 <li>Run <code>/ishare save</code> or reload your UI</li>
-<li>Upload your SavedVariables file to the ItemShare site</li>
+<li>Upload your SavedVariables file to the ItemShare website</li>
 <li>Use the site to manage requests</li>
 </ol>
 </div>
@@ -102,10 +102,22 @@ The site allows you and others to:
 <h2>What the Addon Does</h2>
 <ul>
 <li>Adds right-click options to inventory items so you can add or remove them from your shared list</li>
-<li>Shows an icon for items that are marked as shared</li>
+<li>Refuses items that are bound to you, and items the game only lets you trade to your group for a short while</li>
+<li>Shows a badge on items that are shared, always shared, or keep a reserve</li>
 <li>Keeps track of item counts and where they are stored</li>
-<li>Provides a window (<code>/itemshare list</code>) showing your shared items</li>
+<li>Provides a window (<code>/ishare list</code>) showing your shared items</li>
 <li>Saves your data so it can be uploaded to the site</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>Badges on the Item Icon</h2>
+<p>Hovering a badge explains which state the item is in, and how much is being kept back when it has a reserve.</p>
+<ul>
+<li><strong>Green gift</strong> - shared right now</li>
+<li><strong>Gold gift with a closed ring</strong> - always shared; it stays on the item even when you hold none</li>
+<li><strong>Amber padlock tag</strong> - added to either badge when the item keeps a share reserve</li>
+<li><strong>Padlock on its own</strong> - a reserve left on an item that is not shared at all, so it is still visible and can be cleared</li>
 </ul>
 </div>
 
@@ -113,32 +125,50 @@ The site allows you and others to:
 <h2>List Window</h2>
 
 <p>
-The Shared Items window shows everything currently marked for sharing.
+The Shared Items window shows everything currently offered. Only rows that offer something are listed.
 </p>
 
 <ul>
-<li>Right-click an item to turn sharing off</li>
-<li>Right-click again to turn sharing back on</li>
+<li>Right-click a row to stop sharing it, or to stop the standing offer it stands for</li>
 <li>Left-click the item name to view full item details</li>
+<li>A row with a reserve says <code>keep N</code> beside its location</li>
 </ul>
 
-<p>
-When you close and reopen the window, it will only show items that are currently being shared.
-This is expected behavior.
-</p>
+</div>
 
+<div class="section">
+<h2>Always Sharing an Item</h2>
+<p>
+Right-click an item and choose <strong>Always Share This Item</strong> to make it a standing offer. It stays offered even when you no longer hold a copy, and <code>/ishare sync</code> never removes it. A normal share is different: it is only offered while it is in a bag the addon can read.
+</p>
+</div>
+
+<div class="section">
+<h2>Share Reserve</h2>
+<p>
+A share reserve keeps some of a stack back and offers only the quantity above it. The list recalculates whenever your inventory changes, so a share that is inside its reserve comes back on its own when you acquire more.
+</p>
 </div>
 
 <div class="section">
 <h2>Commands</h2>
 <table>
 <tr><th>Command</th><th>Description</th></tr>
-<tr><td><code>/itemshare</code></td><td>Shows basic help</td></tr>
+<tr><td><code>/itemshare</code></td><td>Shows the command list</td></tr>
 <tr><td><code>/itemshare list</code></td><td>Open or close the shared items window</td></tr>
-<tr><td><code>/itemshare reset</code></td><td>Clear all shared items</td></tr>
-<tr><td><code>/itemshare sync</code></td><td>Update your list with items you still have</td></tr>
-<tr><td><code>/itemshare save</code></td><td>Reload UI to save your data</td></tr>
-<tr><td><code>/itemshare debug</code></td><td>Toggle debug messages</td></tr>
+<tr><td><code>/itemshare reset</code> (or <code>clear</code>)</td><td>Clear every share and every standing offer</td></tr>
+<tr><td><code>/itemshare sync</code> (or <code>cleanup</code>, <code>reconcile</code>)</td><td>Recount shares against the bags that are readable now and drop the ones you no longer have</td></tr>
+<tr><td><code>/itemshare rebuild</code></td><td>Rewrite every share from your current bags; also runs on login and when a bank opens</td></tr>
+<tr><td><code>/itemshare save</code></td><td>Rebuild, then offer to reload the UI so the file is written</td></tr>
+<tr><td><code>/itemshare debug</code></td><td>Toggle status messages on or off</td></tr>
+<tr><td><code>/itemshare guilds</code></td><td>List the guilds captured for the current character</td></tr>
+<tr><td><code>/itemshare always</code></td><td>List the items you always offer</td></tr>
+<tr><td><code>/itemshare noalways &lt;name&gt;</code></td><td>Stop always sharing one item</td></tr>
+<tr><td><code>/itemshare reserve &lt;amount&gt; &lt;name&gt;</code></td><td>Keep that many back and offer the rest</td></tr>
+<tr><td><code>/itemshare noreserve &lt;name&gt;</code></td><td>Share the whole stack again</td></tr>
+<tr><td><code>/itemshare reserves</code></td><td>List every item with a reserve, and what it offers</td></tr>
+<tr><td><code>/itemshare stamp</code></td><td>Give guild data to shares written before 1.6.0 so they appear on the site</td></tr>
+<tr><td><code>/itemshare guildbank</code></td><td>Toggle sharing from the guild bank (off by default)</td></tr>
 </table>
 
 <p><strong>Alias:</strong> <code>/ishare</code></p>
@@ -149,14 +179,14 @@ This is expected behavior.
 <ul>
 <li>You must reload your UI to save data before exporting</li>
 <li>The addon does not upload data automatically</li>
-<li>All processing happens on the ItemShare site</li>
+<li>All processing happens on the ItemShare website</li>
 </ul>
 </div>
 
 <div class="section">
 <h2>Known Issues</h2>
 <ul>
-<li>Marking items in a guild bank as shareable is currently disabled pending further testing</li>
+<li>Guild bank sharing is off by default while it is being tested; <code>/ishare guildbank</code> toggles it</li>
 <li>If an item is marked as shared while in the Furnishing Vault and is later placed in a house, it will continue to show as shared. This behavior may change in a future update</li>
 </ul>
 </div>
