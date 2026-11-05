@@ -541,6 +541,13 @@ or msmtp is the usual step on a fresh box, and `echo test | sendmail -t you@exam
 is the check. If the binary is somewhere unusual, set `SENDMAIL_PATH`; `EMAIL_TRANSPORT`
 forces `sendmail`, `resend` or `none` when both happen to be available.
 
+`npm run email:test -- you@example.com` sends one of these messages through exactly
+the configuration the site uses - `EMAIL_FROM`, `EMAIL_TRANSPORT`, `SENDMAIL_PATH` or
+`RESEND_API_KEY` - printing the transport, sender and subject first, then the result.
+It opens no database connection and changes nothing, so it separates "the mail server
+works" from "the site is configured": if it says the message was handed over and
+nothing arrives, the problem is the MTA's queue or DNS, not ItemShare.
+
 Windows has no local mail server, so during development there sending is simply
 skipped: the site works, requests are still recorded, and the log says
 `Email: N request emails not sent - ...` with the reason. Set `RESEND_API_KEY` (and an
@@ -705,6 +712,7 @@ Everything runs from `Database/`, through the `package.json` scripts:
 | `npm run backfill` | Retries item icons now instead of waiting for the timer |
 | `npm run seed:demo` | Adds `@DemoTrader` to your guilds so *Request* has rows; `-- --remove` takes it out |
 | `npm run simulate` | Drives three fake people through real asks, sends, timeouts and re-saves |
+| `npm run email:test -- <address>` | Sends one request email through the configured transport, without needing a request |
 
 `npm run seed:demo` prints what it put where: the guilds it could use, every shared
 item with its set, quality, trait, quantity and location, and every standing offer.
@@ -720,6 +728,7 @@ node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse o
 node backfillIcons.js --dry-run                                       # what lacks an icon
 node backfillIcons.js --limit 20 --passes 5                            # retry missing icons
 node backfillIcons.js --id 223698                                      # does UESP know this item?
+node testEmail.js you@example.com                                       # one request email, through .env
 ```
 
 `backfillIcons.js` reads `Database/.env` by absolute path, exactly like the site,
