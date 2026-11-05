@@ -162,6 +162,12 @@ still unspoken for rather than the raw `item_count`, so two people can never be
 promised the same five. A standing offer has no count behind it, so it always means
 one copy.
 
+When only one copy can be given - a stack of one, or the last copy of a bigger stack
+- there is nothing to choose, so the button sends the request for that one straight
+away rather than opening a dialog whose only answer is "one". Leaving the page with
+it unsent still raises the usual warning, and it can be cancelled from *Your
+requests*.
+
 A request is a **reservation, not a delivery**, and it reserves from the moment it is
 picked rather than from the moment it is sent:
 
