@@ -897,9 +897,23 @@ function ingestTokenMatches(given) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+// The body arrives as bytes, not as a form and not necessarily as one known text
+// type: a watcher may pipe the file straight off disk (`createReadStream(file)
+// .pipe(request)`), which means chunked transfer and no Content-Length at all, and
+// it may have gzipped the file on the way. express.raw buffers whatever arrives,
+// whatever the Content-Type (including none), and inflates gzip or deflate for us;
+// the limit is the same 12 MB the upload page allows.
+function ingestBodyText(req) {
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+  // A byte-order mark from a Windows editor would otherwise sit in front of the
+  // table name and make an otherwise fine file unreadable.
+  return raw.toString('utf8').replace(/^\uFEFF/, '');
+}
+
 app.post(
   '/ingest',
-  express.text({ type: ['text/plain', 'application/octet-stream'], limit: '12mb' }),
+  express.raw({ type: () => true, limit: '12mb' }),
   async (req, res) => {
     if (!INGEST_TOKEN) {
       res.status(503).json({
@@ -917,11 +931,11 @@ app.post(
       return;
     }
 
-    const fileText = typeof req.body === 'string' ? req.body : '';
+    const fileText = ingestBodyText(req);
 
     if (!fileText.trim()) {
       res.status(400).json({
-        error: 'Send the contents of ItemShareSavedVars.lua, as text/plain, in the request body.',
+        error: 'Send the contents of ItemShareSavedVars.lua in the request body, streamed or in one piece.',
       });
       return;
     }
@@ -1013,7 +1027,21 @@ app.use((error, req, res, next) => {
   }
 
   const status = error.statusCode || (error.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
-  const message = error.message || 'Something went wrong.';
+
+  // A watched file arrives as a raw body, so its failures come from body-parser
+  // rather than from anything here. Say what the sender can change instead of
+  // repeating "request entity too large" or zlib's "incorrect header check".
+  const ingestMessage =
+    error.type === 'entity.too.large'
+      ? 'That body is larger than 12 MB. ItemShareSavedVars.lua is well under that, so check what was sent.'
+      : error.type === 'entity.parse.failed' || error.code === 'Z_DATA_ERROR'
+        ? 'Could not decompress that body. Send it as plain text, or gzip it properly.'
+        : error.type === 'encoding.unsupported'
+          ? 'That Content-Encoding is not supported. Send plain text, gzip or deflate.'
+          : '';
+
+  const message =
+    (req.path === '/ingest' && ingestMessage) || error.message || 'Something went wrong.';
   const wantsJson =
     req.path === '/upload' ||
     req.path === '/ingest' ||

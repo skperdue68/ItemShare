@@ -60,6 +60,7 @@ default, so the site runs without a `.env` on a local root/no-password server.
 | `REQUEST_HOLD_MINUTES` | `5` | How long a picked item is held before it goes back |
 | `REQUEST_SWEEP_INTERVAL_MS` | `10000` | How often lapsed baskets are released |
 | `SIMULATE_TOKEN` | empty | Lets `npm run simulate` push live updates to open pages |
+| `INGEST_TOKEN` | empty | Shared token a watched saved-variables file is posted with; blank keeps automatic uploads off |
 | `EMAIL_FROM` | empty | Sender address for request emails; blank disables sending |
 | `EMAIL_TRANSPORT` | automatic | `sendmail`, `resend` or `none` |
 | `SENDMAIL_PATH` | automatic | Where the host's `sendmail` is |
@@ -272,7 +273,7 @@ the file, which it does on `POST /ingest`.
    With it blank the endpoint answers `503` and nothing else about the site changes.
 3. Put the same string in GuildSync, next to the on/off switch.
 
-The endpoint takes the file's **contents** as text, not a multipart form:
+The endpoint takes the file's **contents** in the request body, not a multipart form:
 
 ```bash
 curl -X POST https://your-site.example/ingest \
@@ -280,6 +281,19 @@ curl -X POST https://your-site.example/ingest \
   -H "Content-Type: text/plain" \
   -H "X-ItemShare-File: ItemShareSavedVars.lua" \
   --data-binary @ItemShareSavedVars.lua
+```
+
+The body is read as a stream, so the sender does not have to know the file's size
+before it starts: chunked transfer, a body with no `Content-Length`, gzip or deflate
+in `Content-Encoding` (up to 12 MB of it), and any `Content-Type` or none at all all
+land here the same way. Piping the file off disk is enough:
+
+```bash
+gzip -c ItemShareSavedVars.lua | curl -X POST https://your-site.example/ingest \
+  -H "Authorization: Bearer $INGEST_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  -H "Content-Encoding: gzip" \
+  --data-binary @-
 ```
 
 | Reply | Meaning |
@@ -373,6 +387,9 @@ Points worth keeping when it is wired in:
   file immediately; the next save does.
 - Log the reply's `itemCount`, not just success, or a send with nothing in it looks
   identical to one with thirty items.
+- The example above reads the file first, which is fine for a few hundred KB. The
+  endpoint takes a stream just as happily, so `createReadStream(file).pipe(request)`
+  works unchanged if you would rather not hold the file in memory.
 
 ## Seeing shared items
 
