@@ -9,7 +9,8 @@
     "ingest": "node ingest.js",
     "backfill": "node backfillIcons.js",
     "seed:demo": "node seedDemo.js",
-    "check": "node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run"
+    "check": "node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run",
+    "simulate": "node simulate.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

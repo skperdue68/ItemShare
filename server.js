@@ -26,6 +26,7 @@ import {
   fillKnownIcons,
   getAccountSummary,
   getAlwaysShareForViewer,
+  getBasketRows,
   getDraftBasket,
   getRequesterRequests,
   getSharedItemsForViewer,
@@ -130,6 +131,13 @@ function readParam(value) {
   return typeof value === 'string' ? value.trim().slice(0, 120) : '';
 }
 
+// How a person is named in the server log and in the live-update line. The provider
+// username is what they signed in as; the email is the fallback for a provider that
+// does not give one.
+function personLabel(user) {
+  return (user && (user.username || user.email)) || 'Someone';
+}
+
 // Every page the site can end up on uses the same shell, so a cancelled sign-in or
 // a wrong address looks like ItemShare rather than a line of unstyled text.
 function sendPage(req, res, status, options) {
@@ -218,6 +226,7 @@ async function collectViewerData(req, filters) {
     alwaysShare: [],
     requests: [],
     basket: { count: 0, quantity: 0, secondsLeft: 0, holdMinutes: HOLD_MINUTES },
+    basketRows: [],
     facets: { types: [], owners: [] },
     filters,
     dbError: null,
@@ -243,6 +252,7 @@ async function collectViewerData(req, filters) {
       data.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
       data.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
       data.requests = user ? await getRequesterRequests(connection, user.id) : [];
+      data.basketRows = user ? await getBasketRows(connection, user.id) : [];
       data.basket = user
         ? await getDraftBasket(connection, user.id)
         : { count: 0, quantity: 0, secondsLeft: 0, holdMinutes: HOLD_MINUTES };
@@ -317,7 +327,10 @@ app.post('/requests', async (req, res) => {
     });
 
     // Everyone looking at that stack needs the new count straight away.
-    notifyItemsChanged('request');
+    notifyItemsChanged(
+      'request',
+      `${personLabel(user)} asked for ${outcome.quantity} x ${outcome.itemName} from ${outcome.ownerAccountName}`
+    );
     res.json({ ok: true, ...outcome });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
@@ -346,7 +359,12 @@ app.post('/requests/:id/cancel', async (req, res) => {
       return;
     }
 
-    notifyItemsChanged('request');
+    notifyItemsChanged(
+      'request',
+      `${personLabel(user)} ${outcome.wasDraft ? 'took back' : 'cancelled'} their request for ${
+        outcome.itemName || 'an item'
+      }`
+    );
     res.json({ ok: true, ...outcome });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
@@ -377,7 +395,10 @@ app.post('/requests/submit', async (req, res) => {
       return;
     }
 
-    notifyItemsChanged('request');
+    notifyItemsChanged(
+      'request',
+      `${personLabel(user)} sent ${outcome.sent} request${outcome.sent === 1 ? '' : 's'}`
+    );
     res.json({ ok: true, ...outcome });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
@@ -625,7 +646,16 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
 
     // The rows are committed, so the new list is real. Announce it before the icon
     // work, which can take a moment, so nobody waits on UESP to see their items.
-    notifyItemsChanged('upload');
+    const uploaded = (Array.isArray(outcome) ? outcome : [outcome]).filter(Boolean);
+    const uploadedItems = uploaded.reduce((sum, entry) => sum + (Number(entry.itemCount) || 0), 0);
+    const uploadedAccounts = uploaded.map((entry) => entry.accountName).filter(Boolean);
+
+    notifyItemsChanged(
+      'upload',
+      `${uploadedAccounts.join(', ') || 'An account'} uploaded ${uploadedItems} item${
+        uploadedItems === 1 ? '' : 's'
+      }`
+    );
 
     // One fetch per new icon, ever: afterwards /icons serves the stored bytes.
     let icons = { fetched: 0, skipped: 0, failed: 0 };
@@ -642,7 +672,10 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       if (icons.fetched) {
         // Rows that had no picture a moment ago have one now, so open pages have to
         // draw them a second time.
-        notifyItemsChanged('icons');
+        notifyItemsChanged(
+          'icons',
+          `${icons.fetched} item icon${icons.fetched === 1 ? '' : 's'} fetched`
+        );
       }
     } catch (error) {
       console.warn(`Could not cache item icons: ${error.message}`);
@@ -695,7 +728,7 @@ async function backfillIcons(reason) {
       );
 
       if (result.rows > 0) {
-        notifyItemsChanged('icons');
+        notifyItemsChanged('icons', `${result.rows} row${result.rows === 1 ? '' : 's'} got their icons`);
       }
     }
   } catch (error) {
@@ -803,10 +836,10 @@ async function sweepExpiredRequests() {
     const released = await withDatabase((connection) => expireDueDrafts(connection));
 
     if (released > 0) {
-      console.log(
-        `Requests: released ${released} unsubmitted reservation${released === 1 ? '' : 's'} that timed out`
+      notifyItemsChanged(
+        'request',
+        `${released} unsent request${released === 1 ? '' : 's'} timed out, so the items are free again`
       );
-      notifyItemsChanged('request');
     }
   } catch (error) {
     // A database that is down is not a reason to stop the clock; the holding check
@@ -823,6 +856,27 @@ if (SWEEP_INTERVAL_MS > 0) {
   setInterval(sweepExpiredRequests, SWEEP_INTERVAL_MS).unref();
   sweepExpiredRequests();
 }
+
+// ---------------------------------------------------------------- simulation
+// `npm run simulate` runs as its own process. It writes through the same store code
+// the site uses, but it cannot reach the sockets this process holds, so after each
+// round it says what happened here and this turns that into a push. The token keeps
+// the endpoint off unless someone deliberately set one.
+const SIMULATE_TOKEN = String(process.env.SIMULATE_TOKEN || '').trim();
+
+app.post('/simulate/nudge', (req, res) => {
+  const token = String(req.get('x-itemshare-simulate') || '').trim();
+
+  if (!SIMULATE_TOKEN || token !== SIMULATE_TOKEN) {
+    res.status(404).end();
+    return;
+  }
+
+  const summary = readParam(req.body && req.body.summary).slice(0, 200);
+
+  notifyItemsChanged('simulation', summary || 'Simulated activity');
+  res.json({ ok: true, clients: realtime.clients(), revision: realtime.revision() });
+});
 
 httpServer.listen(PORT, () => {
   console.log(`ItemShare upload site listening on http://localhost:${PORT}`);
