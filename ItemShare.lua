@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.1"
+local ADDON_VERSION = "1.10.2"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -189,6 +189,16 @@ local function GetShareListEntries()
         end
     end
 
+    -- Asked at most once, and only when something is missing from the list, so an
+    -- ordinary refresh stays as cheap as it was.
+    local inventoryIndex = nil
+    local function GetListInventoryIndex()
+        if inventoryIndex == nil then
+            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
+        end
+        return inventoryIndex or nil
+    end
+
     local alwaysShare = ItemShare.savedVars.alwaysShare
     if type(alwaysShare) == "table" then
         local waiting = {}
@@ -198,10 +208,8 @@ local function GetShareListEntries()
             end
         end
 
-        if #waiting > 0 and BuildActualInventoryIndex then
-            -- Only asked when a standing offer is missing from the list, so an
-            -- ordinary refresh stays as cheap as it was.
-            local index = BuildActualInventoryIndex()
+        local index = #waiting > 0 and GetListInventoryIndex() or nil
+        if index then
             for _, alwaysEntry in ipairs(waiting) do
                 local link = tostring(alwaysEntry.itemLink or "")
                 local held = math.max(0, tonumber(index.countsByLink[link] or 0) or 0)
@@ -229,8 +237,58 @@ local function GetShareListEntries()
                         slotIndex = location and location.slotIndex or nil,
                         alwaysOnly = true,
                     }
+                    linksListed[link] = true
                 end
             end
+        end
+    end
+
+    -- A reserve belongs to the item rather than to a share, so it can be set on an
+    -- item that is not shared at all - that is the amber tag with no parcel under it
+    -- in the bags. Leaving those out of the window meant a reserve on an unshared
+    -- item could only be found again by remembering it had been set.
+    local reserves = ItemShare.savedVars.reserves
+    local reserveLinks = {}
+    if type(reserves) == "table" then
+        for link, amount in pairs(reserves) do
+            local linkText = tostring(link or "")
+            local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+            if keep > 0 and linkText ~= "" and not linksListed[linkText] then
+                reserveLinks[#reserveLinks + 1] = linkText
+            end
+        end
+    end
+
+    if #reserveLinks > 0 then
+        table.sort(reserveLinks)
+        local index = GetListInventoryIndex()
+        for _, link in ipairs(reserveLinks) do
+            local location = index and index.locationsByLink and index.locationsByLink[link] or nil
+            local itemData = location and location.itemData or nil
+            local held = math.max(0, tonumber(index and index.countsByLink[link] or 0) or 0)
+
+            entries[#entries + 1] = {
+                itemKey = link,
+                itemLink = link,
+                itemName = tostring(itemData and itemData.itemName or link),
+                itemType = itemData and itemData.itemType,
+                itemTypeName = itemData and itemData.itemTypeName,
+                quality = itemData and itemData.quality,
+                trait = itemData and itemData.trait,
+                itemId = itemData and itemData.itemId,
+                icon = itemData and itemData.icon,
+                esoDetails = itemData and itemData.esoDetails,
+                heldCount = held,
+                reserve = GetShareReserve(link),
+                -- Nothing is on offer from a reserved item that is not shared, so the
+                -- count column says zero while the row still shows what is kept back.
+                count = 0,
+                sharedFrom = location and tostring(location.sharedFrom or "-") or "Not in a bag",
+                locationKey = location and tostring(location.locationKey or "") or "",
+                bagId = location and location.bagId or nil,
+                slotIndex = location and location.slotIndex or nil,
+                reserveOnly = true,
+            }
         end
     end
 
@@ -352,10 +410,8 @@ local function CreateShareListWindow()
     reloadButton:SetAnchor(BOTTOM, window, BOTTOM, 0, -12)
     reloadButton:SetFont("ZoFontGame")
     reloadButton:SetText("Reload UI")
-    reloadButton:SetNormalTexture("/esoui/art/buttons/accept_up.dds")
-    reloadButton:SetPressedTexture("/esoui/art/buttons/accept_down.dds")
-    reloadButton:SetMouseOverTexture("/esoui/art/buttons/accept_over.dds")
-    reloadButton:SetDisabledTexture("/esoui/art/buttons/accept_disabled.dds")
+    -- No button art: the textured frame was loud enough to pull the eye off the list
+    -- itself, and a plain label reads as the quiet action it is.
     reloadButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
     reloadButton:SetHandler("OnClicked", function()
         SyncSharedItemsWithInventory()
@@ -511,9 +567,16 @@ local function GetOrCreateShareListRow(index)
         -- A standing offer has no share entry to find, so "shared" has to include it,
         -- and the badge has to come from the same function the rest of the addon uses:
         -- picking a texture here by hand lost the amber reserve tag after a toggle.
+        -- A reserve can outlive the share it was set beside, and then the badge is
+        -- the amber tag on its own rather than a parcel nobody can ask for. The same
+        -- rule the bags use, so removing a share here does not leave a stale badge.
+        local reserve = link ~= "" and ((GetShareReserve and GetShareReserve(link)) or 0) or 0
+        row.isReserveOnly = (not (isShared or isAlways)) and reserve > 0
         row.isShared = (isShared or isAlways) and true or false
-        statusIcon:SetTexture(GetShareBadgeTexture(link, isAlways))
-        statusIcon:SetHidden(not (isShared or isAlways))
+        statusIcon:SetTexture(
+            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways)
+        )
+        statusIcon:SetHidden(not (isShared or isAlways or row.isReserveOnly))
         RefreshRowAppearance()
     end
 
@@ -573,6 +636,18 @@ local function GetOrCreateShareListRow(index)
         elseif row.entryData then
             -- Re-adding from the list window is still a marking: an item that has
             -- become bound since it was filed must not slip back in this way.
+            -- A reserved item that is not in a readable bag has nothing to file: the
+            -- row knows only its link and its reserve, so there is no share to make
+            -- of it until a copy turns up.
+            if row.isReserveOnly
+                and (tonumber(row.entryData.bagId) == nil or tonumber(row.entryData.slotIndex) == nil) then
+                dmsg(string.format(
+                    "Cannot share %s yet: no copy of it is in a bag right now.",
+                    tostring(row.entryData.itemName or row.itemLink or "that item")
+                ))
+                return
+            end
+
             local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
             if not isEligible then
                 dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
@@ -584,6 +659,7 @@ local function GetOrCreateShareListRow(index)
                 row.entryData = savedEntry
                 row.entryKey = tostring(BuildSharedItemKey(savedEntry.itemLink, savedEntry.locationKey) or row.entryKey or "")
                 row.isShared = true
+                row.isReserveOnly = false
                 dmsg(string.format(
                     "Added shared item %s from %s (stack size: %d)",
                     tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
@@ -615,7 +691,11 @@ local function GetOrCreateShareListRow(index)
         local link = row.itemLink or (row.entryData and row.entryData.itemLink)
         local lines = {}
 
-        if link and IsItemLinkAlwaysShared(link) then
+        if row.isReserveOnly then
+            lines[#lines + 1] = "|cD8A24FShare reserve|r"
+            lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
+            lines[#lines + 1] = "Right-click the row to add it to the shared list."
+        elseif link and IsItemLinkAlwaysShared(link) then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
         else
@@ -725,7 +805,9 @@ RefreshShareListWindow = function()
             displayText = string.format("%s (%s)", displayText, traitText)
         end
         row.itemLabel:SetText(displayText)
-        row.countLabel:SetText(tostring(GetEntryOfferedCount(entry)))
+        -- A reserved row that is not shared offers nothing, so its count is zero
+        -- whatever the bags hold; what is held is shown beside the reserve instead.
+        row.countLabel:SetText(tostring((entry.reserveOnly and 0) or GetEntryOfferedCount(entry)))
 
         -- The reserve is part of what the row has to say: "12" alone does not
         -- explain why a stack of 20 offers 8.
@@ -738,12 +820,18 @@ RefreshShareListWindow = function()
                 or string.format("%s - keep %d", locationText, reserve)
         end
         row.locationLabel:SetText(locationText)
-        row.isShared = true
+        -- A row that only carries a reserve is not a share yet: right-clicking it
+        -- adds one, so it has to look unshared or the toggle reads as a no-op.
+        row.isShared = not (entry.reserveOnly and true or false)
         row.isAlwaysOnly = entry.alwaysOnly and true or false
+        row.isReserveOnly = entry.reserveOnly and true or false
         -- Rows are recycled, so the badge is set from the entry on every refresh.
         -- Leaving it to creation time meant a removed standing offer kept its gold
         -- icon in this window until the row happened to be reused for something else.
-        row.statusIcon:SetTexture(GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink)))
+        row.statusIcon:SetTexture(
+            (entry.reserveOnly and RESERVE_ONLY_TEXTURE_PATH)
+                or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink))
+        )
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
             row:RefreshAppearance()
@@ -1768,10 +1856,7 @@ local function EnsureShareMarker(control)
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
 
         local lines = {}
-        if self.ItemShareReserveOnly then
-            lines[#lines + 1] = "|cD8A24FShare reserve|r"
-            lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
-        elseif self.ItemShareAlways then
+        if self.ItemShareAlways then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
         else
@@ -1794,10 +1879,6 @@ local function EnsureShareMarker(control)
             end
         end
 
-        if self.ItemShareReserveOnly then
-            lines[#lines + 1] = "Right-click it - Share Reserve - to change or clear it."
-        end
-
         SetTooltipText(InformationTooltip, table.concat(lines, "\n"))
     end)
 
@@ -1808,6 +1889,87 @@ local function EnsureShareMarker(control)
     AnchorShareMarker(marker, control)
 
     control.ItemShareMarker = marker
+    return marker
+end
+
+-- Anchored to the icon's bottom-left corner, opposite the share glyph. The size
+-- follows the icon for the same reason the share badge does: a fixed 14 px read as a
+-- speck next to a 36 px slot icon.
+local function AnchorReserveMarker(marker, control)
+    local icon = FindItemIconControl(control)
+
+    marker:ClearAnchors()
+
+    local width = icon and icon.GetWidth and icon:GetWidth() or 0
+    local height = icon and icon.GetHeight and icon:GetHeight() or 0
+    local size = 20
+
+    if width > 0 and height > 0 then
+        size = math.max(18, math.min(26, math.floor(math.min(width, height) * 0.55)))
+    else
+        local controlHeight = (control.GetHeight and control:GetHeight()) or 0
+        size = controlHeight > 0 and math.max(16, math.min(26, math.floor(controlHeight * 0.5))) or 20
+    end
+
+    marker:SetDimensions(size, size)
+
+    if icon then
+        marker:SetAnchor(BOTTOMLEFT, icon, BOTTOMLEFT, -2, 2)
+        marker:SetDrawLayer(icon:GetDrawLayer())
+        marker:SetDrawTier(icon:GetDrawTier() + 1)
+    else
+        marker:SetAnchor(BOTTOMLEFT, control, BOTTOMLEFT, 0, 0)
+    end
+end
+
+local function EnsureReserveMarker(control)
+    if not control then
+        return nil
+    end
+
+    if control.ItemShareReserveMarker then
+        return control.ItemShareReserveMarker
+    end
+
+    local marker = WINDOW_MANAGER:CreateControl(nil, control, CT_TEXTURE)
+    -- The amber tag on its own: the parcel, when there is one, is the badge in the
+    -- opposite corner, so this one says only "part of this stack is mine".
+    marker:SetTexture(RESERVE_ONLY_TEXTURE_PATH)
+    marker:SetHidden(true)
+    marker:SetMouseEnabled(true)
+
+    marker:SetHandler("OnMouseEnter", function(self)
+        InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
+
+        local lines = { "|cD8A24FShare reserve|r" }
+        local reserve = tonumber(self.ItemShareReserve) or 0
+        local held = tonumber(self.ItemShareHeld) or 0
+
+        if reserve > 0 and held > 0 then
+            lines[#lines + 1] = string.format(
+                "|cD8A24FKeeping %d back|r - offering %d of %d held.",
+                reserve,
+                tonumber(self.ItemShareOffered) or 0,
+                held
+            )
+        elseif reserve > 0 then
+            lines[#lines + 1] = string.format("|cD8A24FKeeping %d back|r.", reserve)
+        end
+
+        if self.ItemShareUnshared then
+            lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
+            lines[#lines + 1] = "Right-click it - Share Reserve - to change or clear it."
+        end
+
+        SetTooltipText(InformationTooltip, table.concat(lines, "\n"))
+    end)
+
+    marker:SetHandler("OnMouseExit", function()
+        ClearTooltip(InformationTooltip)
+    end)
+
+    AnchorReserveMarker(marker, control)
+    control.ItemShareReserveMarker = marker
     return marker
 end
 
@@ -1835,10 +1997,12 @@ local function UpdateSharedRowMarker(control, slotData)
             and ItemShare.savedVars.sharedItems
             and ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
         or nil
-    -- A share that is entirely inside its reserve offers nothing, and the site does
-    -- not list it, so it gets no badge: the badge would promise a copy nobody can
-    -- ask for.
-    local isShared = sharedEntry ~= nil and (tonumber(sharedEntry.count or 0) or 0) > 0
+    -- The entry existing is what "shared" means. This used to be decided by reading
+    -- the count the entry carried, and when that count stopped being stored every
+    -- share lost its badge: the marking was there, the list showed it, and the bag
+    -- said nothing. How much is on offer belongs in the tooltip, not in whether the
+    -- badge is drawn at all.
+    local isShared = sharedEntry ~= nil
     -- A standing offer deserves its badge even when no copy is in a bag right now:
     -- that is what the offer means. It used to show nothing at all in that state,
     -- which made the gold icon look as if it did not exist.
@@ -1846,27 +2010,29 @@ local function UpdateSharedRowMarker(control, slotData)
     local reserve = (itemLink and GetShareReserve(itemLink)) or 0
 
     if isShared or isAlways then
-        -- Same glyph with a closed ring and a gold tint for a standing offer, and an
-        -- amber tag on either when a reserve is set, so the bag and the share list
-        -- never disagree.
-        marker:SetTexture(GetShareBadgeTexture(itemLink, isAlways))
+        -- The plain glyph, saying only what the item offers. A reserve is a separate
+        -- fact and gets its own corner below, so a share that keeps some back shows
+        -- both instead of one badge having to mean two things.
+        marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
         marker.ItemShareAlways = isAlways and true or false
         marker.ItemShareReserve = reserve
-        marker.ItemShareReserveOnly = false
-        marker.ItemShareHeld = tonumber(sharedEntry and (sharedEntry.heldCount or sharedEntry.count) or 0) or 0
-        marker.ItemShareOffered = tonumber(sharedEntry and sharedEntry.count or 0) or 0
-    elseif reserve > 0 then
-        -- Reserved, but nothing is on offer: the amber tag alone, so the reserve is
-        -- visible on the item and can be found and cleared rather than forgotten.
-        marker:SetTexture(RESERVE_ONLY_TEXTURE_PATH)
-        marker.ItemShareAlways = false
-        marker.ItemShareReserve = reserve
-        marker.ItemShareReserveOnly = true
-        marker.ItemShareHeld = 0
-        marker.ItemShareOffered = 0
+        marker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
+        marker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
     end
 
-    marker:SetHidden(not (isShared or isAlways or reserve > 0))
+    marker:SetHidden(not (isShared or isAlways))
+
+    -- The reserve tag, bottom-left: a reserved share shows the parcel above and the
+    -- amber tag below, and a reserve on an item that is not shared at all shows only
+    -- the tag. One place for it means the reserve is never the badge that got hidden.
+    local reserveMarker = EnsureReserveMarker(control)
+    if reserveMarker then
+        reserveMarker.ItemShareReserve = reserve
+        reserveMarker.ItemShareUnshared = not (isShared or isAlways)
+        reserveMarker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
+        reserveMarker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
+        reserveMarker:SetHidden(reserve <= 0)
+    end
 end
 
 local function HookInventoryRowCallbacks()
@@ -3016,9 +3182,6 @@ local function BuildReserveDialog()
     keepButton:SetAnchor(BOTTOM, window, BOTTOM, -78, -16)
     keepButton:SetFont("ZoFontGame")
     keepButton:SetText("Keep This Many")
-    keepButton:SetNormalTexture("/esoui/art/buttons/accept_up.dds")
-    keepButton:SetPressedTexture("/esoui/art/buttons/accept_down.dds")
-    keepButton:SetMouseOverTexture("/esoui/art/buttons/accept_over.dds")
     keepButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
 
     local clearButton = wm:CreateControl(nil, window, CT_BUTTON)
@@ -3026,9 +3189,6 @@ local function BuildReserveDialog()
     clearButton:SetAnchor(BOTTOM, window, BOTTOM, 78, -16)
     clearButton:SetFont("ZoFontGame")
     clearButton:SetText("Clear Reserve")
-    clearButton:SetNormalTexture("/esoui/art/buttons/decline_up.dds")
-    clearButton:SetPressedTexture("/esoui/art/buttons/decline_down.dds")
-    clearButton:SetMouseOverTexture("/esoui/art/buttons/decline_over.dds")
     clearButton:SetClickSound(SOUNDS.DIALOG_DECLINE)
 
     keepButton:SetHandler("OnClicked", function()
@@ -3131,35 +3291,84 @@ OpenShareReserveDialog = function(bagId, slotIndex)
 end
 
 local function PrintShareReserves()
-    local entries = {}
+    local rows = {}
+    local listed = {}
 
-    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        if type(entry) == "table" and GetShareReserve(entry.itemLink) > 0 then
-            entries[#entries + 1] = entry
+    local function AddEntryRow(entry)
+        if type(entry) ~= "table" then
+            return
+        end
+
+        local link = tostring(entry.itemLink or "")
+        if link ~= "" and not listed[link] and GetShareReserve(link) > 0 then
+            listed[link] = true
+            rows[#rows + 1] = { entry = entry, link = link }
         end
     end
 
-    if #entries == 0 then
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        AddEntryRow(entry)
+    end
+    for _, entry in pairs(GetAlwaysShareTable()) do
+        AddEntryRow(entry)
+    end
+
+    -- The reserve table is the authority, because a reserve can be set on an item
+    -- that is not shared at all. Reading only the shares left those out of this list
+    -- as well as out of the window.
+    local index = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or nil
+    for link, amount in pairs(GetShareReserveTable()) do
+        local linkText = tostring(link or "")
+        local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+        if keep > 0 and linkText ~= "" and not listed[linkText] then
+            listed[linkText] = true
+            local location = index and index.locationsByLink and index.locationsByLink[linkText] or nil
+            rows[#rows + 1] = {
+                link = linkText,
+                reserveOnly = true,
+                name = tostring(location and location.itemData and location.itemData.itemName or ""),
+            }
+        end
+    end
+
+    if #rows == 0 then
         dmsg("No item has a share reserve. Set one with /itemshare reserve <amount> <part of the name>.")
         return
     end
 
-    table.sort(entries, function(a, b)
-        return string.lower(tostring(a.itemName or "")) < string.lower(tostring(b.itemName or ""))
+    local function NameOf(row)
+        if row.entry then
+            return tostring(row.entry.itemName or "Unknown Item")
+        end
+        if row.name ~= "" then
+            return row.name
+        end
+        return string.format("item %s", tostring(string.match(row.link, "item:(%d+)") or row.link))
+    end
+
+    table.sort(rows, function(a, b)
+        return string.lower(NameOf(a)) < string.lower(NameOf(b))
     end)
 
-    dmsg(string.format("Share reserves (%d):", #entries))
-    for _, entry in ipairs(entries) do
-        local held = GetEntryHeldCount(entry)
-        dmsg(string.format(
-            "  %s: keep %d, sharing %d of %d held",
-            tostring(entry.itemName or "Unknown Item"),
-            GetShareReserve(entry.itemLink),
-            GetEntryOfferedCount(entry),
-            held
-        ))
+    dmsg(string.format("Share reserves (%d):", #rows))
+    for _, row in ipairs(rows) do
+        if row.entry then
+            dmsg(string.format(
+                "  %s: keep %d, sharing %d of %d held",
+                NameOf(row),
+                GetShareReserve(row.link),
+                GetEntryOfferedCount(row.entry),
+                GetEntryHeldCount(row.entry)
+            ))
+        else
+            dmsg(string.format(
+                "  %s: keep %d, not shared",
+                NameOf(row),
+                GetShareReserve(row.link)
+            ))
+        end
     end
-    dmsg("Clear one with /itemshare noreserve <part of the name>.")
+    dmsg("Clear one with /itemshare noreserve <part of the name>, or from the item's right-click menu.")
 end
 
 local function OnSlashCommand(arg)
