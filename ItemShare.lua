@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.3"
+local ADDON_VERSION = "1.10.4"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -168,10 +168,95 @@ local function GetShareListEntries()
     local entries = {}
     local linksListed = {}
 
+    -- Asked at most once per refresh, and only when a number has to come from the
+    -- bags, so an ordinary refresh stays as cheap as it was.
+    local inventoryIndex = nil
+    local function GetListInventoryIndex()
+        if inventoryIndex == nil then
+            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
+        end
+        return inventoryIndex or nil
+    end
+
+    -- Every place a stack of this link was found, not just the one it was marked
+    -- from: a count that includes the bank should say so. The labels come from the
+    -- same pass that produced the count, so the two can never disagree, and a bag
+    -- that could not be read contributes neither.
+    local function JoinLocationLabels(index, link, fallback)
+        local labelsSeen = {}
+        local indexLabels = index and index.locationLabelsByLink and index.locationLabelsByLink[link]
+
+        if type(indexLabels) == "table" then
+            for label in pairs(indexLabels) do
+                local text = tostring(label or "")
+                if text ~= "" then
+                    labelsSeen[text] = true
+                end
+            end
+        end
+
+        local texts = {}
+        for text in pairs(labelsSeen) do
+            texts[#texts + 1] = text
+        end
+
+        if #texts == 0 then
+            return tostring(fallback or "")
+        end
+
+        table.sort(texts)
+        return table.concat(texts, " + ")
+    end
+
+    -- One row per item, not one row per stack. A share is filed by the stack it was
+    -- marked from, so two stacks of 20 of the same thing were two rows saying 20
+    -- each when what is actually available is 40. The stacks are folded together
+    -- here, and the count comes from every stack of that link the bags report.
+    local sharesByLink = {}
+    local shareOrder = {}
+
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        local count = GetEntryOfferedCount(entry)
         local link = tostring(entry.itemLink or "")
+        local groupKey = link ~= "" and link or tostring(itemKey)
+
+        local group = sharesByLink[groupKey]
+        if not group then
+            group = {
+                itemKey = itemKey,
+                entry = entry,
+                itemLink = link,
+                stacksHeld = 0,
+                locations = {},
+                locationTexts = {},
+            }
+            sharesByLink[groupKey] = group
+            shareOrder[#shareOrder + 1] = groupKey
+        end
+
+        group.stacksHeld = group.stacksHeld + GetEntryHeldCount(entry)
+
+        local from = tostring(entry.sharedFrom or "")
+        if from ~= "" and not group.locations[from] then
+            group.locations[from] = true
+            group.locationTexts[#group.locationTexts + 1] = from
+        end
+    end
+
+    table.sort(shareOrder)
+
+    for _, groupKey in ipairs(shareOrder) do
+        local group = sharesByLink[groupKey]
+        local entry = group.entry
+        local link = group.itemLink
         local reserve = link ~= "" and GetShareReserve(link) or 0
+
+        -- The count comes from the shares themselves, not from measuring the bags
+        -- again. Each entry was written with the stack it was filed from, and sync,
+        -- rebuild and the login pass keep those counts in step, so opening this
+        -- window is a read of saved data. That is also why the bank's stack is in
+        -- here while the bank is shut: it was counted when it was shared.
+        local held = group.stacksHeld
+        local count = ShareableCount(link, held)
 
         -- A share that is entirely inside its reserve is still a share: it stays in
         -- the window with nothing on offer, so the reserve can be seen and changed
@@ -181,27 +266,28 @@ local function GetShareListEntries()
             for k, v in pairs(entry) do
                 copy[k] = v
             end
-            copy.itemKey = itemKey
+
+            copy.itemKey = group.itemKey
             copy.itemLink = link
             copy.count = count
             copy.reserve = reserve
-            copy.heldCount = GetEntryHeldCount(entry)
+            copy.heldCount = held
+            copy.stackCount = #group.locationTexts
+
+            -- Every place a shared stack was filed from, in a fixed order. The count
+            -- above adds up those same stacks, so the places named and the stacks
+            -- counted are one list by construction.
+            if #group.locationTexts > 0 then
+                table.sort(group.locationTexts)
+                copy.sharedFrom = table.concat(group.locationTexts, " + ")
+            end
+
             entries[#entries + 1] = copy
 
             if link ~= "" then
                 linksListed[link] = true
             end
         end
-    end
-
-    -- Asked at most once, and only when something is missing from the list, so an
-    -- ordinary refresh stays as cheap as it was.
-    local inventoryIndex = nil
-    local function GetListInventoryIndex()
-        if inventoryIndex == nil then
-            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
-        end
-        return inventoryIndex or nil
     end
 
     local alwaysShare = ItemShare.savedVars.alwaysShare
@@ -236,7 +322,7 @@ local function GetShareListEntries()
                         heldCount = held,
                         reserve = GetShareReserve(link),
                         count = offered,
-                        sharedFrom = location and tostring(location.sharedFrom or "-") or "Not in a bag",
+                        sharedFrom = JoinLocationLabels(index, link, location and tostring(location.sharedFrom or "") or "Not in a bag"),
                         locationKey = location and tostring(location.locationKey or "") or "",
                         bagId = location and location.bagId or nil,
                         slotIndex = location and location.slotIndex or nil,
@@ -288,7 +374,7 @@ local function GetShareListEntries()
                 -- Nothing is on offer from a reserved item that is not shared, so the
                 -- count column says zero while the row still shows what is kept back.
                 count = 0,
-                sharedFrom = location and tostring(location.sharedFrom or "-") or "Not in a bag",
+                sharedFrom = JoinLocationLabels(index, link, location and tostring(location.sharedFrom or "") or "Not in a bag"),
                 locationKey = location and tostring(location.locationKey or "") or "",
                 bagId = location and location.bagId or nil,
                 slotIndex = location and location.slotIndex or nil,
@@ -2653,6 +2739,7 @@ BuildActualInventoryIndex = function()
     local countsByEntryKey = {}
     local countsByLink = {}
     local locationsByLink = {}
+    local locationLabelsByLink = {}
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
@@ -2688,6 +2775,8 @@ BuildActualInventoryIndex = function()
                             itemData = itemData,
                         }
                         countsByLink[itemData.itemLink] = (countsByLink[itemData.itemLink] or 0) + stackCount
+                        locationLabelsByLink[itemData.itemLink] = locationLabelsByLink[itemData.itemLink] or {}
+                        locationLabelsByLink[itemData.itemLink][locationLabel] = true
                         if not locationsByLink[itemData.itemLink] then
                             locationsByLink[itemData.itemLink] = {
                                 sharedFrom = locationLabel,
@@ -2739,6 +2828,7 @@ BuildActualInventoryIndex = function()
 
     return {
         observableLocationKeys = observableLocationKeys,
+        locationLabelsByLink = locationLabelsByLink,
         countsByEntryKey = countsByEntryKey,
         countsByLink = countsByLink,
         locationsByLink = locationsByLink,
