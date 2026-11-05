@@ -822,6 +822,10 @@ function basketHeldItems() {
 // The server sends the seconds left as it renders the page; from then on this counts
 // down against the clock, so the number moves without one request per second. A live
 // refresh replaces the element, which restarts it from whatever the server now says.
+const COUNTDOWN_SOON_SECONDS = 120;
+const COUNTDOWN_URGENT_SECONDS = 30;
+const COUNTDOWN_FADE_MS = 2000;
+
 function tickCountdown() {
   const basket = document.querySelector('[data-basket]');
   const label = basket ? basket.querySelector('[data-countdown]') : null;
@@ -838,14 +842,26 @@ function tickCountdown() {
   const minutes = Math.floor(remaining / 60);
 
   label.textContent = `${minutes}:${String(remaining % 60).padStart(2, '0')}`;
-  label.classList.toggle('countdown-urgent', remaining <= 30);
 
-  // Zero is when the server has already let the items go; saying so is better than
-  // leaving a basket on screen that can no longer be sent.
+  // Three stages rather than one alarm: yellow says start wrapping up, red says send
+  // it now. The number is the same in all three, so colour is only emphasis.
+  label.classList.toggle(
+    'countdown-soon',
+    remaining > COUNTDOWN_URGENT_SECONDS && remaining <= COUNTDOWN_SOON_SECONDS
+  );
+  label.classList.toggle('countdown-urgent', remaining <= COUNTDOWN_URGENT_SECONDS && remaining > 0);
+
+  // Zero is when the server has already let the items go. Fading the clock out reads
+  // as the reservation ending; snapping it away looks like a bug.
   if (remaining === 0 && !basket.dataset.lapsed) {
     basket.dataset.lapsed = '1';
-    showToast('The time to send those requests ran out, so the items went back to being available.', 'err');
-    refreshAfterChange();
+    label.classList.remove('countdown-soon');
+    label.classList.add('countdown-urgent', 'countdown-fading');
+    showToast(
+      'The time to send those requests ran out, so the items went back to being available.',
+      'err'
+    );
+    window.setTimeout(refreshAfterChange, COUNTDOWN_FADE_MS);
   }
 }
 
@@ -992,6 +1008,95 @@ window.addEventListener('beforeunload', (event) => {
   event.returnValue = 'You have unsubmitted item requests.';
   return event.returnValue;
 });
+
+// ------------------------------------------------------- finished request rows
+// A closed request stays where it was for a minute so the outcome can be read, then
+// fades out; the rows under it close the gap on their own because they are table
+// rows, not absolutely placed boxes.
+const CLOSED_ROW_LINGER_MS = 60000;
+const CLOSED_ROW_FADE_MS = 600;
+const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
+
+// Dismissals outlive a reload. Otherwise a refresh rebuilds the table, the request
+// this browser has already seen out comes back, and its minute starts again.
+const removedRequestRows = new Set(readDismissedRows());
+const closingRequestRows = new Set();
+
+function readDismissedRows() {
+  try {
+    const raw = window.sessionStorage.getItem(REMOVED_ROW_KEY);
+    const stored = raw ? JSON.parse(raw) : [];
+
+    // Ids are compared against `data-` attributes, which are strings whatever the
+    // stored JSON happens to say.
+    return Array.isArray(stored) ? stored.map(String) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function rememberDismissedRow(id) {
+  removedRequestRows.add(id);
+
+  try {
+    window.sessionStorage.setItem(REMOVED_ROW_KEY, JSON.stringify([...removedRequestRows]));
+  } catch (error) {
+    // Storage can be full or blocked; the dismissal still holds for this page.
+  }
+}
+
+function sweepClosedRequestRows() {
+  const region = document.getElementById('itemLists');
+
+  if (!region) {
+    return;
+  }
+
+  region.querySelectorAll('[data-my-request]').forEach((row) => {
+    const status = row.dataset.status;
+    const id = row.dataset.requestId;
+
+    if (!id || status === 'pending' || status === 'draft') {
+      return;
+    }
+
+    // A live refresh rebuilds this table from the database, so a row this browser has
+    // already seen out must not come back and sit here for another minute.
+    if (removedRequestRows.has(id)) {
+      row.remove();
+      return;
+    }
+
+    if (closingRequestRows.has(id)) {
+      return;
+    }
+
+    closingRequestRows.add(id);
+
+    window.setTimeout(() => {
+      if (!row.isConnected) {
+        return;
+      }
+
+      rememberDismissedRow(id);
+      row.classList.add('row-fading');
+      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
+    }, CLOSED_ROW_LINGER_MS);
+  });
+}
+
+const rowRegion = document.getElementById('itemLists');
+
+if (rowRegion) {
+  // The table is replaced wholesale on a live update, so new rows are picked up from
+  // the mutation instead of from one pass at load.
+  new MutationObserver(() => sweepClosedRequestRows()).observe(rowRegion, {
+    childList: true,
+    subtree: true,
+  });
+
+  sweepClosedRequestRows();
+}
 
 // ------------------------------------------------------------- ESO accounts
 // Which accounts are linked is reference material: it lives behind the profile menu,

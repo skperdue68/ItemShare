@@ -1240,3 +1240,31 @@ th .sort-link.active {
   justify-content: flex-end;
   margin-top: 14px;
 }
+
+/* The basket clock: neutral, then yellow, then red, then out. */
+.countdown {
+  color: #e7ecf7;
+  border-color: rgba(148, 163, 184, 0.55);
+  transition: color 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
+}
+
+.countdown-soon {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.7);
+}
+
+.countdown-urgent:not(.countdown-fading) {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.75);
+}
+
+.countdown-fading {
+  opacity: 0;
+  transition: opacity 2s ease;
+}
+
+/* A closed request fades before it leaves, so the reason can be read first. */
+tr.row-fading {
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}

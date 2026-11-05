@@ -424,14 +424,14 @@ local function GetOrCreateShareListRow(index)
 
     local statusIcon = wm:CreateControl(nil, row, CT_TEXTURE)
     statusIcon:SetAnchor(LEFT, row, LEFT, 2, 0)
-    statusIcon:SetDimensions(16, 16)
+    statusIcon:SetDimensions(18, 18)
     statusIcon:SetDrawLayer(DL_OVERLAY)
     statusIcon:SetDrawTier(DT_HIGH)
     statusIcon:SetTexture(SHARE_TEXTURE_PATH)
     statusIcon:SetMouseEnabled(true)
 
     local itemLabel = wm:CreateControl(nil, row, CT_LABEL)
-    itemLabel:SetAnchor(TOPLEFT, row, TOPLEFT, 26, 0)
+    itemLabel:SetAnchor(TOPLEFT, row, TOPLEFT, 28, 0)
     itemLabel:SetDimensions(334, 22)
     itemLabel:SetFont("ZoFontGameSmall")
     itemLabel:SetColor(1, 1, 1, 1)
@@ -1521,23 +1521,70 @@ local function GetBagAndSlotFromSlotData(control, slotData)
     return bagId, slotIndex
 end
 
+-- The item icon is not always `GetNamedChild("Icon")`. A bag slot exposes it, but a
+-- list row can keep the art one level deeper, and when that lookup missed the badge
+-- fell back to the slot's own corner - which is the "off to the left" spot this is
+-- supposed to avoid. So look where the game actually puts it.
+local function FindItemIconControl(control)
+    if not control or not control.GetNamedChild then
+        return nil
+    end
+
+    local direct = control:GetNamedChild("Icon")
+    if direct then
+        return direct
+    end
+
+    -- Some templates wrap the art in a named container, and the icon lives inside it.
+    local wrappers = { "Button", "IconHolder", "IconContainer", "IconFrame" }
+    for _, name in ipairs(wrappers) do
+        local wrapper = control:GetNamedChild(name)
+        if wrapper and wrapper.GetNamedChild then
+            local nested = wrapper:GetNamedChild("Icon")
+            if nested then
+                return nested
+            end
+        end
+    end
+
+    return nil
+end
+
 -- The badge sits on the item icon's own top-left corner rather than in the gap
 -- beside it. That gap is where the slot's level, stack count and lock live, and it
 -- is also where a second addon may already be drawing; the corner of the icon reads
 -- as part of the item instead of as a loose symbol next to it.
+--
+-- The size follows what it is sitting on: a fixed 14 px read as a speck next to a
+-- 36 px slot icon, so it is a little over half the icon now.
 local function AnchorShareMarker(marker, control)
-    local icon = control.GetNamedChild and control:GetNamedChild("Icon") or nil
+    local icon = FindItemIconControl(control)
 
     marker:ClearAnchors()
-    marker:SetDimensions(14, 14)
 
     if icon then
+        local width = (icon.GetWidth and icon:GetWidth()) or 0
+        local height = (icon.GetHeight and icon:GetHeight()) or 0
+        local size = 20
+
+        if width > 0 and height > 0 then
+            size = math.max(18, math.min(26, math.floor(math.min(width, height) * 0.55)))
+        end
+
+        marker:SetDimensions(size, size)
         marker:SetAnchor(TOPLEFT, icon, TOPLEFT, -2, -2)
         marker:SetDrawLayer(icon:GetDrawLayer())
         marker:SetDrawTier(icon:GetDrawTier() + 1)
-    else
-        marker:SetAnchor(TOPLEFT, control, TOPLEFT, 2, 2)
+        return
     end
+
+    -- No icon to sit on: use the control's own corner, sized to it, rather than a
+    -- fixed offset that lands in the empty margin of a wide list row.
+    local height = (control.GetHeight and control:GetHeight()) or 0
+    local size = height > 0 and math.max(16, math.min(26, math.floor(height * 0.5))) or 20
+
+    marker:SetDimensions(size, size)
+    marker:SetAnchor(TOPLEFT, control, TOPLEFT, 0, 0)
 end
 
 local function EnsureShareMarker(control)
