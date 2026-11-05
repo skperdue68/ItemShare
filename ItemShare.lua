@@ -67,6 +67,18 @@ local TryRefreshInventoryVisuals
 local OpenShareReserveDialog
 local ApplyShareReserve
 
+-- What an entry holds and what it offers. Only the held count is stored: what is on
+-- offer is the held count minus the reserve, and the reserve lives in its own table,
+-- so neither number needs a copy on the entry that can drift from them.
+GetEntryHeldCount = function(entry)
+    return math.max(0, math.floor(tonumber(entry and (entry.heldCount or entry.count) or 0) or 0))
+end
+
+GetEntryOfferedCount = function(entry)
+    local link = entry and tostring(entry.itemLink or "") or ""
+    return ShareableCount(link, GetEntryHeldCount(entry))
+end
+
 -- Which of the four badges belongs on an item: standing offer or plain share, with
 -- an amber tag on either when a reserve is set on it.
 local function GetShareBadgeTexture(itemLink, isAlways)
@@ -85,7 +97,7 @@ local function DescribeReserveLine(itemLink, entry)
         return nil
     end
 
-    local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
+    local held = GetEntryHeldCount(entry)
     if held <= 0 then
         return string.format("|cD8A24FKeeping %d back|r.", reserve)
     end
@@ -148,7 +160,7 @@ local function GetShareListEntries()
     local linksListed = {}
 
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        local count = math.max(0, tonumber(entry.count or 0) or 0)
+        local count = GetEntryOfferedCount(entry)
         local link = tostring(entry.itemLink or "")
         local reserve = link ~= "" and GetShareReserve(link) or 0
 
@@ -164,7 +176,7 @@ local function GetShareListEntries()
             copy.itemLink = link
             copy.count = count
             copy.reserve = reserve
-            copy.heldCount = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
+            copy.heldCount = GetEntryHeldCount(entry)
             entries[#entries + 1] = copy
 
             if link ~= "" then
@@ -566,13 +578,13 @@ local function GetOrCreateShareListRow(index)
             local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
             if savedEntry then
                 row.entryData = savedEntry
-                row.entryKey = tostring(savedEntry.itemKey or row.entryKey or "")
+                row.entryKey = tostring(BuildSharedItemKey(savedEntry.itemLink, savedEntry.locationKey) or row.entryKey or "")
                 row.isShared = true
                 dmsg(string.format(
                     "Added shared item %s from %s (stack size: %d)",
                     tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
                     tostring(savedEntry.sharedFrom or "-"),
-                    tonumber(savedEntry.count or 0) or 0
+                    GetEntryOfferedCount(savedEntry)
                 ))
                 updateRowSharedVisuals()
             else
@@ -709,14 +721,14 @@ RefreshShareListWindow = function()
             displayText = string.format("%s (%s)", displayText, traitText)
         end
         row.itemLabel:SetText(displayText)
-        row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
+        row.countLabel:SetText(tostring(GetEntryOfferedCount(entry)))
 
         -- The reserve is part of what the row has to say: "12" alone does not
         -- explain why a stack of 20 offers 8.
         local locationText = tostring(entry.sharedFrom or "-")
-        local reserve = tonumber(entry.reserve or 0) or 0
+        local reserve = GetShareReserve(entry.itemLink)
         if reserve > 0 then
-            local held = math.max(0, tonumber(entry.heldCount or 0) or 0)
+            local held = GetEntryHeldCount(entry)
             locationText = held > 0
                 and string.format("%s - keep %d of %d", locationText, reserve, held)
                 or string.format("%s - keep %d", locationText, reserve)
@@ -1050,6 +1062,46 @@ MigrateGuildData = function()
     return folded
 end
 
+-- The offered count, the per-entry reserve, the entry key and the account name are all
+-- derivable: the held count is the only count worth storing, the reserve lives in the
+-- reserves table, and the key is the entry's own table key. A reserve that only an
+-- entry knew about is written into the table that owns it before the copy goes.
+MigrateEntryData = function()
+    if not ItemShare.savedVars then
+        return 0
+    end
+
+    if type(ItemShare.savedVars.reserves) ~= "table" then
+        ItemShare.savedVars.reserves = {}
+    end
+    local reserves = ItemShare.savedVars.reserves
+
+    local cleaned = 0
+    for _, tableName in ipairs({ "sharedItems", "alwaysShare" }) do
+        local entries = ItemShare.savedVars[tableName]
+        if type(entries) == "table" then
+            for _, entry in pairs(entries) do
+                if type(entry) == "table" then
+                    local link = tostring(entry.itemLink or "")
+                    local reserve = math.max(0, math.floor(tonumber(entry.reserve) or 0))
+
+                    if link ~= "" and reserve > 0 and reserves[link] == nil then
+                        reserves[link] = reserve
+                    end
+
+                    if entry.count ~= nil or entry.reserve ~= nil
+                        or entry.itemKey ~= nil or entry.accountName ~= nil then
+                        cleaned = cleaned + 1
+                    end
+
+                end
+            end
+        end
+    end
+
+    return cleaned
+end
+
 -- One release of compatibility. 1.9 and the website both expect the guild list to
 -- ride along on every share (and twice more at account level), so rather than keep
 -- writing that into the live tables, /ishare export writes a complete old-shape copy
@@ -1126,11 +1178,21 @@ BuildCompatExport = function()
 
     -- The one place the old shape is rebuilt: everything else in the addon reads the
     -- guild table, so the compatibility copy cannot drift from it.
-    local function copyWithGuilds(entry)
+    -- The website reads a few fields the addon no longer stores because they follow
+    -- from what it does store: the entry key, the account the file belongs to, what is
+    -- offered and what is kept back.
+    local function copyWithGuilds(itemKey, entry)
         local copy = {}
         for key, value in pairs(entry) do
             copy[key] = value
         end
+
+        local link = tostring(entry.itemLink or "")
+        copy.itemKey = tostring(itemKey)
+        copy.accountName = GetCurrentAccountName()
+        copy.heldCount = GetEntryHeldCount(entry)
+        copy.reserve = GetShareReserve(link)
+        copy.count = ShareableCount(link, copy.heldCount)
 
         local guildIds = {}
         local guildNames = {}
@@ -1149,7 +1211,7 @@ BuildCompatExport = function()
     local sharedItems = {}
     for itemKey, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
         if type(entry) == "table" then
-            sharedItems[itemKey] = copyWithGuilds(entry)
+            sharedItems[itemKey] = copyWithGuilds(itemKey, entry)
             itemCount = itemCount + 1
         end
     end
@@ -1159,7 +1221,7 @@ BuildCompatExport = function()
     local alwaysShare = {}
     for itemKey, entry in pairs(ItemShare.savedVars.alwaysShare or {}) do
         if type(entry) == "table" then
-            alwaysShare[itemKey] = copyWithGuilds(entry)
+            alwaysShare[itemKey] = copyWithGuilds(itemKey, entry)
             offerCount = offerCount + 1
         end
     end
@@ -1641,6 +1703,9 @@ local function CaptureItemDetails(itemLink, bagId, slotIndex)
         details.enchantName = FirstItemString(raw.GetItemLinkEnchantInfo)
         details.styleName = FirstItemString(raw.GetItemLinkItemStyle)
         details.flavorText = FirstItemString(raw.GetItemLinkFlavorText)
+        -- Kept once, on the entry: the raw dump would otherwise store the same
+        -- paragraph again for every item that has one.
+        raw.GetItemLinkFlavorText = nil
     end
 
     if bagId ~= nil and slotIndex ~= nil then
@@ -2149,7 +2214,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local stackCount = GetItemShareCount(bagId, slotIndex)
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
     local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
-    local reserve = savedEntry and tonumber(savedEntry.reserve) or 0
+    local reserve = savedEntry and tonumber(GetShareReserve(savedEntry.itemLink)) or 0
 
     if reserve > 0 then
         dmsg(string.format(
@@ -2157,7 +2222,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
             existing and "Updated" or "Added",
             itemData.itemName,
             reserve,
-            tonumber(savedEntry.count) or 0,
+            GetEntryOfferedCount(savedEntry),
             stackCount
         ))
         return
@@ -2202,8 +2267,6 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
     local entry = existing or {}
 
-    entry.itemKey = itemData.itemKey
-    entry.accountName = GetCurrentAccountName()
     entry.characterName = GetCurrentCharacterName()
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
@@ -2240,8 +2303,6 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     -- on the site and the number kept back can never drift apart.
     local heldCount = math.max(0, math.floor(tonumber(count) or 0))
     entry.heldCount = heldCount
-    entry.reserve = GetShareReserve(itemData.itemLink)
-    entry.count = ShareableCount(itemData.itemLink, heldCount)
     entry.firstDumpedAt = tonumber(firstDumpedAt or entry.firstDumpedAt or now) or now
     entry.lastDumpedAt = now
 
@@ -2296,7 +2357,7 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         sharedFrom = entry.sharedFrom,
     }
 
-    return SaveSharedEntry(itemData, entry.count, entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
+    return SaveSharedEntry(itemData, GetEntryHeldCount(entry), entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
 end
 
 -- "Always share" is a standing offer rather than an inventory entry: it says "if
@@ -2332,8 +2393,6 @@ local function SaveAlwaysShareEntry(itemData)
     local now = GetTimeStamp()
     local entry = alwaysShare[key] or {}
 
-    entry.itemKey = key
-    entry.accountName = GetCurrentAccountName()
     entry.characterName = GetCurrentCharacterName()
     entry.itemName = itemData.itemName
     entry.itemLink = itemData.itemLink
@@ -2364,10 +2423,6 @@ local function SaveAlwaysShareEntry(itemData)
     entry.esoDetails = itemData.esoDetails or {}
     entry.firstAddedAt = entry.firstAddedAt or now
     entry.lastUpdatedAt = now
-    -- The site is told why a standing offer has nothing to hand over, without being
-    -- told a count it could offer: the offer itself never carries one.
-    entry.reserve = GetShareReserve(itemData.itemLink)
-
     alwaysShare[key] = entry
     return entry
 end
@@ -2415,7 +2470,7 @@ local function PrintAlwaysShareItems()
 
     dmsg(string.format("Always shared (%d):", #entries))
     for index, entry in ipairs(entries) do
-        dmsg(string.format("  %d. %s", index, tostring(entry.itemName or entry.itemKey or "Unknown item")))
+        dmsg(string.format("  %d. %s", index, tostring(entry.itemName or entry.itemLink or "Unknown item")))
     end
     dmsg("Remove one with /itemshare noalways <part of the name>.")
 end
@@ -2726,7 +2781,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
 
     for entryKey, actualEntry in pairs(inventoryIndex.countsByEntryKey or {}) do
-        if entryKey ~= "" and entryKey ~= tostring(entry.itemKey or "") and type(actualEntry) == "table" then
+        if entryKey ~= "" and entryKey ~= BuildSharedItemKey(entry.itemLink, entry.locationKey) and type(actualEntry) == "table" then
             local actualItemLink, actualLocationKey = string.match(entryKey, "^(.*)||([^|]*)$")
             actualItemLink = tostring(actualItemLink or "")
             actualLocationKey = tostring(actualLocationKey or "")
@@ -2753,7 +2808,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     return nil
 end
 
-local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
+local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     local summary = string.format(
         "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
         tostring(actionName or "Sync"),
@@ -2762,10 +2817,6 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
         unchangedCount,
         furnishingProtectedCount
     )
-
-    if (tonumber(stampedCount) or 0) > 0 then
-        summary = string.format("%s, Guild stamps added: %d", summary, tonumber(stampedCount))
-    end
 
     d("[ItemShare] " .. summary)
     if not quiet then
@@ -2776,9 +2827,6 @@ end
 
 SyncSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
-    -- Before anything is removed: an unstamped share is invisible on the site, and
-    -- stamping needs no bag access, so it must not depend on this pass seeing it.
-    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -2846,19 +2894,15 @@ SyncSharedItemsWithInventory = function(quiet)
                 end
             end
         else
-            local previousCount = tonumber(entry.count or 0) or 0
+            local previousCount = GetEntryOfferedCount(entry)
             local previousLocation = tostring(entry.sharedFrom or "")
-            local previousItemKey = tostring(entry.itemKey or itemKey)
+            local previousItemKey = itemKey
             local previousLocationKey = tostring(entry.locationKey or "")
             local targetItemKey = tostring(currentItemKey or itemKey)
 
-            local reserve = GetShareReserve(entry.itemLink)
             entry.heldCount = actualCount
-            entry.reserve = reserve
-            entry.count = ShareableCount(entry.itemLink, actualCount)
             entry.sharedFrom = currentLocation
             entry.locationKey = currentLocationKey
-            entry.itemKey = targetItemKey
             entry.lastDumpedAt = GetTimeStamp()
 
             if targetItemKey ~= itemKey then
@@ -2868,13 +2912,13 @@ SyncSharedItemsWithInventory = function(quiet)
                 sharedItems[itemKey] = entry
             end
 
-            if previousCount ~= entry.count
+            if previousCount ~= GetEntryOfferedCount(entry)
                 or previousLocation ~= currentLocation
                 or previousItemKey ~= targetItemKey
                 or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
                 if not quiet then
-                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, entry.count, currentLocation))
+                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), currentLocation))
                 end
             else
                 unchangedCount = unchangedCount + 1
@@ -2882,13 +2926,12 @@ SyncSharedItemsWithInventory = function(quiet)
         end
     end
 
-    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
+    ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
 
 RebuildSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
-    local stampedCount = StampMissingGuilds()
     local inventoryIndex = BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount, furnishingProtectedCount = 0, 0, 0, 0
 
@@ -2957,9 +3000,9 @@ RebuildSharedItemsWithInventory = function(quiet)
                 end
             end
         else
-            local previousCount = tonumber(entry.count or 0) or 0
+            local previousCount = GetEntryOfferedCount(entry)
             local previousLocation = tostring(entry.sharedFrom or "")
-            local previousItemKey = tostring(entry.itemKey or itemKey)
+            local previousItemKey = itemKey
             local previousLocationKey = tostring(entry.locationKey or "")
             local previousApparelSlot = tostring(entry.apparelSlot or "")
             local previousApparelWeight = tostring(entry.apparelWeight or "")
@@ -2974,7 +3017,6 @@ RebuildSharedItemsWithInventory = function(quiet)
             if rebuiltEntry then
                 rebuiltEntry.sharedFrom = currentLocation
                 rebuiltEntry.locationKey = currentLocationKey
-                rebuiltEntry.itemKey = targetItemKey
                 rebuiltEntry.lastDumpedAt = GetTimeStamp()
                 sharedItems[targetItemKey] = rebuiltEntry
                 if targetItemKey ~= itemKey then
@@ -2983,11 +3025,8 @@ RebuildSharedItemsWithInventory = function(quiet)
                 entry = rebuiltEntry
             else
                 entry.heldCount = actualCount
-                entry.reserve = GetShareReserve(entry.itemLink)
-                entry.count = ShareableCount(entry.itemLink, actualCount)
                 entry.sharedFrom = currentLocation
                 entry.locationKey = currentLocationKey
-                entry.itemKey = targetItemKey
                 entry.lastDumpedAt = GetTimeStamp()
                 if targetItemKey ~= itemKey then
                     sharedItems[itemKey] = nil
@@ -2997,16 +3036,16 @@ RebuildSharedItemsWithInventory = function(quiet)
                 end
             end
 
-            if previousCount ~= (tonumber(entry.count or 0) or 0)
+            if previousCount ~= GetEntryOfferedCount(entry)
                 or previousLocation ~= tostring(entry.sharedFrom or "")
-                or previousItemKey ~= tostring(entry.itemKey or "")
+                or previousItemKey ~= targetItemKey
                 or previousLocationKey ~= tostring(entry.locationKey or "")
                 or previousApparelSlot ~= tostring(entry.apparelSlot or "")
                 or previousApparelWeight ~= tostring(entry.apparelWeight or "")
                 or previousWeaponType ~= tostring(entry.weaponType or "") then
                 updatedCount = updatedCount + 1
                 if not quiet then
-                    dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, tonumber(entry.count or 0) or 0, tostring(entry.sharedFrom or "-")))
+                    dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), tostring(entry.sharedFrom or "-")))
                 end
             else
                 unchangedCount = unchangedCount + 1
@@ -3014,7 +3053,7 @@ RebuildSharedItemsWithInventory = function(quiet)
         end
     end
 
-    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet, stampedCount)
+    ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
 
@@ -3083,27 +3122,27 @@ local function SetShareReserveByName(searchText, amount)
     -- The count comes from what the file already recorded, so it is right even when
     -- the bag holding the item is not readable this session. The next rebuild
     -- corrects it from live inventory data.
-    local held = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
+    local held = GetEntryHeldCount(entry)
+    local reserve = GetShareReserve(entry.itemLink)
+    local offered = ShareableCount(entry.itemLink, held)
     entry.heldCount = held
-    entry.reserve = GetShareReserve(entry.itemLink)
-    entry.count = ShareableCount(entry.itemLink, held)
 
     TryRefreshInventoryVisuals()
     RefreshShareListWindowIfVisible()
 
-    if entry.reserve > 0 then
+    if reserve > 0 then
         dmsg(string.format(
             "%s: keeping %d back, sharing %d of %d held.",
             tostring(entry.itemName or "that item"),
-            entry.reserve,
-            entry.count,
+            reserve,
+            offered,
             held
         ))
     else
         dmsg(string.format(
             "%s: sharing everything held (%d).",
             tostring(entry.itemName or "that item"),
-            entry.count
+            offered
         ))
     end
 end
@@ -3124,10 +3163,7 @@ ApplyShareReserve = function(itemLink, amount)
     local updated = nil
     for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
         if tostring(entry.itemLink or "") == link then
-            local held = math.max(0, tonumber(entry.heldCount or entry.count or 0) or 0)
-            entry.heldCount = held
-            entry.reserve = keep
-            entry.count = ShareableCount(link, held)
+            entry.heldCount = GetEntryHeldCount(entry)
             updated = entry
         end
     end
@@ -3136,7 +3172,6 @@ ApplyShareReserve = function(itemLink, amount)
     if type(alwaysShare) == "table" then
         for _, entry in pairs(alwaysShare) do
             if type(entry) == "table" and tostring(entry.itemLink or "") == link then
-                entry.reserve = keep
                 updated = updated or entry
             end
         end
@@ -3300,8 +3335,8 @@ local function BuildReserveDialog()
         end
 
         local entry = ApplyShareReserve(pending.itemLink, amount)
-        local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
-        local offered = math.max(0, tonumber(entry and entry.count or 0) or 0)
+        local held = GetEntryHeldCount(entry)
+        local offered = GetEntryOfferedCount(entry)
 
         if held > 0 then
             d(string.format(
@@ -3329,7 +3364,7 @@ local function BuildReserveDialog()
         end
 
         local entry = ApplyShareReserve(pending.itemLink, 0)
-        local held = math.max(0, tonumber(entry and (entry.heldCount or entry.count) or 0) or 0)
+        local held = GetEntryHeldCount(entry)
         d(string.format(
             "[ItemShare] %s: reserve cleared, so everything held is shared (%d).",
             tostring(pending.itemName),
@@ -3386,7 +3421,7 @@ local function PrintShareReserves()
     local entries = {}
 
     for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        if (tonumber(entry.reserve or 0) or 0) > 0 then
+        if type(entry) == "table" and GetShareReserve(entry.itemLink) > 0 then
             entries[#entries + 1] = entry
         end
     end
@@ -3402,12 +3437,13 @@ local function PrintShareReserves()
 
     dmsg(string.format("Share reserves (%d):", #entries))
     for _, entry in ipairs(entries) do
+        local held = GetEntryHeldCount(entry)
         dmsg(string.format(
             "  %s: keep %d, sharing %d of %d held",
             tostring(entry.itemName or "Unknown Item"),
-            tonumber(entry.reserve) or 0,
-            tonumber(entry.count) or 0,
-            tonumber(entry.heldCount or entry.count or 0) or 0
+            GetShareReserve(entry.itemLink),
+            GetEntryOfferedCount(entry),
+            held
         ))
     end
     dmsg("Clear one with /itemshare noreserve <part of the name>.")
@@ -3551,6 +3587,7 @@ local function OnAddonLoaded(event, addonName)
     -- Shares used to carry their own copy of the guild list; fold those copies into
     -- the guild table and take them off the entries.
     MigrateGuildData()
+    MigrateEntryData()
 
     ItemShare.savedVars.addonVersion = ADDON_VERSION
 
