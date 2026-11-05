@@ -3,6 +3,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { filterList } from './filters.js';
+
 export function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -312,8 +314,10 @@ function listHref(filters, overrides = {}) {
   const merged = { ...(filters || {}), ...overrides };
   const params = new URLSearchParams();
 
-  if (merged.type) params.set('type', merged.type);
-  if (merged.owner) params.set('owner', merged.owner);
+  // One parameter per value keeps a multi value filter a list rather than a comma
+  // joined string that a name containing a comma could break.
+  filterList(merged.type).forEach((value) => params.append('type', value));
+  filterList(merged.owner).forEach((value) => params.append('owner', value));
   if (merged.search) params.set('q', merged.search);
   if (merged.added) params.set('added', merged.added);
 
@@ -349,50 +353,100 @@ function sortHeader(label, field, filters, className = '') {
   )}">${escapeHtml(label)}${arrow}</a></th>`;
 }
 
-function filterBar(facets, filters) {
+/**
+ * A filter that can hold several values: a menu of checkboxes rather than a select,
+ * so picking a second type adds to the first instead of replacing it.
+ */
+function filterMenu({ name, label, allLabel, options, chosen }) {
+  const picked = new Set(chosen);
+  const count = chosen.length;
+  const summary = count === 0 ? allLabel : count === 1 ? chosen[0] : `${count} chosen`;
+
+  const rows = options
+    .map(
+      (option) => `
+            <label class="filter-option"><input type="checkbox" name="${escapeHtml(
+              name
+            )}" value="${escapeHtml(option.value)}"${
+              picked.has(option.value) ? ' checked' : ''
+            } data-filter><span>${escapeHtml(option.label)}</span></label>`
+    )
+    .join('');
+
+  return `
+      <div class="filter filter-menu" data-filter-menu data-all-label="${escapeHtml(allLabel)}">
+        <span class="filter-label">${escapeHtml(label)}</span>
+        <details class="filter-dropdown">
+          <summary class="filter-select"><span class="filter-select-label">${escapeHtml(
+            summary
+          )}</span><span class="filter-count"${count > 0 ? '' : ' hidden'}>${count}</span></summary>
+          <div class="filter-menu-list" role="group" aria-label="${escapeHtml(label)}">${rows}
+          </div>
+        </details>
+      </div>`;
+}
+
+/**
+ * One removable chip per value that is switched on, on a single long row: what is
+ * narrowing the list stays visible even when the menus above it are closed.
+ */
+function filterChips({ types, owners }) {
+  const chips = [
+    ...types.map((value) => ({ name: 'type', value })),
+    ...owners.map((value) => ({ name: 'owner', value })),
+  ];
+
+  const markup = chips
+    .map(
+      (chip) => `<button class="filter-chip" type="button" data-chip-filter="${escapeHtml(
+        chip.name
+      )}" data-chip-value="${escapeHtml(chip.value)}" aria-label="Remove the ${escapeHtml(
+        chip.value
+      )} filter" title="Remove the ${escapeHtml(chip.value)} filter">${escapeHtml(
+        chip.value
+      )}<span aria-hidden="true">&times;</span></button>`
+    )
+    .join('');
+
+  return `<div class="filter-chips" data-filter-chips>${markup}</div>`;
+}
+
+export function filterBar(facets, filters) {
   const types = facets?.types || [];
   const owners = facets?.owners || [];
-  const active = filters || { type: '', owner: '', search: '', added: '' };
+  const active = filters || {};
+  const chosenTypes = filterList(active.type);
+  const chosenOwners = filterList(active.owner);
+  const search = String(active.search || '');
+  const added = String(active.added || '');
 
   if (types.length === 0 && owners.length === 0) {
     return '';
   }
 
-  const typeOptions = types
-    .map(
-      (entry) => `
-            <option value="${escapeHtml(entry.name)}"${active.type === entry.name ? ' selected' : ''}>${escapeHtml(entry.name)} (${entry.total})</option>`
-    )
-    .join('');
-
-  const ownerOptions = owners
-    .map(
-      (owner) => `
-            <option value="${escapeHtml(owner)}"${active.owner === owner ? ' selected' : ''}>${escapeHtml(owner)}</option>`
-    )
-    .join('');
-
   const addedOptions = ADDED_WINDOWS.map(
     (window) =>
-      `<option value="${window.days}"${active.added === window.days ? ' selected' : ''}>${window.label}</option>`
+      `<option value="${window.days}"${added === window.days ? ' selected' : ''}>${window.label}</option>`
   ).join('');
 
   // Filters apply as soon as they change (app.js), so there is no button to forget
   // to press. The submit button exists for the one case that needs it: scripts off.
   return `
     <form class="filters" method="get" action="/" data-filters>
-      <label class="filter">
-        <span class="filter-label">Type</span>
-        <select name="type" data-filter>
-          <option value="">All types</option>${typeOptions}
-        </select>
-      </label>
-      <label class="filter">
-        <span class="filter-label">Offered by</span>
-        <select name="owner" data-filter>
-          <option value="">Anyone</option>${ownerOptions}
-        </select>
-      </label>
+      ${filterMenu({
+        name: 'type',
+        label: 'Type',
+        allLabel: 'All types',
+        options: types.map((entry) => ({ value: entry.name, label: `${entry.name} (${entry.total})` })),
+        chosen: chosenTypes,
+      })}
+      ${filterMenu({
+        name: 'owner',
+        label: 'Offered by',
+        allLabel: 'Anyone',
+        options: owners.map((owner) => ({ value: owner, label: owner })),
+        chosen: chosenOwners,
+      })}
       <label class="filter">
         <span class="filter-label">Added</span>
         <select name="added" data-filter>
@@ -401,10 +455,11 @@ function filterBar(facets, filters) {
       </label>
       <label class="filter filter-search">
         <span class="filter-label">Item name</span>
-        <input type="search" name="q" data-filter value="${escapeHtml(active.search)}" placeholder="sword, ring, motif...">
+        <input type="search" name="q" data-filter value="${escapeHtml(search)}" placeholder="sword, ring, motif...">
       </label>
       <noscript><button class="primary-button filter-button" type="submit">Filter</button></noscript>
       <button class="filter-clear" type="button" data-clear-filters>Clear filters</button>
+      ${filterChips({ types: chosenTypes, owners: chosenOwners })}
     </form>`;
 }
 
@@ -894,9 +949,10 @@ export function renderListRegion({
   const basketList = basketRows || [];
   const unsent = basketList.filter((request) => request.status === 'draft');
 
-  const activeFilters = Boolean(
-    filters?.type || filters?.owner || filters?.search || filters?.added
-  );
+  const activeFilters =
+    filterList(filters?.type).length > 0 ||
+    filterList(filters?.owner).length > 0 ||
+    Boolean(filters?.search || filters?.added);
   const requestCount = requestable.length + othersOffers.length;
   const offerCount = myItems.length + myOffers.length;
   const waitingCount =

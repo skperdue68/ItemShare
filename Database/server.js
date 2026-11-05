@@ -40,6 +40,7 @@ import {
   signInWithProvider,
   submitDrafts,
 } from './lib/store.js';
+import { filterList } from './lib/filters.js';
 import { emailConfig, renderRequestEmail, sendEmail } from './lib/email.js';
 import { getItemTip } from './lib/uesp.js';
 import { buildProviders } from './lib/providers.js';
@@ -270,8 +271,10 @@ function readFilters(query) {
   const added = readParam(query.added);
 
   return {
-    type: readParam(query.type),
-    owner: readParam(query.owner),
+    // Several types or owners at once arrive as repeated parameters, so they stay
+    // lists all the way into the query and the chips under the filter row.
+    type: filterList(query.type),
+    owner: filterList(query.owner),
     search: readParam(query.q),
     // Only the values the list actually offers get through, so a hand-typed ?sort=
     // or ?added= falls back to the default instead of reaching the query.
