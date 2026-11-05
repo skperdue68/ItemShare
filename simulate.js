@@ -531,33 +531,6 @@ function describeItems(names) {
   return `${list.slice(0, 3).join(', ')} and ${list.length - 3} more`;
 }
 
-/** Takes back the most recent waiting request this person has. */
-async function cancelSomething(connection, person) {
-  const [rows] = await connection.execute(
-    `SELECT id FROM itemshare_requests
-      WHERE requester_user_id = ? AND status = 'pending'
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1`,
-    [person.userId]
-  );
-
-  if (!rows[0]) {
-    return null;
-  }
-
-  const outcome = await cancelOwnRequest(connection, {
-    userId: person.userId,
-    requestId: Number(rows[0].id),
-    holdMinutes: HOLD_MINUTES,
-  });
-
-  if (!outcome.cancelled) {
-    return null;
-  }
-
-  return { person: person.account, item: outcome.itemName || 'an item' };
-}
-
 /** Saves their file again: items move, stacks change, requests get re-settled. */
 async function saveSomething(connection, person, guilds) {
   person.round += 1;
@@ -773,15 +746,13 @@ try {
               )} - the owner would be emailed`
             : `nothing for ${person.account} to send`;
         } else if (action === 'cancel') {
-          const done =
-            (await cancelSomething(connection, person)) ||
-            (await removeFromBasket(connection, person));
+          // Only a basket row can be taken back now: once a request has been sent it
+          // stays in the requester's history, so there is nothing here to cancel.
+          const done = await removeFromBasket(connection, person);
 
           line = done
-            ? `${done.person} ${done.fromBasket ? 'took back' : 'cancelled'} their request for ${
-                done.item
-              }`
-            : `nothing for ${person.account} to cancel`;
+            ? `${done.person} took back their request for ${done.item}`
+            : `nothing in ${person.account}'s basket to take back`;
         } else if (action === 'timeout') {
           const done = await timeoutBasket(connection, person, mine);
 

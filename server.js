@@ -445,7 +445,11 @@ app.post('/requests/:id/cancel', async (req, res) => {
     );
 
     if (!outcome.cancelled) {
-      res.status(404).json({ error: 'That request is not waiting any more.' });
+      res.status(outcome.sentAlready ? 409 : 404).json({
+        error: outcome.sentAlready
+          ? 'That request has already been sent, so it stays in your request history.'
+          : 'That request is not waiting any more.',
+      });
       return;
     }
 
