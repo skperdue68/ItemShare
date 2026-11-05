@@ -10,7 +10,7 @@ live on the same MariaDB server.
 ## Setup
 
 ```bash
-cd Database
+cd ItemShare-Web
 npm install
 cp .env.example .env      # MariaDB credentials, session secret, Discord app
 npm start                 # http://localhost:3000
@@ -37,7 +37,7 @@ connect directly to the existing database rather than re-running migrations.
 
 ## Settings
 
-All of these live in `Database/.env` (see `.env.example`); every one has a
+All of these live in `.env` (see `.env.example`); every one has a
 default, so the site runs without a `.env` on a local root/no-password server.
 
 | Variable | Default | Purpose |
@@ -180,7 +180,7 @@ verified in Resend instead, optionally with `EMAIL_TRANSPORT=resend`.
 ```bash
 cd /opt/itemshare
 git pull
-cd Database && npm ci
+cd ItemShare-Web && npm ci
 sudo systemctl restart itemshare      # applies any new migrations on boot
 ```
 
@@ -416,7 +416,7 @@ has to be allowed to send as the `EMAIL_FROM` address (for postfix, that is
 
 ## Making it look busy: simulated people
 
-`npm run simulate` (in `Database/`) drives three made-up people through the same store
+`npm run simulate` (in ``) drives three made-up people through the same store
 code the site uses, so a list with one real owner has traffic on it. Every scenario the
 site can put a request through happens for real in the database, one at a time:
 
@@ -444,7 +444,7 @@ npm run simulate -- --only items        just re-saving files
 npm run simulate -- --reset             remove the simulated people and their data
 ```
 
-Set `SIMULATE_TOKEN` in `Database/.env` and restart the site to have open pages refresh
+Set `SIMULATE_TOKEN` in `.env` and restart the site to have open pages refresh
 as it runs; without it the data still changes and you see it on the next refresh, and
 no `live:` line is printed after an action, because there is no delivery to report. The
 three people are identified by a `simulator` identity, so they are the same people on
@@ -555,7 +555,7 @@ renders its database-error card rather than a blank screen.
 
 ## Commands
 
-Everything runs from `Database/`, through the `package.json` scripts:
+Everything runs from this folder, through the `package.json` scripts:
 
 | Command | What it does |
 | --- | --- |
@@ -576,14 +576,14 @@ Nothing needs it to be inferred from the site afterwards.
 ```bash
 node ingest.js                                                        # found under your home directory
 node ingest.js "D:/Users/skper/Documents/Elder Scrolls Online/live/SavedVariables"  # a folder is enough
-node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua           # import
-node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse only
+node ingest.js SampleData/Sample1/ItemShareSavedVars.lua           # import
+node ingest.js SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse only
 node backfillIcons.js --dry-run                                       # what lacks an icon
 node backfillIcons.js --limit 20 --passes 5                            # retry missing icons
 node backfillIcons.js --id 223698                                      # does UESP know this item?
 ```
 
-`backfillIcons.js` reads `Database/.env` by absolute path, exactly like the site,
+`backfillIcons.js` reads `.env` by absolute path, exactly like the site,
 so it works from any directory. It runs the same pass the timer runs, with the
 same per-pass ceiling, and `--id` asks UESP about one item without opening a
 database at all - the quickest way to tell a refused lookup from a page that no
@@ -694,9 +694,9 @@ example.
 
 ## Troubleshooting startup
 
-The server prints the `.env` file it actually read, so a setting that "is in there" but has no effect is usually a file in the wrong place — a `.env` in the repo root instead of `Database/`, or Windows Notepad saving it as `.env.txt`.
+The server prints the `.env` file it actually read, so a setting that "is in there" but has no effect is usually a file in the wrong place — a `.env` in the repo root instead of ``, or Windows Notepad saving it as `.env.txt`.
 
-**`SESSION_SECRET is not set ... using an ephemeral secret`** — no `Database/.env`, or the key is missing from it. Every restart invalidates existing sessions, so sign-in is lost. Make a secret and paste the printed line into `Database/.env`:
+**`SESSION_SECRET is not set ... using an ephemeral secret`** — no `.env`, or the key is missing from it. Every restart invalidates existing sessions, so sign-in is lost. Make a secret and paste the printed line into `.env`:
 
 ```bash
 node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
@@ -710,7 +710,7 @@ ALTER USER 'itemshare'@'%' IDENTIFIED VIA mysql_native_password USING PASSWORD('
 FLUSH PRIVILEGES;
 ```
 
-Leave the password inside `PASSWORD(...)` as the plain text one from `Database/.env`; MariaDB hashes it. If `Access denied for user ...` comes back instead, the plugin is fine and the password or the host grant is wrong — check that the account may connect from this machine's address, not just `localhost`.
+Leave the password inside `PASSWORD(...)` as the plain text one from `.env`; MariaDB hashes it. If `Access denied for user ...` comes back instead, the plugin is fine and the password or the host grant is wrong — check that the account may connect from this machine's address, not just `localhost`.
 
 **`Sign-in providers: none`** — `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` (or the `GOOGLE_*` pair) are empty. Discord also needs `DISCORD_REDIRECT_URI` registered under OAuth2 -> Redirects in the Discord application, and the same URL must be the one the browser is sent to.
 

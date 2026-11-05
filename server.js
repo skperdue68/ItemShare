@@ -3,7 +3,7 @@
 // accepts ItemShareSavedVars.lua and replaces every shared item for every ESO
 // account in the file. Styling follows the GuildSync palette.
 //
-//   npm start            (reads Database/.env)
+//   npm start            (reads .env)
 
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -50,9 +50,9 @@ import { renderListRegion, renderMessagePage, renderPage } from './lib/views.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Read Database/.env by absolute path. The `dotenv/config` shorthand resolves
+// Read .env by absolute path. The `dotenv/config` shorthand resolves
 // .env against the shell's working directory, so starting the server as
-// `node Database/server.js` from the repo root found no settings at all and the
+// `node server.js` from the repo root found no settings at all and the
 // site came up with no session secret and no sign-in providers.
 const envPath = path.join(__dirname, '.env');
 const hasEnvFile = existsSync(envPath);
@@ -77,7 +77,7 @@ if (!process.env.SESSION_SECRET) {
     `SESSION_SECRET is not set${hasEnvFile ? ` in ${envPath}` : `, and there is no .env at ${envPath}`}; ` +
       'using an ephemeral secret, so everyone is signed out on every restart. Make one with\n' +
       '  node -e "console.log(\'SESSION_SECRET=\' + require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
-      'and paste the line into Database/.env.'
+      'and paste the line into .env.'
   );
 }
 const SESSION_SECRET = process.env.SESSION_SECRET || `itemshare-${Math.random().toString(36).slice(2)}`;
@@ -590,7 +590,7 @@ app.get('/auth/:provider', (req, res) => {
     sendPage(req, res, 503, {
       heading: 'That sign-in option is not set up',
       message: 'This site has no client configured for that provider yet, so there is nothing to sign in with.',
-      details: 'Set the provider client id and secret in Database/.env and restart the site.',
+      details: 'Set the provider client id and secret in .env and restart the site.',
     });
     return;
   }
@@ -618,7 +618,7 @@ app.get('/auth/:provider/callback', async (req, res) => {
     sendPage(req, res, 503, {
       heading: 'That sign-in option is not set up',
       message: 'This site has no client configured for that provider yet, so there is nothing to sign in with.',
-      details: 'Set the provider client id and secret in Database/.env and restart the site.',
+      details: 'Set the provider client id and secret in .env and restart the site.',
     });
     return;
   }
