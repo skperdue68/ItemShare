@@ -27,16 +27,63 @@ function seenDate(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
+// Two initials, the way an avatar reads at a glance. Discord names are one word
+// often enough that the fallback matters more than the fancy case.
+function initialsFor(username) {
+  const words = String(username || '')
+    .trim()
+    .split(/[\s._-]+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return '?';
+  }
+
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+// Signed in: a circular avatar that opens a small menu, with Log out inside it.
+// The logout is a real form post, so it still works with scripts blocked.
 function authArea(user, providers) {
   if (user) {
+    const name = escapeHtml(user.username || 'signed in');
+    const provider = escapeHtml(user.providerLabel || user.provider || 'sign-in');
+    const initials = escapeHtml(initialsFor(user.username));
+
+    // The picture sits on top of the initials, so if it fails to load the initials are
+    // already there. app.js removes a broken image; without scripts the alt text is
+    // empty, so nothing worse than a blank circle appears.
+    const avatar = user.avatarUrl
+      ? `<span class="avatar avatar-with-photo" aria-hidden="true">
+            <span class="avatar-initials">${initials}</span>
+            <img class="avatar-photo" src="${escapeHtml(user.avatarUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          </span>`
+      : `<span class="avatar" aria-hidden="true">${initials}</span>`;
+
     return `
-      <form method="post" action="/logout" class="user-area">
-        <span class="user-name">
-          ${escapeHtml(user.username)}
-          <span class="provider-note">via ${escapeHtml(user.providerLabel || user.provider || 'sign-in')}</span>
-        </span>
-        <button class="discord-button discord-button-secondary" type="submit">Sign out</button>
-      </form>`;
+      <div class="account-menu">
+        <button class="avatar-button" type="button" id="accountMenuButton"
+                aria-haspopup="true" aria-expanded="false" aria-controls="accountMenuPanel"
+                title="${name}">
+          ${avatar}
+          <span class="avatar-caret" aria-hidden="true"></span>
+          <span class="visually-hidden">Account menu for ${name}</span>
+        </button>
+        <div class="account-menu-panel" id="accountMenuPanel" role="menu"
+             aria-labelledby="accountMenuButton" hidden>
+          <div class="account-menu-head">
+            <span class="account-menu-name">${name}</span>
+            <span class="account-menu-note">signed in via ${provider}</span>
+          </div>
+          <form method="post" action="/logout">
+            <button class="account-menu-item" type="submit" role="menuitem">Log out</button>
+          </form>
+        </div>
+      </div>`;
   }
 
   if (!providers || providers.length === 0) {
@@ -444,15 +491,16 @@ function alwaysShareCard({ accounts, alwaysShare }) {
     </section>`;
 }
 
-export function renderPage({ user, providers, accounts, sharedItems, alwaysShare, facets, filters, dbError }) {
-  const canUpload = !dbError && (!providers || providers.length === 0 || user);
-
+// One shell for every page. Without this a failed sign-in, a wrong address or a
+// cancelled prompt dropped the browser onto a bare line of text with no styling and
+// no way back, which reads as a broken site rather than a message.
+function pageShell({ user = null, providers = [], content, title = 'ItemShare' }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ItemShare</title>
+  <title>${escapeHtml(title)}</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -468,6 +516,50 @@ export function renderPage({ user, providers, accounts, sharedItems, alwaysShare
   </header>
 
   <main class="surface">
+${content}
+  </main>
+
+  <footer class="footer">
+    <span>ItemShare &middot; uploads replace your guilds and items in full</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>`;
+}
+
+/**
+ * A full page for something that is not the item list: a cancelled sign-in, a
+ * provider that is not configured, a wrong address, an upload that failed.
+ */
+export function renderMessagePage({
+  title,
+  heading,
+  message,
+  details = '',
+  tone = 'notice',
+  user = null,
+  providers = [],
+}) {
+  const cardClass = tone === 'error' ? 'card card-error' : 'card card-notice';
+
+  const content = `
+    <section class="${cardClass}">
+      <h2>${escapeHtml(heading)}</h2>
+      <p class="muted">${escapeHtml(message)}</p>
+      ${details ? `<p class="muted">${escapeHtml(details)}</p>` : ''}
+      <div class="actions">
+        <a class="primary-button" href="/">Back to ItemShare</a>
+      </div>
+    </section>`;
+
+  return pageShell({ user, providers, content, title: title || `${heading} \u00b7 ItemShare` });
+}
+
+export function renderPage({ user, providers, accounts, sharedItems, alwaysShare, facets, filters, dbError }) {
+  const canUpload = !dbError && (!providers || providers.length === 0 || user);
+
+  const content = `
     ${statusCard({ dbError, providers, user })}
 
     ${
@@ -494,14 +586,7 @@ export function renderPage({ user, providers, accounts, sharedItems, alwaysShare
 
     ${accountsCard(accounts, user)}
     ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
-    ${alwaysShareCard({ accounts, alwaysShare })}
-  </main>
+    ${alwaysShareCard({ accounts, alwaysShare })}`;
 
-  <footer class="footer">
-    <span>ItemShare &middot; uploads replace your guilds and items in full</span>
-  </footer>
-
-  <script src="/app.js"></script>
-</body>
-</html>`;
+  return pageShell({ user, providers, content });
 }

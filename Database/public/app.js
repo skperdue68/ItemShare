@@ -86,3 +86,47 @@ if (uploadButton) {
     }
   });
 }
+
+// Account menu on the circular avatar. Log out sits inside the menu instead of
+// taking up header space next to the name. The form posts without this script, so
+// the menu only has to handle opening, closing and keyboard dismissal.
+const accountMenuButton = document.getElementById('accountMenuButton');
+const accountMenuPanel = document.getElementById('accountMenuPanel');
+
+if (accountMenuButton && accountMenuPanel) {
+  const setMenuOpen = (open) => {
+    accountMenuPanel.hidden = !open;
+    accountMenuButton.setAttribute('aria-expanded', String(open));
+
+    if (open) {
+      const firstItem = accountMenuPanel.querySelector('button, a');
+      if (firstItem) {
+        firstItem.focus();
+      }
+    }
+  };
+
+  accountMenuButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setMenuOpen(accountMenuPanel.hidden);
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!accountMenuPanel.hidden && !accountMenuPanel.contains(event.target)) {
+      setMenuOpen(false);
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !accountMenuPanel.hidden) {
+      setMenuOpen(false);
+      accountMenuButton.focus();
+    }
+  });
+}
+
+// A profile picture can stop loading (revoked URL, offline, provider outage). Drop
+// the image so the initials underneath show rather than a broken-image marker.
+document.querySelectorAll('.avatar-photo').forEach((photo) => {
+  photo.addEventListener('error', () => photo.remove());
+});
