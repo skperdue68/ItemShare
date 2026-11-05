@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.8.6"
+local ADDON_VERSION = "1.8.7"
 local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
@@ -588,9 +588,9 @@ local function GetOrCreateShareListRow(index)
 
     statusIcon:SetHandler("OnMouseEnter", function(self)
         handleRowMouseEnter()
-        InitializeTooltip(InformationTooltip, self, TOPLEFT, 0, 0)
+        InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
         if row.itemLink and IsItemLinkAlwaysShared(row.itemLink) then
-            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one, in a bag or not.")
+            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
         else
             SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
         end
@@ -693,6 +693,12 @@ RefreshShareListWindow = function()
         row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
         row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
         row.isShared = true
+        -- Rows are recycled, so the badge is set from the entry on every refresh.
+        -- Leaving it to creation time meant a removed standing offer kept its gold
+        -- icon in this window until the row happened to be reused for something else.
+        row.statusIcon:SetTexture(IsItemLinkAlwaysShared(entry.itemLink)
+                and ALWAYS_SHARE_TEXTURE_PATH
+            or SHARE_TEXTURE_PATH)
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
             row:RefreshAppearance()
@@ -1721,9 +1727,12 @@ local function EnsureShareMarker(control)
     -- The wording follows the texture: the same badge serves both states, so the
     -- tooltip is decided when the marker is shown, not when it is built.
     marker:SetHandler("OnMouseEnter", function(self)
-        InitializeTooltip(InformationTooltip, self, TOPLEFT, 0, 0)
+        -- Anchored below the badge, not at its top-left. A tooltip that opens under
+        -- the pointer takes the pointer off the badge, which closes the tooltip and
+        -- puts the pointer back on it: hovering the left edge flashed nonstop.
+        InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
         if self.ItemShareAlways then
-            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one, even when it is not in a bag.")
+            SetTooltipText(InformationTooltip, "|cFFD266Always shared|r\nYou offer this whenever you have one.")
         else
             SetTooltipText(InformationTooltip, "|c00FF00Shared Item|r\nThis item is available to others.")
         end
@@ -2095,6 +2104,8 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
 
     local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
     SaveAlwaysShareEntry(itemData)
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
     dmsg(string.format(
         "%s always shared item %s. It stays offered even when you do not have one.",
         existing and "Updated" or "Added",
@@ -2160,6 +2171,8 @@ local function RemoveAlwaysShareByName(searchText)
     local key = matches[1]
     local entry = alwaysShare[key]
     alwaysShare[key] = nil
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
     dmsg(string.format("Stopped always sharing %s.", tostring(entry and entry.itemName or key)))
 end
 
@@ -2216,6 +2229,11 @@ local function AddInventoryContextMenu(slot)
         AddCustomMenuItem("Stop Always Sharing", function()
             local entry = GetAlwaysShareTable()[alwaysKey]
             GetAlwaysShareTable()[alwaysKey] = nil
+            -- The badge and the share list are drawn from this table. Without a
+            -- redraw the gold icon stayed on the item and the list kept showing it
+            -- until the UI was reloaded, so the removal looked like it had failed.
+            TryRefreshInventoryVisuals()
+            RefreshShareListWindowIfVisible()
             dmsg(string.format(
                 "Stopped always sharing %s.",
                 tostring(entry and entry.itemName or itemName)
