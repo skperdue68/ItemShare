@@ -693,6 +693,12 @@ RefreshShareListWindow = function()
         row.countLabel:SetText(tostring(tonumber(entry.count or 0) or 0))
         row.locationLabel:SetText(tostring(entry.sharedFrom or "-"))
         row.isShared = true
+        -- Rows are recycled, so the badge is set from the entry on every refresh.
+        -- Leaving it to creation time meant a removed standing offer kept its gold
+        -- icon in this window until the row happened to be reused for something else.
+        row.statusIcon:SetTexture(IsItemLinkAlwaysShared(entry.itemLink)
+                and ALWAYS_SHARE_TEXTURE_PATH
+            or SHARE_TEXTURE_PATH)
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
             row:RefreshAppearance()
