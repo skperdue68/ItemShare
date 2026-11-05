@@ -56,10 +56,143 @@ default, so the site runs without a `.env` on a local root/no-password server.
 | `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | `$BASE_URL/auth/google/callback` | Must match the Google client's redirect URI |
-| `BASE_URL` | `http://localhost:$PORT` | Public address used to build the default redirect URIs |
+| `BASE_URL` | `http://localhost:$PORT` | Public address used to build the default redirect URIs and the email's site link |
+| `SESSION_TTL_DAYS` | `30` | How long a sign-in lasts |
+| `REQUEST_HOLD_MINUTES` | `5` | How long a picked item is held before it goes back |
+| `REQUEST_SWEEP_INTERVAL_MS` | `10000` | How often lapsed baskets are released |
+| `SIMULATE_TOKEN` | empty | Lets `npm run simulate` push live updates to open pages |
+| `EMAIL_FROM` | empty | Sender address for request emails; blank disables sending |
+| `EMAIL_TRANSPORT` | automatic | `sendmail`, `resend` or `none` |
+| `SENDMAIL_PATH` | automatic | Where the host's `sendmail` is |
+| `RESEND_API_KEY` | empty | Only for hosts without a local mail server |
+| `ICON_BACKFILL_INTERVAL_MS` | `1800000` | How often missing icons are retried |
+| `ICON_BACKFILL_BATCH` | `20` | How many item ids one retry pass may look up |
 
 The MariaDB account needs CREATE privileges on first run (to create the database
 and `itemshare_*` tables). After that, ordinary read/write is enough.
+
+## Deploying it on a Linux host
+
+What a real host needs: Node 20 or newer, MariaDB, and (later, if you want the
+request emails) a mail server. Nothing else - no build step, no bundler, no
+front-end toolchain.
+
+**1. Get the code and dependencies.**
+
+```bash
+sudo useradd --system --home /opt/itemshare --shell /usr/sbin/nologin itemshare
+sudo mkdir -p /opt/itemshare && sudo chown itemshare: /opt/itemshare
+git clone https://github.com/skperdue68/ItemShare.git /opt/itemshare
+cd /opt/itemshare/Database
+npm ci                      # from package-lock.json; no global tools needed
+```
+
+**2. Make the database account.** Run this once as root on the MariaDB server;
+`ALL` on `itemshare.*` includes the CREATE the first boot needs to make the
+database itself:
+
+```sql
+CREATE USER 'itemshare'@'localhost' IDENTIFIED BY 'a-long-password';
+GRANT ALL PRIVILEGES ON itemshare.* TO 'itemshare'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+**3. Write `.env`.**
+
+```bash
+cd /opt/itemshare/Database
+cp .env.example .env
+chmod 600 .env
+openssl rand -hex 32        # paste into SESSION_SECRET
+```
+
+Then edit it: `MARIADB_USER`, `MARIADB_PASSWORD`, `BASE_URL` (the public https
+address), `SESSION_SECRET`, and the provider ids if you want sign-in. Leave the
+email settings blank for now - see step 6.
+
+**4. Run it as a service.** `/etc/systemd/system/itemshare.service`:
+
+```ini
+[Unit]
+Description=ItemShare upload site
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=itemshare
+WorkingDirectory=/opt/itemshare/Database
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now itemshare
+journalctl -u itemshare -f
+```
+
+Use `command -v node` for `ExecStart`; it is `/usr/bin/node` for a distro package
+and something else for nvm or a tarball install. On boot the log should name the
+migrations it applied (`013_itemshare_request_details.sql`, `014_itemshare_item_tips.sql`,
+`015_itemshare_request_enchant.sql`) and then `ItemShare upload site listening on ...`.
+
+**5. Put it behind TLS.** The site speaks plain HTTP on `PORT`; terminate TLS at a
+proxy. A minimal nginx site (the single location covers the live-update socket):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    client_max_body_size 16m;   # uploads are capped at 12 MB
+}
+```
+
+Set `BASE_URL` to that https address and restart, or the sign-in redirect URI and
+the email's link will point at localhost.
+
+**6. Add the email when you are ready.** Requests work before this: they are
+recorded, and the log says `Email: N request emails not sent - set EMAIL_FROM ...`.
+On the host, give the machine a mail server (`sudo apt install postfix`, or `msmtp`
+configured to relay), check it with
+`echo test | sendmail -t you@example.com`, then set `EMAIL_FROM` to an address that
+server may send as and `sudo systemctl restart itemshare`. Nothing else changes: no
+code, no migrations, no dependency. If the host cannot send mail directly (port 25
+blocked, or this is Windows), set `RESEND_API_KEY` and an `EMAIL_FROM` on a domain
+verified in Resend instead, optionally with `EMAIL_TRANSPORT=resend`.
+
+**7. Optional companions.**
+
+- `npm run simulate` in a second terminal (or another unit) keeps a few fake people
+  browsing; set `SIMULATE_TOKEN` first so open pages refresh live.
+- `npm run seed:demo` puts a demo guildmate in the list without a second upload.
+- `npm run backfill` retries item icons by hand; the site does it on a timer too.
+
+**8. Updating.**
+
+```bash
+cd /opt/itemshare
+git pull
+cd Database && npm ci
+sudo systemctl restart itemshare      # applies any new migrations on boot
+```
+
+**9. Backups.** Everything is in one database: `mysqldump itemshare > itemshare-$(date +%F).sql`.
+Uploads themselves are not stored on disk - a saved variables file is parsed and
+the rows are kept, so the database dump is the whole backup.
+
+**After deploying, check:** the page loads over https, a sign-in round trip
+completes, an upload lands, the Request tab shows items, picking one shows the
+basket clock, sending it appears in *Your requests* with a send time, and
+`SELECT filename FROM itemshare_schema_migrations;` lists migrations through `015`.
 
 ### Sign-in providers (optional, either or both)
 
