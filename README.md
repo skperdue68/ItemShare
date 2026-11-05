@@ -14,8 +14,6 @@ You can use commands
 /ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
 /ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
 /ishare debug - turns the addon's own status messages on or off.
-/ishare sheet [url] - shows or sets the spreadsheet link; /ishare sheet clear removes it.
-/ishare sharelink - puts the spreadsheet link into chat so it can be clicked.
 /ishare guilds - lists the guilds captured for the current character.
 /ishare always - lists the items you always offer, whether or not a copy is in your bags.
 /ishare noalways <part of the name> - stops always sharing one item.
@@ -58,4 +56,4 @@ The name only has to be part of the item name, and it is refused if it matches m
 
 Once Everything is as you want it, save the file by doing /ishare save or typing /reloadui
 
-Open your google spreadsheet (Documentation includes a link to a templatae file you can use which should have everything set for you, just save it as a copy yourself), and use the update feature to add your data into the spreadsheet, its that easy.
+Then open the ItemShare site and upload the file there. The item list, the requests and everything that becomes of them happen on the site.

@@ -1,8 +1,7 @@
 # ItemShare database and upload site
 
 This folder turns `ItemShareSavedVars.lua` into rows in MariaDB, either from the
-website or from the command line. The Google Sheets upload in `../GoogleSheets`
-is untouched and keeps working exactly as before.
+website or from the command line.
 
 ItemShare always uses its own database (`itemshare` by default). It never reads
 `MARIADB_DATABASE`, so it cannot write into the GuildSync schema even though both
@@ -612,7 +611,7 @@ for `SavedVariables/ItemShareSavedVars.lua`. The first file that exists is used,
 none does the error lists every path it tried. A pasted path may be the file or just
 the `SavedVariables` folder; the file name is appended when a folder is given.
 
-Go through the Google Sheets uploader instead and none of this applies: there the
+Upload through the site instead and none of this applies: there the
 browser hands the file over, which is the only way a web page can read it at all.
 
 ## Tables
