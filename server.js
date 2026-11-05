@@ -1018,7 +1018,13 @@ const SIMULATE_TOKEN = String(process.env.SIMULATE_TOKEN || '').trim();
 app.post('/simulate/nudge', (req, res) => {
   const token = String(req.get('x-itemshare-simulate') || '').trim();
 
-  if (!SIMULATE_TOKEN || token !== SIMULATE_TOKEN) {
+  // A simulated run on this machine needs no token: the simulator is a local tool,
+  // and without the push the owner's page sits on numbers that are already out of
+  // date. A request from anywhere else still has to send SIMULATE_TOKEN, which is
+  // what a hosted site sets.
+  const fromThisHost = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(req.ip || ''));
+
+  if (SIMULATE_TOKEN ? token !== SIMULATE_TOKEN : !fromThisHost) {
     res.status(404).end();
     return;
   }
