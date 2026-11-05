@@ -325,8 +325,8 @@ often it is hovered and the browser never talks to UESP.
 The cache is an optimisation: with an empty table, no network, or UESP refusing the
 request, the card still shows everything the row carries and simply stops there. The
 set name is no longer printed under the item name - it lives in the card, with the
-bonus lines, instead. Clicking a name still opens the UESP page in a new tab, which is
-the place to go when the card is not enough.
+bonus lines, instead. Names are no longer links at all: they keep their quality colour
+and carry no underline, and the card is the only thing that opens from them.
 
 The card is placed beside the pointer rather than under it, flips to the other side
 near a window edge, opens on keyboard focus as well as hover, and ignores the pointer
