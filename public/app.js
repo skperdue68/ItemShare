@@ -317,6 +317,22 @@ if (listRegion) {
 
     if (requestButton) {
       event.preventDefault();
+
+      // One copy is not a choice. A stack of one, or the last copy of a bigger stack,
+      // leaves exactly one possible answer, so the click sends it instead of opening a
+      // dialog whose only option is "one". A standing offer is the same case.
+      const available = Math.max(1, Number(requestButton.dataset.max) || 1);
+
+      if (available <= 1) {
+        sendRequest({
+          kind: requestButton.dataset.kind === 'offer' ? 'offer' : 'inventory',
+          id: requestButton.dataset.id,
+          quantity: 1,
+          name: requestButton.dataset.name || 'that item',
+        });
+        return;
+      }
+
       openRequestDialog(requestButton);
       return;
     }
@@ -822,7 +838,7 @@ function basketHeldItems() {
 // The server sends the seconds left as it renders the page; from then on this counts
 // down against the clock, so the number moves without one request per second. A live
 // refresh replaces the element, which restarts it from whatever the server now says.
-const COUNTDOWN_SOON_SECONDS = 120;
+const COUNTDOWN_SOON_SECONDS = 60;
 const COUNTDOWN_URGENT_SECONDS = 30;
 const COUNTDOWN_FADE_MS = 2000;
 
