@@ -249,12 +249,12 @@ local function GetShareListEntries()
         local link = group.itemLink
         local reserve = link ~= "" and GetShareReserve(link) or 0
 
-        -- What the bags hold across every stack beats the one stack the share was
-        -- filed from: marking one of three stacks of 20 means 60 available, not 20,
-        -- and the count column is what people read before asking for something.
-        local index = link ~= "" and GetListInventoryIndex() or nil
-        local indexHeld = (index and math.max(0, tonumber(index.countsByLink[link] or 0) or 0)) or 0
-        local held = indexHeld > 0 and indexHeld or group.stacksHeld
+        -- The count comes from the shares themselves, not from measuring the bags
+        -- again. Each entry was written with the stack it was filed from, and sync,
+        -- rebuild and the login pass keep those counts in step, so opening this
+        -- window is a read of saved data. That is also why the bank's stack is in
+        -- here while the bank is shut: it was counted when it was shared.
+        local held = group.stacksHeld
         local count = ShareableCount(link, held)
 
         -- A share that is entirely inside its reserve is still a share: it stays in
@@ -273,18 +273,12 @@ local function GetShareListEntries()
             copy.heldCount = held
             copy.stackCount = #group.locationTexts
 
-            -- Every place the stacks are: "Backpack + Bank" rather than whichever
-            -- one happened to be marked first, and the bank only when it is open
-            -- enough to have been counted.
-            local markedText = ""
+            -- Every place a shared stack was filed from, in a fixed order. The count
+            -- above adds up those same stacks, so the places named and the stacks
+            -- counted are one list by construction.
             if #group.locationTexts > 0 then
                 table.sort(group.locationTexts)
-                markedText = table.concat(group.locationTexts, " + ")
-            end
-
-            local locationText = JoinLocationLabels(index, link, markedText)
-            if locationText ~= "" then
-                copy.sharedFrom = locationText
+                copy.sharedFrom = table.concat(group.locationTexts, " + ")
             end
 
             entries[#entries + 1] = copy
