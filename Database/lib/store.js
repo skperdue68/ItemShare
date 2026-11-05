@@ -1716,12 +1716,12 @@ export async function getRequesterRequests(connection, userId) {
        FROM itemshare_requests r
        LEFT JOIN itemshare_item_icons ic ON ic.icon_key = r.icon_key
       WHERE r.requester_user_id = ?
-        -- Anything that was sent, whatever became of it afterwards. A basket item
-        -- that was removed or timed out before sending was never asked for, so it is
-        -- not history; a request that reached pending (or closed later) is, even if
-        -- an older version never stamped submitted_at on it.
-        AND (r.submitted_at IS NOT NULL
-             OR r.status IN ('pending', 'fulfilled', 'declined', 'expired'))
+        -- What was actually asked for and still means something: waiting, handed
+        -- over, or refused. A basket item that was removed or timed out was never
+        -- asked for, and a request that lapsed or was cancelled is not something the
+        -- person successfully requested, so neither belongs in this list.
+        AND r.submitted_at IS NOT NULL
+        AND r.status IN ('pending', 'fulfilled', 'declined')
       ORDER BY COALESCE(r.submitted_at, r.created_at) DESC, r.id DESC
       LIMIT 50`,
     [Number(userId)]

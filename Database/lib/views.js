@@ -982,9 +982,9 @@ function myRequestsPanel(requests, basketRows = []) {
       ? ''
       : `<h3 class="subhead">Already sent</h3>
     <p class="muted">
-      Newest first, kept after they are sent. What you ask for is held for you until the
-      owner hands it over; if their file no longer contains the item, or the rest of the
-      stack goes first, the request closes here and says why.
+      Newest first, and only what you actually asked for: a request waiting on its owner,
+      one that was handed over, or one they turned down. Anything that timed out or was
+      cancelled is dropped rather than left here looking like a request that still stands.
       Times are shown in your own time zone; the database keeps them in UTC.
     </p>
     ${requestTable(history, { showSent: true })}`;

@@ -5,6 +5,7 @@
 //
 //   npm start            (reads Database/.env)
 
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -712,29 +713,29 @@ app.post('/logout', (req, res) => {
   finish();
 });
 
-app.post('/upload', upload.single('savedvars'), async (req, res) => {
-  const user = req.session.user || null;
-
-  if (enabledProviders.length > 0 && !user) {
-    res.status(401).json({ error: 'Sign in with Discord or Google before uploading.' });
-    return;
-  }
-  if (!req.file) {
-    res.status(400).json({ error: 'Choose your ItemShareSavedVars.lua file first.' });
-    return;
-  }
-
+// ---------------------------------------------------------------- applying a file
+//
+// What happens to a saved variables file once it is in hand - whether it arrived
+// through the page as a multipart upload or from GuildSync watching the file on the
+// machine that runs the game. Both routes hand over the text and get the same
+// summary back, so the two can never drift apart.
+async function applySavedVariablesUpload({ fileText, sourceFile, user }) {
   let parsed;
+
   try {
-    parsed = extractShareData(req.file.buffer.toString('utf8'));
+    parsed = extractShareData(fileText);
   } catch (error) {
-    res.status(400).json({ error: `Could not read that file: ${error.message}` });
-    return;
+    const invalid = new Error(`Could not read that file: ${error.message}`);
+    invalid.statusCode = 400;
+    throw invalid;
   }
 
   if (parsed.accounts.length === 0) {
-    res.status(400).json({ error: 'No ESO account was found in that file. Upload ItemShareSavedVars.lua, not another file.' });
-    return;
+    const empty = new Error(
+      'No ESO account was found in that file. Upload ItemShareSavedVars.lua, not another file.'
+    );
+    empty.statusCode = 400;
+    throw empty;
   }
 
   // Icons are resolved before the replace and outside its transaction: the
@@ -764,92 +765,199 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
     console.warn(`Could not look up icon paths on UESP: ${error.message}`);
   }
 
-  try {
-    const outcome = await withDatabase(async (connection) => {
-      if (user) {
-        // Every ESO account in the file belongs to the signed-in person. An
-        // account claimed by somebody else stops the whole upload.
-        for (const accountName of parsed.accounts) {
-          const link = await linkAccountToUser(connection, { accountName, userId: user.id });
+  const outcome = await withDatabase(async (connection) => {
+    if (user) {
+      // Every ESO account in the file belongs to the signed-in person. An
+      // account claimed by somebody else stops the whole upload.
+      for (const accountName of parsed.accounts) {
+        const link = await linkAccountToUser(connection, { accountName, userId: user.id });
 
-          if (link === 'conflict') {
-            const conflict = new Error(
-              `The ESO account ${accountName} is already linked to a different person.`
-            );
-            conflict.statusCode = 409;
-            throw conflict;
-          }
+        if (link === 'conflict') {
+          const conflict = new Error(
+            `The ESO account ${accountName} is already linked to a different person.`
+          );
+          conflict.statusCode = 409;
+          throw conflict;
         }
       }
-
-      return replaceAccounts(
-        connection,
-        parsed.accounts.map((accountName) => ({
-          accountName,
-          items: parsed.items.filter((item) => item.accountName === accountName),
-          alwaysShare: parsed.alwaysShare.filter((entry) => entry.accountName === accountName),
-          addonVersion: parsed.addonVersions.get(accountName) || '',
-          guilds: parsed.accountGuilds.get(accountName) || new Map(),
-        })),
-        { sourceFile: req.file.originalname, userId: user ? user.id : null }
-      );
-    });
-
-    // The rows are committed, so the new list is real. Announce it before the icon
-    // work, which can take a moment, so nobody waits on UESP to see their items.
-    const uploaded = (Array.isArray(outcome) ? outcome : [outcome]).filter(Boolean);
-    const uploadedItems = uploaded.reduce((sum, entry) => sum + (Number(entry.itemCount) || 0), 0);
-    const uploadedAccounts = uploaded.map((entry) => entry.accountName).filter(Boolean);
-
-    notifyItemsChanged(
-      'upload',
-      `${uploadedAccounts.join(', ') || 'An account'} uploaded ${uploadedItems} item${
-        uploadedItems === 1 ? '' : 's'
-      }`
-    );
-
-    // One fetch per new icon, ever: afterwards /icons serves the stored bytes.
-    let icons = { fetched: 0, skipped: 0, failed: 0 };
-
-    try {
-      icons = await withDatabase((connection) =>
-        cacheItemIcons(connection, parsed.items.map((item) => item.icon))
-      );
-
-      if (icons.fetched || icons.failed) {
-        console.log(`Icons: fetched ${icons.fetched}, already stored ${icons.skipped}, failed ${icons.failed}`);
-      }
-
-      if (icons.fetched) {
-        // Rows that had no picture a moment ago have one now, so open pages have to
-        // draw them a second time.
-        notifyItemsChanged(
-          'icons',
-          `${icons.fetched} item icon${icons.fetched === 1 ? '' : 's'} fetched`
-        );
-      }
-    } catch (error) {
-      console.warn(`Could not cache item icons: ${error.message}`);
     }
 
-    req.session.accountNames = parsed.accounts.slice();
-    res.json({
-      accounts: outcome,
-      accountCount: outcome.length,
-      itemCount: outcome.reduce((sum, entry) => sum + entry.itemCount, 0),
-      alwaysShareCount: outcome.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
-      removedItems: outcome.reduce((sum, entry) => sum + (entry.removedItems || 0), 0),
-      cancelledRequests: outcome.reduce((sum, entry) => sum + (entry.cancelledRequests || 0), 0),
-      totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
-      guildCount: parsed.guilds.size,
-      iconLookup,
-      icons,
-      link: user ? 'linked' : 'skipped',
+    return replaceAccounts(
+      connection,
+      parsed.accounts.map((accountName) => ({
+        accountName,
+        items: parsed.items.filter((item) => item.accountName === accountName),
+        alwaysShare: parsed.alwaysShare.filter((entry) => entry.accountName === accountName),
+        addonVersion: parsed.addonVersions.get(accountName) || '',
+        guilds: parsed.accountGuilds.get(accountName) || new Map(),
+      })),
+      { sourceFile, userId: user ? user.id : null }
+    );
+  });
+
+  // The rows are committed, so the new list is real. Announce it before the icon
+  // work, which can take a moment, so nobody waits on UESP to see their items.
+  const uploaded = (Array.isArray(outcome) ? outcome : [outcome]).filter(Boolean);
+  const uploadedItems = uploaded.reduce((sum, entry) => sum + (Number(entry.itemCount) || 0), 0);
+  const uploadedAccounts = uploaded.map((entry) => entry.accountName).filter(Boolean);
+
+  notifyItemsChanged(
+    'upload',
+    `${uploadedAccounts.join(', ') || 'An account'} uploaded ${uploadedItems} item${
+      uploadedItems === 1 ? '' : 's'
+    }`
+  );
+
+  // One fetch per new icon, ever: afterwards /icons serves the stored bytes.
+  let icons = { fetched: 0, skipped: 0, failed: 0 };
+
+  try {
+    icons = await withDatabase((connection) =>
+      cacheItemIcons(connection, parsed.items.map((item) => item.icon))
+    );
+
+    if (icons.fetched || icons.failed) {
+      console.log(`Icons: fetched ${icons.fetched}, already stored ${icons.skipped}, failed ${icons.failed}`);
+    }
+
+    if (icons.fetched) {
+      // Rows that had no picture a moment ago have one now, so open pages have to
+      // draw them a second time.
+      notifyItemsChanged(
+        'icons',
+        `${icons.fetched} item icon${icons.fetched === 1 ? '' : 's'} fetched`
+      );
+    }
+  } catch (error) {
+    console.warn(`Could not cache item icons: ${error.message}`);
+  }
+
+  return {
+    accounts: uploaded,
+    accountCount: uploaded.length,
+    itemCount: uploaded.reduce((sum, entry) => sum + entry.itemCount, 0),
+    alwaysShareCount: uploaded.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
+    removedItems: uploaded.reduce((sum, entry) => sum + (entry.removedItems || 0), 0),
+    cancelledRequests: uploaded.reduce((sum, entry) => sum + (entry.cancelledRequests || 0), 0),
+    totalQuantity: uploaded.reduce((sum, entry) => sum + entry.totalQuantity, 0),
+    guildCount: parsed.guilds.size,
+    iconLookup,
+    icons,
+    link: user ? 'linked' : 'skipped',
+  };
+}
+
+app.post('/upload', upload.single('savedvars'), async (req, res) => {
+  const user = req.session.user || null;
+
+  if (enabledProviders.length > 0 && !user) {
+    res.status(401).json({ error: 'Sign in with Discord or Google before uploading.' });
+    return;
+  }
+  if (!req.file) {
+    res.status(400).json({ error: 'Choose your ItemShareSavedVars.lua file first.' });
+    return;
+  }
+
+  try {
+    const summary = await applySavedVariablesUpload({
+      fileText: req.file.buffer.toString('utf8'),
+      sourceFile: req.file.originalname,
+      user,
     });
+
+    req.session.accountNames = summary.accounts.map((entry) => entry.accountName);
+    res.json(summary);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
+
+// ------------------------------------------------------- automatic uploads (GuildSync)
+//
+// GuildSync watches ItemShareSavedVars.lua on the machine that runs the game and
+// posts the file's contents here whenever ESO saves it, so the site stays current
+// without anyone opening the page. It is the same work as an upload - same parse,
+// same replace, same live update - with a shared token instead of a signed-in
+// person, because a file watcher has no browser session.
+//
+// Off unless INGEST_TOKEN is set, and every call compares it in constant time.
+// Whether the file is actually watched, and whether that watching is switched on,
+// is GuildSync's business: this only accepts what it is given.
+const INGEST_TOKEN = String(process.env.INGEST_TOKEN || '').trim();
+
+function ingestTokenMatches(given) {
+  if (!INGEST_TOKEN || !given) {
+    return false;
+  }
+
+  const expected = Buffer.from(INGEST_TOKEN, 'utf8');
+  const actual = Buffer.from(String(given), 'utf8');
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+// The body arrives as bytes, not as a form and not necessarily as one known text
+// type: a watcher may pipe the file straight off disk (`createReadStream(file)
+// .pipe(request)`), which means chunked transfer and no Content-Length at all, and
+// it may have gzipped the file on the way. express.raw buffers whatever arrives,
+// whatever the Content-Type (including none), and inflates gzip or deflate for us;
+// the limit is the same 12 MB the upload page allows.
+function ingestBodyText(req) {
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+  // A byte-order mark from a Windows editor would otherwise sit in front of the
+  // table name and make an otherwise fine file unreadable.
+  return raw.toString('utf8').replace(/^\uFEFF/, '');
+}
+
+app.post(
+  '/ingest',
+  express.raw({ type: () => true, limit: '12mb' }),
+  async (req, res) => {
+    if (!INGEST_TOKEN) {
+      res.status(503).json({
+        error: 'Automatic uploads are off on this site: set INGEST_TOKEN in Database/.env and restart.',
+      });
+      return;
+    }
+
+    const header = String(req.get('authorization') || '');
+    const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+    const given = bearer || String(req.get('x-itemshare-token') || '').trim();
+
+    if (!ingestTokenMatches(given)) {
+      res.status(401).json({ error: 'That ingest token is not accepted here.' });
+      return;
+    }
+
+    const fileText = ingestBodyText(req);
+
+    if (!fileText.trim()) {
+      res.status(400).json({
+        error: 'Send the contents of ItemShareSavedVars.lua in the request body, streamed or in one piece.',
+      });
+      return;
+    }
+
+    // The watcher knows the real file name; record it so an upload can be traced to
+    // the file it came from. Anything longer is trimmed rather than refused.
+    const sourceFile = String(req.get('x-itemshare-file') || 'ItemShareSavedVars.lua').slice(0, 200);
+
+    try {
+      const summary = await applySavedVariablesUpload({ fileText, sourceFile, user: null });
+      console.log(
+        `Ingest: ${sourceFile} - ${summary.accounts
+          .map((entry) => `${entry.accountName} ${entry.itemCount} items`)
+          .join(', ')}`
+      );
+      res.json({ ...summary, sourceFile });
+    } catch (error) {
+      console.warn(`Ingest failed: ${error.message}`);
+      res.status(error.statusCode || 500).json({ error: error.message });
+    }
+  }
+);
 
 // Icons that an upload could not resolve are retried here, because nothing else
 // ever asks again: a blank path stays blank for ever otherwise. A bounded batch
@@ -919,9 +1027,24 @@ app.use((error, req, res, next) => {
   }
 
   const status = error.statusCode || (error.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
-  const message = error.message || 'Something went wrong.';
+
+  // A watched file arrives as a raw body, so its failures come from body-parser
+  // rather than from anything here. Say what the sender can change instead of
+  // repeating "request entity too large" or zlib's "incorrect header check".
+  const ingestMessage =
+    error.type === 'entity.too.large'
+      ? 'That body is larger than 12 MB. ItemShareSavedVars.lua is well under that, so check what was sent.'
+      : error.type === 'entity.parse.failed' || error.code === 'Z_DATA_ERROR'
+        ? 'Could not decompress that body. Send it as plain text, or gzip it properly.'
+        : error.type === 'encoding.unsupported'
+          ? 'That Content-Encoding is not supported. Send plain text, gzip or deflate.'
+          : '';
+
+  const message =
+    (req.path === '/ingest' && ingestMessage) || error.message || 'Something went wrong.';
   const wantsJson =
     req.path === '/upload' ||
+    req.path === '/ingest' ||
     req.xhr ||
     String(req.get('accept') || '').includes('application/json');
 
