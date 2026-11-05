@@ -1389,6 +1389,27 @@ tr.row-fading td {
   transition: border-color 1.2s ease;
 }
 
+/* Rows are moved by app.js, which measures the old and new positions and plays the
+   difference back. A panel's height is animated the same way, so applying or
+   clearing filters settles the list instead of making the page jump. */
+.sent-cell time {
+  color: inherit;
+  border-bottom: 0;
+}
+
+.filter-chips {
+  transition: min-height 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  tbody tr,
+  tr.row-fading,
+  tr.row-fading td,
+  .filter-chips {
+    transition: none !important;
+  }
+}
+
 /* ------------------------------------------------------------------ filters */
 
 /* The filter controls and the chips under them are centred as one row. */
