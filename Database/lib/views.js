@@ -1,6 +1,8 @@
 // Server rendered pages. Styling lives in public/styles.css and follows the
 // GuildSync palette (navy gradient, translucent panels, blue accents).
 
+import { createHash } from 'node:crypto';
+
 export function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -291,7 +293,10 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
 
   const heading = `
     <section class="card">
-      <h2>Shared items in your guilds</h2>`;
+      <h2>
+        Shared items in your guilds
+        <span class="live-pill" data-live="wait" hidden>Live</span>
+      </h2>`;
 
   const activeFilters = Boolean(filters?.type || filters?.owner || filters?.search);
   const bar = filterBar(facets, filters || { type: '', owner: '', search: '' });
@@ -353,7 +358,7 @@ function sharedItemsCard({ accounts, sharedItems, facets, filters }) {
           .join(' &middot; ');
 
         return `
-        <tr>
+        <tr data-item-key="inv:${escapeHtml(item.item_key_hash || item.id)}">
           <td>
             <div class="item-cell">
               ${icon}
@@ -453,7 +458,7 @@ function alwaysShareCard({ accounts, alwaysShare }) {
         .join(' &middot; ');
 
       return `
-        <tr>
+        <tr data-item-key="offer:${escapeHtml(item.item_key_hash || item.id)}">
           <td>
             <div class="item-cell">
               ${icon}
@@ -491,6 +496,38 @@ function alwaysShareCard({ accounts, alwaysShare }) {
     </section>`;
 }
 
+/**
+ * Stable identity for one rendered list: the accounts, item types and owners in it.
+ * The page embeds it and a live refresh compares it, so a change that adds or
+ * removes a filter option rebuilds the page instead of leaving the controls stale.
+ */
+export function listRegionSignature({ accounts = [], facets = {} } = {}) {
+  const payload = JSON.stringify({
+    accounts: (accounts || []).map((account) => account.accountName),
+    types: ((facets && facets.types) || []).map((entry) => entry.name),
+    owners: (facets && facets.owners) || [],
+  });
+
+  return createHash('sha1').update(payload).digest('hex').slice(0, 12);
+}
+
+/**
+ * Everything that changes when the items do: the shared list and the standing
+ * offers, inside one element the browser can replace without touching the filters,
+ * the upload card or the reader's place in either of them.
+ */
+export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters }) {
+  if (!accounts || accounts.length === 0) {
+    return '';
+  }
+
+  return `
+    <div class="item-lists" id="itemLists" data-signature="${escapeHtml(listRegionSignature({ accounts, facets }))}">
+      ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
+      ${alwaysShareCard({ accounts, alwaysShare })}
+    </div>`;
+}
+
 // One shell for every page. Without this a failed sign-in, a wrong address or a
 // cancelled prompt dropped the browser onto a bare line of text with no styling and
 // no way back, which reads as a broken site rather than a message.
@@ -523,7 +560,8 @@ ${content}
     <span>ItemShare &middot; uploads replace your guilds and items in full</span>
   </footer>
 
-  <script src="/app.js"></script>
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/app.js" defer></script>
 </body>
 </html>`;
 }
@@ -585,8 +623,7 @@ export function renderPage({ user, providers, accounts, sharedItems, alwaysShare
     }
 
     ${accountsCard(accounts, user)}
-    ${sharedItemsCard({ accounts, sharedItems, facets, filters })}
-    ${alwaysShareCard({ accounts, alwaysShare })}`;
+    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters })}`;
 
   return pageShell({ user, providers, content });
 }
