@@ -229,19 +229,32 @@ upload rewrites the item rows the request came from. An owner with three Briarhe
 swords and two Twice-Born rings can therefore see exactly which one was asked for
 without opening the site.
 
-Delivery is Resend over its HTTP API, so nothing has to be installed:
+On Linux the site sends mail itself, through the mail server the machine already
+runs (`sendmail -t`, which postfix, exim, msmtp and opensmtpd all provide). No
+account, key or third-party service is involved, and nothing is installed by the
+site:
 
 ```
-RESEND_API_KEY=re_...
 EMAIL_FROM=ItemShare <requests@your-domain.example>
-BASE_URL=https://your-site.example
+# BASE_URL=https://your-site.example
 ```
 
-`EMAIL_FROM` has to be on a domain verified in Resend. With either setting blank the
-site still runs and the log says `Email: N request emails not sent - set
-RESEND_API_KEY and EMAIL_FROM in Database/.env`. Only an owner whose ESO account is
-linked to a signed-in person has an address at all, so a request to an unclaimed
-account sends nothing.
+Anything that gives the machine a working `sendmail` is enough - installing postfix
+or msmtp is the usual step on a fresh box, and `echo test | sendmail -t you@example.com`
+is the check. If the binary is somewhere unusual, set `SENDMAIL_PATH`; `EMAIL_TRANSPORT`
+forces `sendmail`, `resend` or `none` when both happen to be available.
+
+Windows has no local mail server, so during development there sending is simply
+skipped: the site works, requests are still recorded, and the log says
+`Email: N request emails not sent - ...` with the reason. Set `RESEND_API_KEY` (and an
+`EMAIL_FROM` on a domain verified in Resend) there - or on a Linux host without an
+MTA - to send over Resend's HTTP API instead; `EMAIL_TRANSPORT=resend` pins that
+choice.
+
+Only an owner whose ESO account is linked to a signed-in person has an address at
+all, so a request to an unclaimed account sends nothing, and a local mail server still
+has to be allowed to send as the `EMAIL_FROM` address (for postfix, that is
+`myorigin`/`myhostname` plus a matching sender domain in your DNS).
 
 ## Making it look busy: simulated people
 

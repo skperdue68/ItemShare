@@ -188,7 +188,9 @@ async function emailOwners({ user, submitted, contacts }) {
 
   if (!config.configured) {
     console.log(
-      `Email: ${groups.size} request email${groups.size === 1 ? '' : 's'} not sent - set RESEND_API_KEY and EMAIL_FROM in Database/.env`
+      `Email: ${groups.size} request email${groups.size === 1 ? '' : 's'} not sent - ${
+        config.reason || 'no mail transport is configured'
+      }`
     );
     return { sent: 0, skipped: groups.size };
   }
