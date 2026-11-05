@@ -29,6 +29,7 @@ import {
   replaceAccounts,
   signInWithProvider,
 } from './lib/store.js';
+import { buildProviders } from './lib/providers.js';
 import { MariaDbSessionStore } from './lib/sessionStore.js';
 import { renderMessagePage, renderPage } from './lib/views.js';
 
@@ -47,51 +48,10 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 // Both providers speak OAuth2 authorization code, so one flow serves both. Only
 // the endpoints, scopes and profile fields differ.
-const PROVIDERS = {
-  discord: {
-    label: 'Discord',
-    clientId: process.env.DISCORD_CLIENT_ID || '',
-    clientSecret: process.env.DISCORD_CLIENT_SECRET || '',
-    redirectUri: process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/discord/callback`,
-    authorizeUrl: 'https://discord.com/oauth2/authorize',
-    tokenUrl: 'https://discord.com/api/oauth2/token',
-    profileUrl: 'https://discord.com/api/users/@me',
-    scope: 'identify email',
-    readProfile(profile) {
-      return {
-        providerUserId: String(profile.id),
-        username: profile.global_name || profile.username || String(profile.id),
-        email: typeof profile.email === 'string' ? profile.email : '',
-        emailVerified: profile.verified === true,
-        avatarUrl: discordAvatarUrl(profile),
-      };
-    },
-  },
-  google: {
-    label: 'Google',
-    clientId: process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    redirectUri: process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/auth/google/callback`,
-    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenUrl: 'https://oauth2.googleapis.com/token',
-    profileUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
-    scope: 'openid email profile',
-    readProfile(profile) {
-      return {
-        providerUserId: String(profile.sub),
-        username: profile.name || profile.email || String(profile.sub),
-        email: typeof profile.email === 'string' ? profile.email : '',
-        emailVerified: profile.email_verified === true,
-        avatarUrl: googleAvatarUrl(profile),
-      };
-    },
-  },
-};
-
-for (const [key, provider] of Object.entries(PROVIDERS)) {
-  provider.key = key;
-  provider.configured = Boolean(provider.clientId && provider.clientSecret);
-}
+// Both providers speak OAuth2 authorization code, so one flow serves both. Their
+// definitions - endpoints, scopes, and how a profile becomes our fields - live in
+// lib/providers.js, where they can be tested without a real sign-in.
+const PROVIDERS = buildProviders(process.env);
 
 const enabledProviders = Object.values(PROVIDERS)
   .filter((provider) => provider.configured)
