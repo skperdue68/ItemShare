@@ -189,6 +189,16 @@ local function GetShareListEntries()
         end
     end
 
+    -- Asked at most once, and only when something is missing from the list, so an
+    -- ordinary refresh stays as cheap as it was.
+    local inventoryIndex = nil
+    local function GetListInventoryIndex()
+        if inventoryIndex == nil then
+            inventoryIndex = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or false
+        end
+        return inventoryIndex or nil
+    end
+
     local alwaysShare = ItemShare.savedVars.alwaysShare
     if type(alwaysShare) == "table" then
         local waiting = {}
@@ -198,10 +208,8 @@ local function GetShareListEntries()
             end
         end
 
-        if #waiting > 0 and BuildActualInventoryIndex then
-            -- Only asked when a standing offer is missing from the list, so an
-            -- ordinary refresh stays as cheap as it was.
-            local index = BuildActualInventoryIndex()
+        local index = #waiting > 0 and GetListInventoryIndex() or nil
+        if index then
             for _, alwaysEntry in ipairs(waiting) do
                 local link = tostring(alwaysEntry.itemLink or "")
                 local held = math.max(0, tonumber(index.countsByLink[link] or 0) or 0)
@@ -229,8 +237,58 @@ local function GetShareListEntries()
                         slotIndex = location and location.slotIndex or nil,
                         alwaysOnly = true,
                     }
+                    linksListed[link] = true
                 end
             end
+        end
+    end
+
+    -- A reserve belongs to the item rather than to a share, so it can be set on an
+    -- item that is not shared at all - that is the amber tag with no parcel under it
+    -- in the bags. Leaving those out of the window meant a reserve on an unshared
+    -- item could only be found again by remembering it had been set.
+    local reserves = ItemShare.savedVars.reserves
+    local reserveLinks = {}
+    if type(reserves) == "table" then
+        for link, amount in pairs(reserves) do
+            local linkText = tostring(link or "")
+            local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+            if keep > 0 and linkText ~= "" and not linksListed[linkText] then
+                reserveLinks[#reserveLinks + 1] = linkText
+            end
+        end
+    end
+
+    if #reserveLinks > 0 then
+        table.sort(reserveLinks)
+        local index = GetListInventoryIndex()
+        for _, link in ipairs(reserveLinks) do
+            local location = index and index.locationsByLink and index.locationsByLink[link] or nil
+            local itemData = location and location.itemData or nil
+            local held = math.max(0, tonumber(index and index.countsByLink[link] or 0) or 0)
+
+            entries[#entries + 1] = {
+                itemKey = link,
+                itemLink = link,
+                itemName = tostring(itemData and itemData.itemName or link),
+                itemType = itemData and itemData.itemType,
+                itemTypeName = itemData and itemData.itemTypeName,
+                quality = itemData and itemData.quality,
+                trait = itemData and itemData.trait,
+                itemId = itemData and itemData.itemId,
+                icon = itemData and itemData.icon,
+                esoDetails = itemData and itemData.esoDetails,
+                heldCount = held,
+                reserve = GetShareReserve(link),
+                -- Nothing is on offer from a reserved item that is not shared, so the
+                -- count column says zero while the row still shows what is kept back.
+                count = 0,
+                sharedFrom = location and tostring(location.sharedFrom or "-") or "Not in a bag",
+                locationKey = location and tostring(location.locationKey or "") or "",
+                bagId = location and location.bagId or nil,
+                slotIndex = location and location.slotIndex or nil,
+                reserveOnly = true,
+            }
         end
     end
 
@@ -511,9 +569,16 @@ local function GetOrCreateShareListRow(index)
         -- A standing offer has no share entry to find, so "shared" has to include it,
         -- and the badge has to come from the same function the rest of the addon uses:
         -- picking a texture here by hand lost the amber reserve tag after a toggle.
+        -- A reserve can outlive the share it was set beside, and then the badge is
+        -- the amber tag on its own rather than a parcel nobody can ask for. The same
+        -- rule the bags use, so removing a share here does not leave a stale badge.
+        local reserve = link ~= "" and ((GetShareReserve and GetShareReserve(link)) or 0) or 0
+        row.isReserveOnly = (not (isShared or isAlways)) and reserve > 0
         row.isShared = (isShared or isAlways) and true or false
-        statusIcon:SetTexture(GetShareBadgeTexture(link, isAlways))
-        statusIcon:SetHidden(not (isShared or isAlways))
+        statusIcon:SetTexture(
+            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways)
+        )
+        statusIcon:SetHidden(not (isShared or isAlways or row.isReserveOnly))
         RefreshRowAppearance()
     end
 
@@ -573,6 +638,18 @@ local function GetOrCreateShareListRow(index)
         elseif row.entryData then
             -- Re-adding from the list window is still a marking: an item that has
             -- become bound since it was filed must not slip back in this way.
+            -- A reserved item that is not in a readable bag has nothing to file: the
+            -- row knows only its link and its reserve, so there is no share to make
+            -- of it until a copy turns up.
+            if row.isReserveOnly
+                and (tonumber(row.entryData.bagId) == nil or tonumber(row.entryData.slotIndex) == nil) then
+                dmsg(string.format(
+                    "Cannot share %s yet: no copy of it is in a bag right now.",
+                    tostring(row.entryData.itemName or row.itemLink or "that item")
+                ))
+                return
+            end
+
             local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
             if not isEligible then
                 dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
@@ -584,6 +661,7 @@ local function GetOrCreateShareListRow(index)
                 row.entryData = savedEntry
                 row.entryKey = tostring(BuildSharedItemKey(savedEntry.itemLink, savedEntry.locationKey) or row.entryKey or "")
                 row.isShared = true
+                row.isReserveOnly = false
                 dmsg(string.format(
                     "Added shared item %s from %s (stack size: %d)",
                     tostring(savedEntry.itemName or savedEntry.itemLink or "Unknown Item"),
@@ -615,7 +693,11 @@ local function GetOrCreateShareListRow(index)
         local link = row.itemLink or (row.entryData and row.entryData.itemLink)
         local lines = {}
 
-        if link and IsItemLinkAlwaysShared(link) then
+        if row.isReserveOnly then
+            lines[#lines + 1] = "|cD8A24FShare reserve|r"
+            lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
+            lines[#lines + 1] = "Right-click the row to add it to the shared list."
+        elseif link and IsItemLinkAlwaysShared(link) then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
         else
@@ -725,7 +807,9 @@ RefreshShareListWindow = function()
             displayText = string.format("%s (%s)", displayText, traitText)
         end
         row.itemLabel:SetText(displayText)
-        row.countLabel:SetText(tostring(GetEntryOfferedCount(entry)))
+        -- A reserved row that is not shared offers nothing, so its count is zero
+        -- whatever the bags hold; what is held is shown beside the reserve instead.
+        row.countLabel:SetText(tostring((entry.reserveOnly and 0) or GetEntryOfferedCount(entry)))
 
         -- The reserve is part of what the row has to say: "12" alone does not
         -- explain why a stack of 20 offers 8.
@@ -738,12 +822,18 @@ RefreshShareListWindow = function()
                 or string.format("%s - keep %d", locationText, reserve)
         end
         row.locationLabel:SetText(locationText)
-        row.isShared = true
+        -- A row that only carries a reserve is not a share yet: right-clicking it
+        -- adds one, so it has to look unshared or the toggle reads as a no-op.
+        row.isShared = not (entry.reserveOnly and true or false)
         row.isAlwaysOnly = entry.alwaysOnly and true or false
+        row.isReserveOnly = entry.reserveOnly and true or false
         -- Rows are recycled, so the badge is set from the entry on every refresh.
         -- Leaving it to creation time meant a removed standing offer kept its gold
         -- icon in this window until the row happened to be reused for something else.
-        row.statusIcon:SetTexture(GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink)))
+        row.statusIcon:SetTexture(
+            (entry.reserveOnly and RESERVE_ONLY_TEXTURE_PATH)
+                or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink))
+        )
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
             row:RefreshAppearance()
@@ -3131,35 +3221,84 @@ OpenShareReserveDialog = function(bagId, slotIndex)
 end
 
 local function PrintShareReserves()
-    local entries = {}
+    local rows = {}
+    local listed = {}
 
-    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        if type(entry) == "table" and GetShareReserve(entry.itemLink) > 0 then
-            entries[#entries + 1] = entry
+    local function AddEntryRow(entry)
+        if type(entry) ~= "table" then
+            return
+        end
+
+        local link = tostring(entry.itemLink or "")
+        if link ~= "" and not listed[link] and GetShareReserve(link) > 0 then
+            listed[link] = true
+            rows[#rows + 1] = { entry = entry, link = link }
         end
     end
 
-    if #entries == 0 then
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        AddEntryRow(entry)
+    end
+    for _, entry in pairs(GetAlwaysShareTable()) do
+        AddEntryRow(entry)
+    end
+
+    -- The reserve table is the authority, because a reserve can be set on an item
+    -- that is not shared at all. Reading only the shares left those out of this list
+    -- as well as out of the window.
+    local index = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or nil
+    for link, amount in pairs(GetShareReserveTable()) do
+        local linkText = tostring(link or "")
+        local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+        if keep > 0 and linkText ~= "" and not listed[linkText] then
+            listed[linkText] = true
+            local location = index and index.locationsByLink and index.locationsByLink[linkText] or nil
+            rows[#rows + 1] = {
+                link = linkText,
+                reserveOnly = true,
+                name = tostring(location and location.itemData and location.itemData.itemName or ""),
+            }
+        end
+    end
+
+    if #rows == 0 then
         dmsg("No item has a share reserve. Set one with /itemshare reserve <amount> <part of the name>.")
         return
     end
 
-    table.sort(entries, function(a, b)
-        return string.lower(tostring(a.itemName or "")) < string.lower(tostring(b.itemName or ""))
+    local function NameOf(row)
+        if row.entry then
+            return tostring(row.entry.itemName or "Unknown Item")
+        end
+        if row.name ~= "" then
+            return row.name
+        end
+        return string.format("item %s", tostring(string.match(row.link, "item:(%d+)") or row.link))
+    end
+
+    table.sort(rows, function(a, b)
+        return string.lower(NameOf(a)) < string.lower(NameOf(b))
     end)
 
-    dmsg(string.format("Share reserves (%d):", #entries))
-    for _, entry in ipairs(entries) do
-        local held = GetEntryHeldCount(entry)
-        dmsg(string.format(
-            "  %s: keep %d, sharing %d of %d held",
-            tostring(entry.itemName or "Unknown Item"),
-            GetShareReserve(entry.itemLink),
-            GetEntryOfferedCount(entry),
-            held
-        ))
+    dmsg(string.format("Share reserves (%d):", #rows))
+    for _, row in ipairs(rows) do
+        if row.entry then
+            dmsg(string.format(
+                "  %s: keep %d, sharing %d of %d held",
+                NameOf(row),
+                GetShareReserve(row.link),
+                GetEntryOfferedCount(row.entry),
+                GetEntryHeldCount(row.entry)
+            ))
+        else
+            dmsg(string.format(
+                "  %s: keep %d, not shared",
+                NameOf(row),
+                GetShareReserve(row.link)
+            ))
+        end
     end
-    dmsg("Clear one with /itemshare noreserve <part of the name>.")
+    dmsg("Clear one with /itemshare noreserve <part of the name>, or from the item's right-click menu.")
 end
 
 local function OnSlashCommand(arg)
