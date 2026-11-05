@@ -172,6 +172,22 @@ body {
   gap: 18px;
 }
 
+/* Signed out, or a login with no ESO account linked yet: the single card sits in the
+   middle of what the header and footer leave, rather than near the top of an empty
+   page. The card keeps a reading width instead of stretching across the window. */
+.surface-centered {
+  justify-content: center;
+  align-items: center;
+}
+
+.solo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 720px;
+}
+
 .card {
   padding: 22px 24px;
   border: 1px solid var(--panel-border);
