@@ -1,6 +1,14 @@
 // Database operations shared by the CLI (ingest.js) and the website (server.js).
-// An upload is a full replace: the uploading account's guild membership and item
-// list are both rewritten from the file, inside one transaction.
+//
+// An upload fills in what the file has and then prunes what it does not: every row
+// the file mentions is written in place, and only afterwards are the rows it no
+// longer mentions removed. The whole thing runs inside one transaction, so nobody
+// ever reads a half-replaced list.
+//
+// That order matters for more than politeness. Replacing the list with a DELETE
+// and a fresh set of INSERTs gave every row a new id, which silently orphaned
+// anything pointing at it - including an open request - and made an item vanish
+// for as long as the inserts took.
 
 import { createHash } from 'node:crypto';
 
@@ -48,6 +56,13 @@ const ITEM_COLUMNS = [
 const INSERT_ITEM_SQL = `
 INSERT INTO itemshare_shared_items (${ITEM_COLUMNS.join(', ')})
 VALUES (${ITEM_COLUMNS.map(() => '?').join(', ')})`;
+
+// The same row, refreshed where it stands. LAST_INSERT_ID(id) hands back the id of
+// the row that already existed, which is what the guild links and any open request
+// are attached to; first_seen_at is deliberately absent so the first sighting of an
+// item survives every later upload.
+const ITEM_UPSERT_SQL = `${INSERT_ITEM_SQL}
+ON DUPLICATE KEY UPDATE ${['id = LAST_INSERT_ID(id)', ...ITEM_COLUMNS.map((column) => `${column} = VALUES(${column})`)].join(', ')}`;
 
 export function hashItemKey(itemKey) {
   return createHash('sha1').update(itemKey, 'utf8').digest('hex');
@@ -141,6 +156,9 @@ const ALWAYS_COLUMNS = [
 const INSERT_ALWAYS_SHARE_SQL = `
 INSERT INTO itemshare_always_share (${ALWAYS_COLUMNS.join(', ')})
 VALUES (${ALWAYS_COLUMNS.map(() => '?').join(', ')})`;
+
+const ALWAYS_SHARE_UPSERT_SQL = `${INSERT_ALWAYS_SHARE_SQL}
+ON DUPLICATE KEY UPDATE ${['id = LAST_INSERT_ID(id)', ...ALWAYS_COLUMNS.map((column) => `${column} = VALUES(${column})`)].join(', ')}`;
 
 function alwaysShareValues(entry, uploadId) {
   const values = [
@@ -370,35 +388,62 @@ async function replaceOneAccount(
 
   const uploadId = upload.insertId;
 
-  await connection.execute('DELETE FROM itemshare_shared_items WHERE account_name = ?', [accountName]);
-
+  // Write first, prune second. Everything the file mentions is refreshed where it
+  // already stands - same row, same id, same first_seen_at - so an item never
+  // blinks out of the list and anything pointing at the row keeps pointing at it.
   for (const item of items) {
-    const [inserted] = await connection.execute(INSERT_ITEM_SQL, itemValues(item, uploadId));
+    const [written] = await connection.execute(ITEM_UPSERT_SQL, itemValues(item, uploadId));
+    const itemId = written.insertId;
+
+    // The guilds an item is offered to can change between uploads, so the links
+    // are rewritten per item rather than left to accumulate.
+    await connection.execute('DELETE FROM itemshare_shared_item_guilds WHERE item_id = ?', [itemId]);
+
     for (const guildId of item.guildIds) {
       await connection.execute(
         'INSERT IGNORE INTO itemshare_shared_item_guilds (item_id, guild_id) VALUES (?, ?)',
-        [inserted.insertId, guildId]
+        [itemId, guildId]
       );
     }
   }
 
-  // Rewritten in full from the same file, but kept in their own table: a
-  // standing offer has no count and no location, and must survive the item
-  // leaving every bag.
-  await connection.execute('DELETE FROM itemshare_always_share WHERE account_name = ?', [accountName]);
+  // Everything above now carries this upload's id, so a row still holding an older
+  // one was in a previous file and is gone from this one. That is the whole prune:
+  // upload_id doubles as the refresh mark, and no extra column is needed to say
+  // when a row was last confirmed.
+  const [removedItems] = await connection.execute(
+    'DELETE FROM itemshare_shared_items WHERE account_name = ? AND (upload_id IS NULL OR upload_id <> ?)',
+    [accountName, uploadId]
+  );
 
+  // Standing offers get the same treatment, but stay in their own table: an offer
+  // has no count and no location, and must survive the item leaving every bag.
   for (const offered of alwaysShare) {
-    const [inserted] = await connection.execute(
-      INSERT_ALWAYS_SHARE_SQL,
+    const [written] = await connection.execute(
+      ALWAYS_SHARE_UPSERT_SQL,
       alwaysShareValues(offered, uploadId)
     );
+    const offerId = written.insertId;
+
+    await connection.execute('DELETE FROM itemshare_always_share_guilds WHERE always_share_id = ?', [offerId]);
+
     for (const guildId of offered.guildIds) {
       await connection.execute(
         'INSERT IGNORE INTO itemshare_always_share_guilds (always_share_id, guild_id) VALUES (?, ?)',
-        [inserted.insertId, guildId]
+        [offerId, guildId]
       );
     }
   }
+
+  const [removedOffers] = await connection.execute(
+    'DELETE FROM itemshare_always_share WHERE account_name = ? AND (upload_id IS NULL OR upload_id <> ?)',
+    [accountName, uploadId]
+  );
+
+  // An upload is exactly what changes the numbers a request was made against, so
+  // the reservations are settled here, inside the same transaction: a request can
+  // never be left standing against a stack that no longer covers it.
+  const cancelledRequests = await reconcileRequestsForOwner(connection, accountName);
 
   return {
     accountName,
@@ -407,6 +452,9 @@ async function replaceOneAccount(
     totalQuantity,
     guildCount: guilds.size,
     alwaysShareCount: alwaysShare.length,
+    removedItems: Number(removedItems.affectedRows || 0),
+    removedOffers: Number(removedOffers.affectedRows || 0),
+    cancelledRequests,
   };
 }
 
@@ -706,10 +754,85 @@ export async function getViewerFacets(connection, accountNames) {
  * and alphabetical inside each type. Ownership comes from the item's own account,
  * visibility from the guild overlap.
  */
+/**
+ * The three sort orders the table offers, and nothing else: an odd ?sort= in the
+ * address bar falls back to the type grouping rather than reaching the query.
+ */
+function orderFor(alias, sort, dir) {
+  const direction = String(dir || '').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
+  if (sort === 'added') {
+    return `${alias}.first_seen_at ${direction}, ${alias}.item_name ASC, ${alias}.account_name ASC`;
+  }
+  if (sort === 'name') {
+    return `${alias}.item_name ${direction}, ${alias}.account_name ASC`;
+  }
+  return `${alias}.item_type_name ASC, ${alias}.item_name ASC, ${alias}.account_name ASC`;
+}
+
+/**
+ * "Shared in the last N days", as a SQL condition. The number is inlined only after
+ * being clamped to an integer, because an INTERVAL placeholder is the one piece of
+ * this syntax that MariaDB and MySQL do not agree about.
+ */
+function addedClause(alias, added) {
+  const days = Math.trunc(Number(added));
+
+  if (!Number.isFinite(days) || days <= 0) {
+    return '';
+  }
+
+  return `${alias}.first_seen_at >= (NOW() - INTERVAL ${Math.min(days, 3650)} DAY)`;
+}
+
+/**
+ * How much of each row is already spoken for. Deliberately a second query: a
+ * correlated subquery inside a grouped select depends on functional-dependency
+ * support that differs between the servers this may meet, and one extra round trip
+ * per page is cheaper than a query that only works on some of them.
+ */
+async function attachRequestCounts(connection, rows, kind) {
+  if (!rows || rows.length === 0) {
+    return rows;
+  }
+
+  for (const row of rows) {
+    row.reserved = 0;
+    row.request_count = 0;
+  }
+
+  const ids = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+
+  if (ids.length === 0) {
+    return rows;
+  }
+
+  const column = kind === 'offer' ? 'always_share_id' : 'shared_item_id';
+  const [counts] = await connection.execute(
+    `SELECT ${column} AS target_id,
+            COALESCE(SUM(quantity), 0) AS reserved,
+            COUNT(*) AS request_count
+       FROM itemshare_requests
+      WHERE item_kind = ? AND status = 'pending' AND ${column} IN (${inClause(ids)})
+      GROUP BY ${column}`,
+    [kind, ...ids]
+  );
+
+  const byId = new Map(counts.map((row) => [Number(row.target_id), row]));
+
+  for (const row of rows) {
+    const count = byId.get(Number(row.id));
+    row.reserved = Number(count?.reserved || 0);
+    row.request_count = Number(count?.request_count || 0);
+  }
+
+  return rows;
+}
+
 export async function getSharedItemsForViewer(
   connection,
   accountNames,
-  { type = '', owner = '', search = '', limit = 500 } = {}
+  { type = '', owner = '', search = '', added = '', sort = '', dir = '', limit = 500 } = {}
 ) {
   const names = viewerAccountNames(accountNames);
   if (names.length === 0) {
@@ -731,6 +854,11 @@ export async function getSharedItemsForViewer(
   if (search) {
     filters.push('i.item_name LIKE ?');
     params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
+  }
+
+  const recent = addedClause('i', added);
+  if (recent) {
+    filters.push(recent);
   }
 
   // Always present: visibility is not optional, only the filters are.
@@ -758,6 +886,7 @@ export async function getSharedItemsForViewer(
             i.equip_type,
             i.location_label,
             i.last_dumped_at,
+            i.first_seen_at,
             i.account_name,
             i.character_name,
             (icon.icon_key IS NOT NULL) AS has_icon,
@@ -767,14 +896,14 @@ export async function getSharedItemsForViewer(
       GROUP BY i.id, i.item_name, i.item_id, i.item_key_hash, i.icon_key, i.item_count, i.quality,
                i.quality_name, i.item_type_name, i.trait, i.set_name, i.enchant_name,
                i.style_name, i.required_level, i.required_cp, i.armor_type, i.weapon_type,
-               i.apparel_slot, i.equip_type, i.location_label, i.last_dumped_at,
+               i.apparel_slot, i.equip_type, i.location_label, i.last_dumped_at, i.first_seen_at,
                i.account_name, i.character_name, icon.icon_key
-      ORDER BY i.item_type_name ASC, i.item_name ASC, i.account_name ASC
+      ORDER BY ${orderFor('i', sort, dir)}
       LIMIT ${safeLimit}`,
     params
   );
 
-  return rows;
+  return attachRequestCounts(connection, rows, 'inventory');
 }
 
 /**
@@ -786,7 +915,7 @@ export async function getSharedItemsForViewer(
 export async function getAlwaysShareForViewer(
   connection,
   accountNames,
-  { type = '', owner = '', search = '', limit = 500 } = {}
+  { type = '', owner = '', search = '', added = '', sort = '', dir = '', limit = 500 } = {}
 ) {
   const names = viewerAccountNames(accountNames);
   if (names.length === 0) {
@@ -810,6 +939,11 @@ export async function getAlwaysShareForViewer(
     params.push(`%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`);
   }
 
+  const recent = addedClause('a', added);
+  if (recent) {
+    filters.push(recent);
+  }
+
   const where = `WHERE ${filters.join(' AND ')}`;
 
   const [rows] = await connection.execute(
@@ -823,6 +957,7 @@ export async function getAlwaysShareForViewer(
             a.trait,
             a.set_name,
             a.first_added_at,
+            a.first_seen_at,
             a.account_name,
             a.character_name,
             (icon.icon_key IS NOT NULL) AS has_icon,
@@ -835,14 +970,14 @@ export async function getAlwaysShareForViewer(
        ${visibleAlwaysShareFrom(names)}
        ${where}
       GROUP BY a.id, a.item_name, a.item_id, a.item_key_hash, a.icon_key, a.quality, a.item_type_name,
-               a.trait, a.set_name, a.first_added_at, a.account_name, a.character_name,
+               a.trait, a.set_name, a.first_added_at, a.first_seen_at, a.account_name, a.character_name,
                icon.icon_key
-      ORDER BY a.item_name ASC, a.account_name ASC
+      ORDER BY ${orderFor('a', sort, dir)}
       LIMIT ${safeLimit}`,
     params
   );
 
-  return rows;
+  return attachRequestCounts(connection, rows, 'offer');
 }
 
 /**
@@ -874,4 +1009,305 @@ export async function linkAccountToUser(connection, { accountName, userId }) {
     [accountName, userId]
   );
   return 'linked';
+}
+
+// -------------------------------------------------------------------- requests
+// A request reserves part of a stack until the owner hands it over. Nothing here
+// talks to the owner yet; what it does do is keep the arithmetic honest, so the
+// quantity someone is offered to ask for is the quantity that is really left.
+
+/** Cancels one pending request, with a reason the requester can read. */
+async function cancelRequest(connection, requestId, reason) {
+  await connection.execute(
+    `UPDATE itemshare_requests
+        SET status = 'cancelled',
+            status_reason = ?,
+            closed_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'pending'`,
+    [reason, requestId]
+  );
+}
+
+async function reservedQuantity(connection, itemKind, targetId) {
+  const column = itemKind === 'offer' ? 'always_share_id' : 'shared_item_id';
+  const [[row]] = await connection.execute(
+    `SELECT COALESCE(SUM(quantity), 0) AS reserved
+       FROM itemshare_requests
+      WHERE item_kind = ? AND status = 'pending' AND ${column} = ?`,
+    [itemKind, targetId]
+  );
+
+  return Number(row?.reserved || 0);
+}
+
+/**
+ * Settles every pending request against an owner's items once their file has been
+ * written.
+ *
+ * Oldest first, because it was promised first: each request keeps its quantity
+ * while the stack can still cover it. One whose item has gone - or whose turn the
+ * stack no longer reaches - is cancelled with the sentence the requester needs to
+ * read, rather than quietly disappearing from their list.
+ *
+ * A row id can change when an item moves to another character or is re-shared, so
+ * matching on the item's key hash re-points the request instead of cancelling a
+ * perfectly good one.
+ *
+ * @returns {Promise<number>} how many requests were cancelled
+ */
+export async function reconcileRequestsForOwner(connection, ownerAccountName) {
+  const [rows] = await connection.execute(
+    `SELECT r.id, r.item_kind, r.item_key_hash, r.shared_item_id, r.always_share_id,
+            r.quantity, r.item_name,
+            i.id AS inventory_id,
+            i.item_count AS inventory_count,
+            a.id AS offer_id,
+            replacement.id AS replacement_id,
+            replacement.item_count AS replacement_count
+       FROM itemshare_requests r
+       LEFT JOIN itemshare_shared_items i
+              ON i.id = r.shared_item_id AND i.account_name = r.owner_account_name
+       LEFT JOIN itemshare_always_share a
+              ON a.id = r.always_share_id AND a.account_name = r.owner_account_name
+       LEFT JOIN itemshare_shared_items replacement
+              ON r.item_kind = 'inventory'
+             AND replacement.id = (
+                   SELECT MAX(newer.id)
+                     FROM itemshare_shared_items newer
+                    WHERE newer.account_name = r.owner_account_name
+                      AND newer.item_key_hash = r.item_key_hash
+                 )
+      WHERE r.status = 'pending' AND r.owner_account_name = ?
+      ORDER BY r.created_at ASC, r.id ASC`,
+    [ownerAccountName]
+  );
+
+  const used = new Map();
+  let cancelled = 0;
+
+  for (const row of rows) {
+    if (row.item_kind === 'offer') {
+      if (!row.offer_id) {
+        await cancelRequest(connection, row.id, `${ownerAccountName} withdrew that standing offer.`);
+        cancelled += 1;
+      }
+      // A standing offer has no count to run out of, so nothing else closes it.
+      continue;
+    }
+
+    let itemId = row.inventory_id ? Number(row.inventory_id) : null;
+    let total = row.inventory_id ? Number(row.inventory_count) || 0 : 0;
+
+    if (itemId === null && row.replacement_id) {
+      itemId = Number(row.replacement_id);
+      total = Number(row.replacement_count) || 0;
+      await connection.execute('UPDATE itemshare_requests SET shared_item_id = ? WHERE id = ?', [
+        itemId,
+        row.id,
+      ]);
+    }
+
+    if (itemId === null || total <= 0) {
+      await cancelRequest(
+        connection,
+        row.id,
+        `${ownerAccountName} is no longer sharing ${row.item_name || 'that item'}.`
+      );
+      cancelled += 1;
+      continue;
+    }
+
+    const taken = used.get(itemId) || 0;
+
+    if (taken + Number(row.quantity) > total) {
+      await cancelRequest(
+        connection,
+        row.id,
+        taken > 0
+          ? `${ownerAccountName} has ${total} of ${row.item_name || 'that item'} and every one is already spoken for.`
+          : `${ownerAccountName} now has ${total} of ${row.item_name || 'that item'}, which does not cover the ${row.quantity} you asked for.`
+      );
+      cancelled += 1;
+      continue;
+    }
+
+    used.set(itemId, taken + Number(row.quantity));
+  }
+
+  return cancelled;
+}
+
+/**
+ * The item a request is aimed at, as the requester is allowed to see it. Null when
+ * it is not theirs to ask for: an invisible item must not be requestable any more
+ * than it is listable.
+ */
+export async function getRequestTarget(connection, accountNames, itemKind, targetId) {
+  const names = viewerAccountNames(accountNames);
+  const id = Number(targetId);
+
+  if (names.length === 0 || !Number.isFinite(id) || id <= 0) {
+    return null;
+  }
+
+  if (itemKind === 'offer') {
+    const [rows] = await connection.execute(
+      `SELECT DISTINCT a.id, a.account_name, a.item_name, a.item_id, a.item_key_hash,
+              a.quality, a.item_type_name
+         ${visibleAlwaysShareFrom(names)}
+        WHERE ${alwaysShareVisibilityClause(names)} AND a.id = ?
+        LIMIT 1`,
+      [...names, ...names, id]
+    );
+
+    return rows[0] || null;
+  }
+
+  const [rows] = await connection.execute(
+    `SELECT DISTINCT i.id, i.account_name, i.item_name, i.item_id, i.item_key_hash,
+            i.quality, i.item_type_name, i.item_count
+       ${visibleItemsFrom(names)}
+      WHERE ${itemsVisibilityClause(names)} AND i.id = ?
+      LIMIT 1`,
+    [...names, ...names, id]
+  );
+
+  return rows[0] || null;
+}
+
+/**
+ * The requester's account that shares a guild with the owner: that is the character
+ * the handover would actually happen on, so it is the one worth recording.
+ */
+async function closestRequesterAccount(connection, mine, ownerAccountName) {
+  if (mine.length === 0) {
+    return '';
+  }
+
+  const [rows] = await connection.execute(
+    `SELECT viewer.account_name
+       FROM itemshare_account_guilds viewer
+       JOIN itemshare_account_guilds owner ON owner.guild_id = viewer.guild_id
+      WHERE owner.account_name = ? AND viewer.account_name IN (${inClause(mine)})
+      ORDER BY viewer.account_name ASC
+      LIMIT 1`,
+    [ownerAccountName, ...mine]
+  );
+
+  return rows[0] ? rows[0].account_name : '';
+}
+
+/**
+ * Records that someone wants part of a stack.
+ *
+ * The quantity is checked against what is left after the requests already waiting,
+ * not against the raw count, so two people cannot both be promised the same five.
+ * A standing offer is a promise rather than a count, so it always means one.
+ *
+ * @returns {Promise<{id: number, quantity: number, itemName: string, ownerAccountName: string}>}
+ */
+export async function createRequest(
+  connection,
+  { userId, requesterAccounts, itemKind, itemId, quantity }
+) {
+  const kind = itemKind === 'offer' ? 'offer' : 'inventory';
+  const target = await getRequestTarget(connection, requesterAccounts, kind, itemId);
+  const mine = viewerAccountNames(requesterAccounts);
+
+  if (!target) {
+    const error = new Error('That item is not shared with you, so there is nothing to request.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (mine.includes(String(target.account_name))) {
+    const error = new Error('That item is already yours.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  let wanted = Math.max(1, Math.trunc(Number(quantity) || 1));
+
+  if (kind === 'inventory') {
+    const total = Number(target.item_count) || 0;
+    const reserved = await reservedQuantity(connection, 'inventory', Number(target.id));
+    const available = Math.max(0, total - reserved);
+
+    if (available <= 0) {
+      const error = new Error('Every copy of that item has already been asked for.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    if (wanted > available) {
+      const error = new Error(
+        available === 1
+          ? 'Only one is left to ask for.'
+          : `Only ${available} are left to ask for${reserved > 0 ? ` (${reserved} of ${total} already requested)` : ''}.`
+      );
+      error.statusCode = 409;
+      throw error;
+    }
+  } else {
+    wanted = 1;
+  }
+
+  const requesterAccount =
+    (await closestRequesterAccount(connection, mine, target.account_name)) || mine[0] || '';
+
+  const [inserted] = await connection.execute(
+    `INSERT INTO itemshare_requests
+       (requester_user_id, requester_account_name, owner_account_name, item_kind,
+        shared_item_id, always_share_id, item_key_hash, item_name, item_id, quality,
+        item_type_name, quantity)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      Number(userId),
+      requesterAccount,
+      target.account_name,
+      kind,
+      kind === 'inventory' ? Number(target.id) : null,
+      kind === 'offer' ? Number(target.id) : null,
+      target.item_key_hash || '',
+      target.item_name || '',
+      Number(target.item_id) || 0,
+      Number(target.quality) || 0,
+      target.item_type_name || '',
+      wanted,
+    ]
+  );
+
+  return {
+    id: Number(inserted.insertId),
+    quantity: wanted,
+    itemName: target.item_name || 'that item',
+    ownerAccountName: target.account_name,
+  };
+}
+
+/** Everything one person has asked for, still waiting first. */
+export async function getRequesterRequests(connection, userId) {
+  const [rows] = await connection.execute(
+    `SELECT id, item_kind, item_name, item_id, quality, item_type_name, owner_account_name,
+            requester_account_name, quantity, status, status_reason, created_at, closed_at
+       FROM itemshare_requests
+      WHERE requester_user_id = ?
+      ORDER BY (status = 'pending') DESC, created_at DESC
+      LIMIT 50`,
+    [Number(userId)]
+  );
+
+  return rows;
+}
+
+/** Takes back a request that has not been handed over yet. */
+export async function cancelOwnRequest(connection, { userId, requestId }) {
+  const [result] = await connection.execute(
+    `UPDATE itemshare_requests
+        SET status = 'cancelled', status_reason = 'You cancelled it.', closed_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND requester_user_id = ? AND status = 'pending'`,
+    [Number(requestId), Number(userId)]
+  );
+
+  return Number(result.affectedRows || 0) > 0;
 }

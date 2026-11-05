@@ -276,11 +276,56 @@ if (listRegion) {
   }
 
   listRegion.addEventListener('click', (event) => {
-    const tab = event.target.closest ? event.target.closest('[data-tab]') : null;
+    const closest = (selector) => (event.target.closest ? event.target.closest(selector) : null);
+    const tab = closest('[data-tab]');
 
     if (tab) {
       event.preventDefault();
       setTab(tab.dataset.tab, { focus: true });
+      return;
+    }
+
+    // A column heading is also the sort control: clicking sorts by it, clicking
+    // again reverses. The list is fetched instead of reloading the page.
+    const sortLink = closest('[data-sort]');
+
+    if (sortLink) {
+      event.preventDefault();
+      sortState = {
+        field: sortLink.dataset.sort,
+        dir: sortLink.dataset.dir === 'desc' ? 'desc' : 'asc',
+      };
+
+      const params = new URLSearchParams(window.location.search);
+      params.set('sort', sortState.field);
+
+      if (sortState.dir === 'desc') {
+        params.set('dir', 'desc');
+      } else {
+        params.delete('dir');
+      }
+
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', `/?${params.toString()}`);
+      }
+
+      scheduleRefresh(0);
+      return;
+    }
+
+    const requestButton = closest('[data-request]');
+
+    if (requestButton) {
+      event.preventDefault();
+      openRequestDialog(requestButton);
+      return;
+    }
+
+    const cancelButton = closest('[data-cancel-request]');
+
+    if (cancelButton) {
+      event.preventDefault();
+      cancelOwnRequest(cancelButton);
     }
   });
 
@@ -308,6 +353,19 @@ if (listRegion) {
   // address bar keeps up, so a reload or a live refresh uses the same filters.
   const filterForm = document.querySelector('[data-filters]');
 
+  // The sort order is not a filter, so it is not in the form; it is kept here and
+  // re-applied with whatever the form says, which is why changing a filter never
+  // silently resets the order the reader chose.
+  let sortState = (() => {
+    const params = new URLSearchParams(window.location.search);
+    const sort = params.get('sort');
+
+    return {
+      field: sort === 'name' || sort === 'added' ? sort : 'type',
+      dir: params.get('dir') === 'desc' ? 'desc' : 'asc',
+    };
+  })();
+
   function applyFilters() {
     if (!filterForm) {
       return;
@@ -321,6 +379,14 @@ if (listRegion) {
         params.set(field.name, value);
       }
     });
+
+    if (sortState.field !== 'type') {
+      params.set('sort', sortState.field);
+
+      if (sortState.dir === 'desc') {
+        params.set('dir', 'desc');
+      }
+    }
 
     const query = params.toString();
 
@@ -450,6 +516,7 @@ if (listRegion) {
     restoreAnchor(anchor);
     setLiveState(liveState);
     setTab(activeTab);
+    noteClosedRequests();
   }
 
   async function refresh() {
@@ -494,6 +561,207 @@ if (listRegion) {
   }
 
   refreshListsSoon = (delay = 0) => scheduleRefresh(delay);
+
+  // ---------------------------------------------------------------- requests
+  // The button carries how many are still unspoken for, so the dialog cannot offer
+  // a number that is not there. One, the whole stack, or anything in between - the
+  // last two only when the owner has more than one.
+  let dialog = null;
+  const knownClosed = new Set();
+  let requestsPrimed = false;
+
+  function escapeText(value) {
+    const node = document.createElement('span');
+    node.textContent = String(value || '');
+    return node.innerHTML;
+  }
+
+  function closeRequestDialog() {
+    if (dialog) {
+      dialog.remove();
+      dialog = null;
+    }
+
+    document.removeEventListener('keydown', onDialogKey);
+  }
+
+  function onDialogKey(event) {
+    if (event.key === 'Escape') {
+      closeRequestDialog();
+    }
+  }
+
+  function openRequestDialog(button) {
+    const kind = button.dataset.kind === 'offer' ? 'offer' : 'inventory';
+    const max = Math.max(1, Number(button.dataset.max) || 1);
+    const stack = Math.max(max, Number(button.dataset.stack) || max);
+    const name = button.dataset.name || 'that item';
+    const choices = kind === 'inventory' && max > 1;
+
+    closeRequestDialog();
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="requestTitle">
+        <h2 id="requestTitle">Ask for ${escapeText(name)}</h2>
+        <p class="muted">${
+          kind === 'offer'
+            ? 'This is a standing offer, so it means one copy.'
+            : `${max} still unspoken for${stack > max ? ` of ${stack}` : ''}.`
+        }</p>
+        <form class="request-form" data-request-form>
+          ${
+            choices
+              ? `<label class="request-option"><input type="radio" name="how" value="one" checked> Just one</label>
+                 <label class="request-option"><input type="radio" name="how" value="stack"> The whole stack (${max})</label>
+                 <label class="request-option"><input type="radio" name="how" value="number">
+                   <input class="request-number" type="number" name="quantity" min="1" max="${max}" value="${max}" aria-label="How many"> of them
+                 </label>`
+              : '<label class="request-option"><input type="radio" name="how" value="one" checked> One</label>'
+          }
+          <div class="modal-actions">
+            <button class="filter-clear" type="button" data-close-dialog>Cancel</button>
+            <button class="primary-button" type="submit">Send request</button>
+          </div>
+        </form>
+      </div>`;
+
+    document.body.appendChild(backdrop);
+    dialog = backdrop;
+    document.addEventListener('keydown', onDialogKey);
+
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop || (event.target.closest && event.target.closest('[data-close-dialog]'))) {
+        closeRequestDialog();
+      }
+    });
+
+    const numberInput = backdrop.querySelector('.request-number');
+
+    if (numberInput) {
+      backdrop.querySelectorAll('input[name="how"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          if (radio.checked && radio.value === 'number') {
+            numberInput.focus();
+            numberInput.select();
+          }
+        });
+      });
+    }
+
+    const form = backdrop.querySelector('[data-request-form]');
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+      const how = form.querySelector('input[name="how"]:checked');
+      let quantity = 1;
+
+      if (choices && how && how.value === 'stack') {
+        quantity = max;
+      } else if (choices && how && how.value === 'number') {
+        quantity = Math.min(max, Math.max(1, Number(numberInput.value) || 1));
+      }
+
+      closeRequestDialog();
+      sendRequest({ kind, id: button.dataset.id, quantity, name });
+    });
+
+    const first = backdrop.querySelector('input[name="how"]');
+
+    if (first) {
+      first.focus();
+    }
+  }
+
+  async function sendRequest({ kind, id, quantity, name }) {
+    try {
+      const response = await fetch('/requests', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ kind, id, quantity }),
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result.error || `That request failed with status ${response.status}`);
+      }
+
+      showToast(
+        quantity > 1 ? `Asked for ${quantity} of ${name}.` : `Asked for ${name}.`,
+        'ok'
+      );
+      refreshAfterChange();
+    } catch (error) {
+      showToast(error.message, 'err');
+    }
+  }
+
+  async function cancelOwnRequest(button) {
+    try {
+      const response = await fetch(`/requests/${encodeURIComponent(button.dataset.id)}/cancel`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result.error || 'That request could not be cancelled.');
+      }
+
+      showToast('Request cancelled.', 'ok');
+      refreshAfterChange();
+    } catch (error) {
+      showToast(error.message, 'err');
+    }
+  }
+
+  // A request can be closed by someone else's upload, which arrives as an ordinary
+  // list refresh. The first pass only records what is already closed, so opening the
+  // page does not announce history; after that, anything newly cancelled is news.
+  function noteClosedRequests() {
+    const closed = Array.from(
+      listRegion.querySelectorAll('[data-my-request][data-status="cancelled"]')
+    );
+    const fresh = [];
+
+    for (const row of closed) {
+      const id = row.dataset.requestId;
+
+      if (!id || knownClosed.has(id)) {
+        continue;
+      }
+
+      knownClosed.add(id);
+
+      if (requestsPrimed) {
+        fresh.push(row);
+      }
+    }
+
+    if (!requestsPrimed) {
+      requestsPrimed = true;
+      return;
+    }
+
+    if (fresh.length > 0) {
+      showToast(
+        fresh
+          .map(
+            (row) =>
+              `Your request for ${row.dataset.requestName || 'an item'} was cancelled: ${
+                row.dataset.requestReason || 'the owner no longer has it.'
+              }`
+          )
+          .join('\n'),
+        'err'
+      );
+    }
+  }
+
+  noteClosedRequests();
 
   // ------------------------------------------------------------------- socket
   const socket = typeof window.io === 'function' ? window.io({ withCredentials: true }) : null;

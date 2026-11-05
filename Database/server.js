@@ -19,9 +19,12 @@ import { describeConnectionFailure, openDatabase, readConfig } from './lib/datab
 import { cacheItemIcons, getCachedIcon, resolveMissingIconPaths } from './lib/icons.js';
 import { backfillItemIcons } from './lib/iconBackfill.js';
 import {
+  cancelOwnRequest,
+  createRequest,
   fillKnownIcons,
   getAccountSummary,
   getAlwaysShareForViewer,
+  getRequesterRequests,
   getSharedItemsForViewer,
   getViewerAccounts,
   getViewerFacets,
@@ -146,12 +149,42 @@ async function withDatabase(handler) {
   }
 }
 
+const SORT_FIELDS = new Set(['type', 'name', 'added']);
+const ADDED_WINDOWS = new Set(['1', '7', '30']);
+
 function readFilters(query) {
+  const sort = readParam(query.sort);
+  const dir = readParam(query.dir);
+  const added = readParam(query.added);
+
   return {
     type: readParam(query.type),
     owner: readParam(query.owner),
     search: readParam(query.q),
+    // Only the values the list actually offers get through, so a hand-typed ?sort=
+    // or ?added= falls back to the default instead of reaching the query.
+    added: ADDED_WINDOWS.has(added) ? added : '',
+    sort: SORT_FIELDS.has(sort) && sort !== 'type' ? sort : 'type',
+    dir: dir === 'desc' ? 'desc' : 'asc',
   };
+}
+
+// One person can own several ESO accounts; every account linked to them contributes
+// guilds, and the items stay labelled with the account that holds them. The session
+// copy is the fallback for a site running with sign-in turned off.
+async function viewerAccountNames(req, connection, user) {
+  let names = [];
+
+  if (user) {
+    const linked = await getViewerAccounts(connection, user.id);
+    names = linked.map((row) => row.eso_account_name);
+  }
+
+  if (names.length === 0 && Array.isArray(req.session.accountNames)) {
+    names = req.session.accountNames.slice();
+  }
+
+  return names;
 }
 
 // The item list is loaded twice: once as part of the page, and once on its own when
@@ -166,6 +199,7 @@ async function collectViewerData(req, filters) {
     accounts: [],
     sharedItems: [],
     alwaysShare: [],
+    requests: [],
     facets: { types: [], owners: [] },
     filters,
     dbError: null,
@@ -173,18 +207,7 @@ async function collectViewerData(req, filters) {
 
   try {
     await withDatabase(async (connection) => {
-      // One person can own several ESO accounts; every account linked to them
-      // contributes guilds, and the items stay labelled with their account.
-      let accountNames = [];
-
-      if (user) {
-        const linked = await getViewerAccounts(connection, user.id);
-        accountNames = linked.map((row) => row.eso_account_name);
-      }
-
-      if (accountNames.length === 0 && Array.isArray(req.session.accountNames)) {
-        accountNames = req.session.accountNames.slice();
-      }
+      const accountNames = await viewerAccountNames(req, connection, user);
 
       if (accountNames.length === 0) {
         return;
@@ -201,6 +224,7 @@ async function collectViewerData(req, filters) {
       data.facets = await getViewerFacets(connection, accountNames);
       data.sharedItems = await getSharedItemsForViewer(connection, accountNames, filters);
       data.alwaysShare = await getAlwaysShareForViewer(connection, accountNames, filters);
+      data.requests = user ? await getRequesterRequests(connection, user.id) : [];
     });
   } catch (error) {
     data.dbError = error.message;
@@ -226,6 +250,81 @@ app.get('/items', async (req, res) => {
 
   res.set('Cache-Control', 'no-store');
   res.type('html').send(renderListRegion(data));
+});
+
+// Asking for an item. The quantity is picked in a dialog, so this answers in JSON
+// and the page refreshes its own lists; the socket tells everyone else.
+app.post('/requests', async (req, res) => {
+  const user = req.session ? req.session.user || null : null;
+
+  if (enabledProviders.length > 0 && !user) {
+    res.status(401).json({ error: 'Sign in before asking for an item.' });
+    return;
+  }
+  if (!user) {
+    res.status(400).json({ error: 'Requests need a signed-in account, or nobody would know who asked.' });
+    return;
+  }
+
+  const itemKind = req.body.kind === 'offer' ? 'offer' : 'inventory';
+  const itemId = Number(req.body.id);
+  const quantity = Number(req.body.quantity || 1);
+
+  if (!Number.isFinite(itemId) || itemId <= 0) {
+    res.status(400).json({ error: 'That request did not name an item.' });
+    return;
+  }
+
+  try {
+    const outcome = await withDatabase(async (connection) => {
+      const accountNames = await viewerAccountNames(req, connection, user);
+
+      if (accountNames.length === 0) {
+        const error = new Error('Upload your own file first: an ESO account is needed to ask from.');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      return createRequest(connection, {
+        userId: user.id,
+        requesterAccounts: accountNames,
+        itemKind,
+        itemId,
+        quantity,
+      });
+    });
+
+    // Everyone looking at that stack needs the new count straight away.
+    notifyItemsChanged('request');
+    res.json({ ok: true, ...outcome });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+app.post('/requests/:id/cancel', async (req, res) => {
+  const user = req.session ? req.session.user || null : null;
+
+  if (!user) {
+    res.status(401).json({ error: 'Sign in to change your requests.' });
+    return;
+  }
+
+  try {
+    const done = await withDatabase((connection) =>
+      cancelOwnRequest(connection, { userId: user.id, requestId: Number(req.params.id) })
+    );
+
+    if (!done) {
+      res.status(404).json({ error: 'That request is not waiting any more.' });
+      return;
+    }
+
+    notifyItemsChanged('request');
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
 });
 
 // Icons were fetched from UESP once, at upload time, and live in MariaDB now.
@@ -498,6 +597,8 @@ app.post('/upload', upload.single('savedvars'), async (req, res) => {
       accountCount: outcome.length,
       itemCount: outcome.reduce((sum, entry) => sum + entry.itemCount, 0),
       alwaysShareCount: outcome.reduce((sum, entry) => sum + entry.alwaysShareCount, 0),
+      removedItems: outcome.reduce((sum, entry) => sum + (entry.removedItems || 0), 0),
+      cancelledRequests: outcome.reduce((sum, entry) => sum + (entry.cancelledRequests || 0), 0),
       totalQuantity: outcome.reduce((sum, entry) => sum + entry.totalQuantity, 0),
       guildCount: parsed.guilds.size,
       iconLookup,
