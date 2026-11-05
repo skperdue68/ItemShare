@@ -1331,9 +1331,12 @@ export async function getDraftBasket(connection, userId) {
  * it is waiting.
  */
 export async function submitDrafts(connection, { userId }) {
+  // UTC, so the one moment a request was sent means the same thing read from any
+  // machine. `NOW()` would record the server's local wall clock in a DATETIME column,
+  // which has no time zone to recover it from later.
   const [result] = await connection.execute(
     `UPDATE itemshare_requests
-        SET status = 'pending', submitted_at = NOW(), expires_at = NULL
+        SET status = 'pending', submitted_at = UTC_TIMESTAMP(), expires_at = NULL
       WHERE requester_user_id = ? AND status = 'draft' AND expires_at > NOW()`,
     [Number(userId)]
   );
@@ -1693,14 +1696,20 @@ export async function getRequesterRequests(connection, userId) {
     `SELECT r.id, r.item_kind, r.item_name, r.item_id, r.icon_key, r.quality,
             r.item_type_name, r.trait, r.owner_account_name, r.requester_account_name,
             r.quantity, r.status, r.status_reason, r.created_at, r.closed_at, r.submitted_at,
+            -- The moment it was sent, as UTC text, so no driver time zone can
+            -- reinterpret it on the way to the browser.
+            DATE_FORMAT(r.submitted_at, '%Y-%m-%dT%H:%i:%sZ') AS submitted_at_iso,
             (ic.icon_key IS NOT NULL) AS has_icon
        FROM itemshare_requests r
        LEFT JOIN itemshare_item_icons ic ON ic.icon_key = r.icon_key
       WHERE r.requester_user_id = ?
-        -- Only requests that were actually sent. A basket item that was removed or
-        -- timed out was never asked for, so it is not part of this history.
-        AND r.submitted_at IS NOT NULL
-      ORDER BY r.created_at DESC, r.id DESC
+        -- Anything that was sent, whatever became of it afterwards. A basket item
+        -- that was removed or timed out before sending was never asked for, so it is
+        -- not history; a request that reached pending (or closed later) is, even if
+        -- an older version never stamped submitted_at on it.
+        AND (r.submitted_at IS NOT NULL
+             OR r.status IN ('pending', 'fulfilled', 'declined', 'expired'))
+      ORDER BY COALESCE(r.submitted_at, r.created_at) DESC, r.id DESC
       LIMIT 50`,
     [Number(userId)]
   );
@@ -1753,7 +1762,7 @@ export async function cancelOwnRequest(
 ) {
   const [rows] = await connection.execute(
     `SELECT id, status, item_name, owner_account_name FROM itemshare_requests
-      WHERE id = ? AND requester_user_id = ? AND status IN ('draft', 'pending')
+      WHERE id = ? AND requester_user_id = ?
       LIMIT 1`,
     [Number(requestId), Number(userId)]
   );
@@ -1770,7 +1779,19 @@ export async function cancelOwnRequest(
     };
   }
 
-  const wasDraft = row.status === 'draft';
+  // A request that has been sent belongs to the record now. The owner may already
+  // have read it and put a copy aside, so taking it back is not the requester's
+  // decision any more; the row stays in their history with whatever became of it.
+  if (row.status !== 'draft') {
+    return {
+      cancelled: false,
+      sentAlready: true,
+      wasDraft: false,
+      itemName: row.item_name || '',
+      ownerAccountName: row.owner_account_name || '',
+      basket: await getDraftBasket(connection, userId),
+    };
+  }
 
   await connection.execute(
     `UPDATE itemshare_requests
@@ -1778,17 +1799,11 @@ export async function cancelOwnRequest(
             status_reason = ?,
             expires_at = NULL,
             closed_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND requester_user_id = ? AND status IN ('draft', 'pending')`,
-    [
-      wasDraft ? 'You removed it before sending.' : 'You cancelled it.',
-      Number(requestId),
-      Number(userId),
-    ]
+      WHERE id = ? AND requester_user_id = ? AND status = 'draft'`,
+    ['You removed it before sending.', Number(requestId), Number(userId)]
   );
 
-  if (wasDraft) {
-    await resetBasketClock(connection, userId, minutes);
-  }
+  await resetBasketClock(connection, userId, minutes);
 
   return {
     cancelled: true,

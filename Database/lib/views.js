@@ -58,6 +58,61 @@ export function dateTimeText(value) {
   return `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}, ${hours}:${minutes}`;
 }
 
+/**
+ * Request times are kept in UTC and shown in the reader's own clock.
+ *
+ * The value that goes into the page is a UTC ISO stamp; app.js rewrites the text
+ * with `toLocaleString`, so the reader's time zone (not the server's) decides what
+ * they see. The text inside the element is the same moment in UTC, which is what a
+ * browser with scripting off, or a reader of the source, gets.
+ */
+export function utcIsoText(value) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) {
+    return value;
+  }
+
+  const date =
+    value instanceof Date
+      ? value
+      : /^\d+$/.test(String(value))
+        ? new Date(Number(value) * 1000)
+        : new Date(String(value));
+
+  // Milliseconds are noise here: the database column has whole seconds, so every
+  // stamp is trimmed to the same shape whether it arrived as text or as a Date.
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** The same moment written as UTC, for a browser that does not run the script. */
+export function utcText(value) {
+  const iso = utcIsoText(value);
+
+  if (!iso) {
+    return '';
+  }
+
+  const date = new Date(iso);
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+
+  return `${date.getUTCDate()} ${MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCFullYear()}, ${hours}:${minutes} UTC`;
+}
+
+/** When a request was sent: a `<time>` the browser localises, with a UTC fallback. */
+function sentTimeCell(request) {
+  const iso = utcIsoText(request.submitted_at_iso || request.submitted_at);
+
+  if (!iso) {
+    return '&mdash;';
+  }
+
+  return `<time datetime="${escapeHtml(iso)}" data-local-time>${escapeHtml(utcText(iso))}</time>`;
+}
+
 function parseDate(value) {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -771,7 +826,7 @@ function myRequestRows(requests, { basket = false, showSent = false } = {}) {
 
       return `
         <tr data-my-request data-request-id="${Number(request.id)}"
-            ${basket ? 'data-basket-row="1"' : ''}
+            ${basket ? 'data-basket-row="1"' : 'data-history-row="1"'}
             data-status="${escapeHtml(request.status)}"
             data-request-name="${escapeHtml(request.item_name || 'that item')}"
             data-request-reason="${escapeHtml(request.status_reason || '')}">
@@ -794,24 +849,21 @@ function myRequestRows(requests, { basket = false, showSent = false } = {}) {
           <td class="num">${Number(request.quantity) || 1}</td>
           ${
             showSent
-              ? `<td class="sent-cell" title="When this request was sent">${dateTimeText(
-                  request.submitted_at || request.created_at
-                )}</td>`
+              ? `<td class="sent-cell">${sentTimeCell(request)}</td>`
               : ''
           }
           <td>${requestStatusPill(request)}</td>
           <td class="action-cell">${
+            // Only a basket row can be taken back. A sent request is a record: the
+            // owner may already have read it and set a copy aside, so there is no
+            // Remove or Cancel button for it, here or on the server.
             removed
               ? ''
-              : isDraft
+              : isDraft && basket
                 ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
                     request.id
                   )}">Remove</button>`
-                : request.status === 'pending' && !basket
-                  ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
-                      request.id
-                    )}">Cancel</button>`
-                  : ''
+                : ''
           }</td>
         </tr>`;
     })
@@ -909,9 +961,10 @@ function myRequestsPanel(requests, basketRows = []) {
       ? ''
       : `<h3 class="subhead">Already sent</h3>
     <p class="muted">
-      Newest first. What you ask for is held for you until the owner hands it over; if
-      their file no longer contains the item, or the rest of the stack goes first, the
-      request closes here and says why.
+      Newest first, kept after they are sent. What you ask for is held for you until the
+      owner hands it over; if their file no longer contains the item, or the rest of the
+      stack goes first, the request closes here and says why.
+      Times are shown in your own time zone; the database keeps them in UTC.
     </p>
     ${requestTable(history, { showSent: true })}`;
 

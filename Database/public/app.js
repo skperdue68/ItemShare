@@ -655,8 +655,17 @@ if (listRegion) {
       return;
     }
 
+    const rowTops = captureRowTops(listRegion);
+    const panelHeights = Array.from(listRegion.querySelectorAll('[data-panel]')).map((panel) =>
+      panel.getBoundingClientRect().height
+    );
+
     listRegion.innerHTML = next.innerHTML;
+
     restoreAnchor(anchor);
+    animatePanelHeights(listRegion, panelHeights);
+    animateRowsInto(listRegion, rowTops);
+    localiseTimeLabels(listRegion);
     setLiveState(liveState);
     setTab(activeTab);
     noteClosedRequests();
@@ -1173,6 +1182,155 @@ window.addEventListener('beforeunload', (event) => {
   return event.returnValue;
 });
 
+// ------------------------------------------------------------------ row motion
+// Removing a row is a layout change for every row under it, and that jump is what
+// makes a filtered or refreshed list feel like it resized. Every removal and every
+// refresh measures where the rows were, changes the DOM, then plays the difference
+// back as a short slide from the old position to the new one; rows that are new
+// fade in. Filters use the same machinery, and a panel's height is animated too, so
+// the page below the table does not jump either. Nothing runs when the reader has
+// asked for less motion.
+const ROW_SLIDE_MS = 340;
+const ROW_FADE_MS = 200;
+
+function prefersReducedMotion() {
+  return Boolean(
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
+function motionRowKey(row) {
+  if (row.dataset.itemKey) {
+    return row.dataset.itemKey;
+  }
+
+  return row.dataset.requestId ? `request:${row.dataset.requestId}` : '';
+}
+
+function captureRowTops(root) {
+  const tops = new Map();
+
+  root.querySelectorAll('tr').forEach((row) => {
+    const key = motionRowKey(row);
+
+    if (key) {
+      tops.set(key, row.getBoundingClientRect().top);
+    }
+  });
+
+  return tops;
+}
+
+/** Slides rows from where they were to where they now are; fades rows that are new. */
+function animateRowsInto(root, tops) {
+  if (!tops || tops.size === 0 || prefersReducedMotion()) {
+    return;
+  }
+
+  root.querySelectorAll('tr').forEach((row) => {
+    const key = motionRowKey(row);
+
+    if (!key || typeof row.animate !== 'function') {
+      return;
+    }
+
+    const before = tops.get(key);
+
+    if (before === undefined) {
+      row.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: ROW_FADE_MS,
+        easing: 'ease-out',
+      });
+      return;
+    }
+
+    const delta = before - row.getBoundingClientRect().top;
+
+    if (Math.abs(delta) < 1) {
+      return;
+    }
+
+    row.animate(
+      [
+        { transform: `translateY(${delta}px)`, opacity: 0.65 },
+        { transform: 'none', opacity: 1 },
+      ],
+      { duration: ROW_SLIDE_MS, easing: 'cubic-bezier(.22,.8,.24,1)' }
+    );
+  });
+}
+
+/** Takes a row out and lets the rows under it slide up into the gap. */
+function removeRowWithSlide(row) {
+  const table = row.closest('table');
+  const tops = table ? captureRowTops(table) : null;
+
+  row.remove();
+
+  if (table) {
+    animateRowsInto(table, tops);
+  }
+}
+
+/** Animates a panel's height so a table that grows or shrinks does not jump. */
+function animatePanelHeights(root, heights) {
+  if (!heights || prefersReducedMotion()) {
+    return;
+  }
+
+  Array.from(root.querySelectorAll('[data-panel]')).forEach((panel, index) => {
+    const before = heights[index];
+
+    if (!before || panel.hidden || typeof panel.animate !== 'function') {
+      return;
+    }
+
+    const after = panel.getBoundingClientRect().height;
+
+    if (Math.abs(after - before) < 2) {
+      return;
+    }
+
+    panel.style.overflow = 'hidden';
+
+    const animation = panel.animate(
+      [{ height: `${before}px` }, { height: `${after}px` }],
+      { duration: ROW_SLIDE_MS + 60, easing: 'cubic-bezier(.22,.8,.24,1)' }
+    );
+
+    animation.addEventListener('finish', () => {
+      panel.style.overflow = '';
+    });
+  });
+}
+
+/** Request times arrive as UTC ISO stamps and are shown in the reader's clock. */
+function localiseTimeLabels(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') {
+    return;
+  }
+
+  root.querySelectorAll('time[data-local-time]').forEach((element) => {
+    const iso = element.getAttribute('datetime');
+    const date = iso ? new Date(iso) : null;
+
+    if (!date || Number.isNaN(date.getTime())) {
+      return;
+    }
+
+    element.textContent = date.toLocaleString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    element.title = `Kept in UTC as ${iso.replace('T', ' ').replace('Z', '').trim()} UTC`;
+  });
+}
+
+localiseTimeLabels(document);
+
 // ------------------------------------------------------- removed basket rows
 // Taking something out of the basket leaves the row where it was, marked cancelled,
 // for five seconds, so the removal is visible instead of the row just vanishing.
@@ -1238,7 +1396,7 @@ function sweepClosedRequestRows() {
     // A live refresh rebuilds this table from the database, so a row this browser has
     // already seen out must not come back and sit here again.
     if (removedRequestRows.has(id)) {
-      row.remove();
+      removeRowWithSlide(row);
       return;
     }
 
@@ -1256,7 +1414,7 @@ function sweepClosedRequestRows() {
     closingRequestRows.delete(id);
     rememberDismissedRow(id);
     row.classList.add('row-fading');
-    window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
+    window.setTimeout(() => removeRowWithSlide(row), CLOSED_ROW_FADE_MS);
   });
 }
 
@@ -1305,7 +1463,7 @@ function sweepExhaustedRows() {
     // A refresh in the last seconds of the fade rebuilds the row; the one this page
     // has already seen out must not come back for another turn.
     if (exhaustedRowKeys.has(key)) {
-      row.remove();
+      removeRowWithSlide(row);
       return;
     }
 
@@ -1318,7 +1476,7 @@ function sweepExhaustedRows() {
       }
 
       row.classList.add('row-fading');
-      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
+      window.setTimeout(() => removeRowWithSlide(row), CLOSED_ROW_FADE_MS);
     }, wait);
   });
 }
