@@ -20,13 +20,29 @@ function qualityColor(quality) {
   return QUALITY_COLORS[Number.isFinite(index) ? Math.max(0, Math.min(5, index)) : 0];
 }
 
-function seenDate(value) {
-  const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
+// A date the list can sort on and a person can read. MariaDB hands TIMESTAMP
+// columns back as Date objects and the addon writes Unix seconds, so both are
+// accepted; the parts are read in local time, because "the day it was added" is a
+// calendar question, not a UTC one.
+export function dayText(value) {
+  if (value === null || value === undefined || value === '') {
     return '';
   }
-  const date = new Date(seconds * 1000);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+
+  const date =
+    value instanceof Date
+      ? value
+      : /^\d+$/.test(String(value))
+        ? new Date(Number(value) * 1000)
+        : new Date(String(value));
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 // Two initials, the way an avatar reads at a glance. Discord names are one word
@@ -239,10 +255,63 @@ function accountsCard(accounts, user) {
     </section>`;
 }
 
+// The windows the Added filter offers. Anything else in the address bar falls back
+// to "any time" rather than reaching the query.
+const ADDED_WINDOWS = [
+  { days: '1', label: 'The last day' },
+  { days: '7', label: 'The last 7 days' },
+  { days: '30', label: 'The last 30 days' },
+];
+
+/**
+ * The address for this list with something changed. Sort links use it so they keep
+ * the filters that are on, and so a click still works with scripts off.
+ */
+function listHref(filters, overrides = {}) {
+  const merged = { ...(filters || {}), ...overrides };
+  const params = new URLSearchParams();
+
+  if (merged.type) params.set('type', merged.type);
+  if (merged.owner) params.set('owner', merged.owner);
+  if (merged.search) params.set('q', merged.search);
+  if (merged.added) params.set('added', merged.added);
+
+  const sort = merged.sort || 'type';
+  if (sort !== 'type') {
+    params.set('sort', sort);
+    if (merged.dir === 'desc') {
+      params.set('dir', 'desc');
+    }
+  }
+
+  const query = params.toString();
+  return query ? `/?${query}` : '/';
+}
+
+/**
+ * A column heading that is also the sort control: clicking it sorts by that column
+ * and clicking it again reverses. The arrow says which way round it is now, and
+ * aria-sort says the same thing to a screen reader.
+ */
+function sortHeader(label, field, filters, className = '') {
+  const sort = (filters && filters.sort) || 'type';
+  const dir = (filters && filters.dir) === 'desc' ? 'desc' : 'asc';
+  const active = sort === field;
+  const nextDir = active && dir === 'asc' ? 'desc' : 'asc';
+  const arrow = active ? (dir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
+  const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
+
+  return `<th${className ? ` class="${className}"` : ''} aria-sort="${ariaSort}"><a class="sort-link${
+    active ? ' active' : ''
+  }" data-sort="${field}" data-dir="${nextDir}" href="${escapeHtml(
+    listHref(filters, { sort: field, dir: nextDir })
+  )}">${escapeHtml(label)}${arrow}</a></th>`;
+}
+
 function filterBar(facets, filters) {
   const types = facets?.types || [];
   const owners = facets?.owners || [];
-  const active = filters || { type: '', owner: '', search: '' };
+  const active = filters || { type: '', owner: '', search: '', added: '' };
 
   if (types.length === 0 && owners.length === 0) {
     return '';
@@ -262,6 +331,11 @@ function filterBar(facets, filters) {
     )
     .join('');
 
+  const addedOptions = ADDED_WINDOWS.map(
+    (window) =>
+      `<option value="${window.days}"${active.added === window.days ? ' selected' : ''}>${window.label}</option>`
+  ).join('');
+
   // Filters apply as soon as they change (app.js), so there is no button to forget
   // to press. The submit button exists for the one case that needs it: scripts off.
   return `
@@ -276,6 +350,12 @@ function filterBar(facets, filters) {
         <span class="filter-label">Offered by</span>
         <select name="owner" data-filter>
           <option value="">Anyone</option>${ownerOptions}
+        </select>
+      </label>
+      <label class="filter">
+        <span class="filter-label">Added</span>
+        <select name="added" data-filter>
+          <option value="">Any time</option>${addedOptions}
         </select>
       </label>
       <label class="filter filter-search">
@@ -318,6 +398,34 @@ function ownerCell(item) {
 
 // Guild names are deliberately absent: every row on this page is already there
 // because the viewer and the owner share a guild.
+
+/**
+ * The button that starts a request, or the reason there is none. data-max is what is
+ * left after the requests already waiting - not the raw count - so the dialog can
+ * never offer more than the owner still has unspoken for.
+ */
+function requestCell(item, { mine }) {
+  if (mine) {
+    const asked = Number(item.request_count) || 0;
+    return asked > 0 ? `<span class="reserved-note">${asked} asked for</span>` : '';
+  }
+
+  const total = Number(item.item_count) || 0;
+  const reserved = Number(item.reserved) || 0;
+  const available = Math.max(0, total - reserved);
+  const note = reserved > 0 ? `<span class="reserved-note">${reserved} already asked for</span>` : '';
+
+  if (available <= 0) {
+    return `<span class="claimed-note">All claimed</span>${note}`;
+  }
+
+  return `<button class="request-button" type="button" data-request data-kind="inventory" data-id="${Number(
+    item.id
+  )}" data-max="${available}" data-stack="${total}" data-name="${escapeHtml(
+    item.item_name || ''
+  )}">Request</button>${note}`;
+}
+
 function inventoryRows(items, { mine }) {
   return items
     .map((item) => {
@@ -329,8 +437,9 @@ function inventoryRows(items, { mine }) {
         Number(item.required_cp) > 0 ? `CP ${Number(item.required_cp)}` : '',
         Number(item.required_level) > 0 ? `Level ${Number(item.required_level)}` : '',
         item.location_label ? `owner had it in ${item.location_label}` : '',
-        seenDate(item.last_dumped_at) ? `last seen ${seenDate(item.last_dumped_at)}` : '',
       ]);
+
+      const added = dayText(item.first_seen_at);
 
       return `
         <tr data-item-key="inv:${escapeHtml(item.item_key_hash || item.id)}">
@@ -344,10 +453,14 @@ function inventoryRows(items, { mine }) {
               </div>
             </div>
           </td>
+          <td class="seen-cell" title="The day ${escapeHtml(
+            item.account_name
+          )} first shared it">${added || '&mdash;'}</td>
           <td class="num">${Number(item.item_count) || 0}</td>
           <td>${escapeHtml(item.item_type_name || '')}</td>
           <td>${escapeHtml(item.trait || '')}</td>
           <td>${ownerCell(item)}</td>
+          <td class="action-cell">${requestCell(item, { mine })}</td>
         </tr>`;
     })
     .join('');
@@ -367,29 +480,56 @@ function typeGroups(items) {
   return [...groups.entries()];
 }
 
-function inventoryTable(items, options) {
-  const body = typeGroups(items)
-    .map(
-      ([typeName, rows]) => `
+function inventoryTable(items, { mine, filters = {} }) {
+  // Grouping by type is a sort order of its own; once the list is sorted by name or
+  // by date, headings in the middle of it would only interrupt the order asked for.
+  const grouped = (filters.sort || 'type') === 'type';
+
+  const body = grouped
+    ? typeGroups(items)
+        .map(
+          ([typeName, rows]) => `
         <tr class="type-row">
-          <td colspan="5">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
+          <td colspan="7">${escapeHtml(typeName)} <span class="type-count">${rows.length}</span></td>
         </tr>
-        ${inventoryRows(rows, options)}`
-    )
-    .join('');
+        ${inventoryRows(rows, { mine })}`
+        )
+        .join('')
+    : inventoryRows(items, { mine });
 
   return `
     <div class="table-shell">
       <table>
         <thead>
-          <tr><th>Item</th><th class="num">Qty</th><th>Type</th><th>Trait</th><th>Offered by</th></tr>
+          <tr>
+            ${sortHeader('Item', 'name', filters)}
+            ${sortHeader('Added', 'added', filters, 'seen-cell')}
+            <th class="num">Qty</th>
+            <th>Type</th>
+            <th>Trait</th>
+            <th>Offered by</th>
+            <th class="action-cell"><span class="visually-hidden">Ask for it</span></th>
+          </tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
     </div>`;
 }
 
-function offerRows(items) {
+function offerRequestCell(item, { mine }) {
+  if (mine) {
+    const asked = Number(item.request_count) || 0;
+    return asked > 0 ? `<span class="reserved-note">${asked} asked for</span>` : '';
+  }
+
+  return `<button class="request-button" type="button" data-request data-kind="offer" data-id="${Number(
+    item.id
+  )}" data-max="1" data-stack="1" data-name="${escapeHtml(
+    item.item_name || ''
+  )}">Request one</button>`;
+}
+
+function offerRows(items, { mine }) {
   return items
     .map((item) => {
       const details = metaLine([
@@ -397,8 +537,9 @@ function offerRows(items) {
         item.set_name,
         item.trait,
         Number(item.in_inventory) === 1 ? 'has one in a bag right now' : '',
-        Number(item.first_added_at) > 0 ? `offered since ${seenDate(item.first_added_at)}` : '',
       ]);
+
+      const added = dayText(item.first_seen_at);
 
       return `
         <tr data-item-key="offer:${escapeHtml(item.item_key_hash || item.id)}">
@@ -411,18 +552,27 @@ function offerRows(items) {
               </div>
             </div>
           </td>
+          <td class="seen-cell">${added || '&mdash;'}</td>
           <td>${ownerCell(item)}</td>
+          <td class="action-cell">${offerRequestCell(item, { mine })}</td>
         </tr>`;
     })
     .join('');
 }
 
-function offerTable(items) {
+function offerTable(items, { mine, filters = {} }) {
   return `
     <div class="table-shell">
       <table>
-        <thead><tr><th>Item</th><th>Offered by</th></tr></thead>
-        <tbody>${offerRows(items)}</tbody>
+        <thead>
+          <tr>
+            ${sortHeader('Item', 'name', filters)}
+            ${sortHeader('Added', 'added', filters, 'seen-cell')}
+            <th>Offered by</th>
+            <th class="action-cell"><span class="visually-hidden">Ask for it</span></th>
+          </tr>
+        </thead>
+        <tbody>${offerRows(items, { mine })}</tbody>
       </table>
     </div>`;
 }
@@ -442,27 +592,108 @@ export function listRegionSignature({ accounts = [], facets = {} } = {}) {
   return createHash('sha1').update(payload).digest('hex').slice(0, 12);
 }
 
+function requestStatusPill(request) {
+  const labels = {
+    pending: 'Waiting',
+    cancelled: 'Cancelled',
+    fulfilled: 'Handed over',
+    declined: 'Declined',
+  };
+  const status = String(request.status || 'pending');
+
+  return `<span class="status-pill status-${escapeHtml(status)}">${escapeHtml(
+    labels[status] || status
+  )}</span>`;
+}
+
+function myRequestRows(requests) {
+  return requests
+    .map(
+      (request) => `
+        <tr data-my-request data-request-id="${Number(request.id)}"
+            data-status="${escapeHtml(request.status)}"
+            data-request-name="${escapeHtml(request.item_name || 'that item')}"
+            data-request-reason="${escapeHtml(request.status_reason || '')}">
+          <td>
+            <span class="item-name" style="color:${qualityColor(request.quality)}">${escapeHtml(
+        request.item_name || 'Item'
+      )}</span>
+            <span class="item-meta">${metaLine([
+              request.item_type_name,
+              request.item_kind === 'offer' ? 'from a standing offer' : 'from their bags',
+              request.status !== 'pending' ? request.status_reason : '',
+            ])}</span>
+          </td>
+          <td><span class="owner">${escapeHtml(request.owner_account_name)}</span></td>
+          <td class="num">${Number(request.quantity) || 1}</td>
+          <td>${requestStatusPill(request)}</td>
+          <td class="action-cell">${
+            request.status === 'pending'
+              ? `<button class="link-button" type="button" data-cancel-request data-id="${Number(
+                  request.id
+                )}">Cancel</button>`
+              : ''
+          }</td>
+        </tr>`
+    )
+    .join('');
+}
+
+function myRequestsPanel(requests) {
+  if (!requests || requests.length === 0) {
+    return `<p class="muted">You have not asked for anything yet. Everything other members of your guilds are sharing is on the Request tab, where you can ask for one, for a number, or for the whole stack.</p>`;
+  }
+
+  return `
+    <p class="muted">
+      First asked, first served. What you ask for is held for you until the owner hands it
+      over; if their file no longer contains the item, or the rest of the stack goes first,
+      the request closes here and says why.
+    </p>
+    <div class="table-shell">
+      <table>
+        <thead>
+          <tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Status</th>
+              <th class="action-cell"><span class="visually-hidden">Actions</span></th></tr>
+        </thead>
+        <tbody>${myRequestRows(requests)}</tbody>
+      </table>
+    </div>`;
+}
+
 /**
- * The two lists, inside one element the browser can replace without touching the
- * filters, the upload card or the reader's place in either list.
+ * The three lists, inside one element the browser can replace without touching the
+ * filters, the upload card or the reader's place in a list.
  *
- * Request is what other people share and you can ask for; Offering is your own. The
- * split is why no row needs a "You" tag: which tab it is in already says whose it is.
+ * Request is what other people share and you can ask for, Offering is your own, and
+ * Your requests is what you asked others for and what became of it. The split is why
+ * no row needs a "You" tag: which tab it is in already says whose it is.
  */
-export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters }) {
+export function renderListRegion({
+  accounts,
+  sharedItems,
+  alwaysShare,
+  facets,
+  filters,
+  requests,
+}) {
   if (!accounts || accounts.length === 0) {
     return '';
   }
 
   const myAccounts = new Set(accounts.map((account) => account.accountName));
   const requestable = (sharedItems || []).filter((item) => !myAccounts.has(item.account_name));
-  const mine = (sharedItems || []).filter((item) => myAccounts.has(item.account_name));
+  const myItems = (sharedItems || []).filter((item) => myAccounts.has(item.account_name));
   const othersOffers = (alwaysShare || []).filter((item) => !myAccounts.has(item.account_name));
   const myOffers = (alwaysShare || []).filter((item) => myAccounts.has(item.account_name));
+  const myRequests = requests || [];
 
-  const activeFilters = Boolean(filters?.type || filters?.owner || filters?.search);
+  const activeFilters = Boolean(
+    filters?.type || filters?.owner || filters?.search || filters?.added
+  );
   const requestCount = requestable.length + othersOffers.length;
-  const offerCount = mine.length + myOffers.length;
+  const offerCount = myItems.length + myOffers.length;
+  const waitingCount = myRequests.filter((request) => request.status === 'pending').length;
 
   const empty = (fallback) =>
     `<p class="muted">${
@@ -471,27 +702,33 @@ export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, f
 
   const requestBody =
     requestCount === 0
-      ? empty('Nothing is being shared by other members of your guilds right now. Whatever they share appears here on its own.')
-      : `${requestable.length > 0 ? inventoryTable(requestable, { mine: false }) : ''}${
+      ? empty(
+          'Nothing is being shared by other members of your guilds right now. Whatever they share appears here on its own.'
+        )
+      : `${requestable.length > 0 ? inventoryTable(requestable, { mine: false, filters }) : ''}${
           othersOffers.length > 0
             ? `<h3 class="subhead">Standing offers</h3>
                <p class="muted">They will hand these out whenever they have one, even when it is not in a bag today.</p>
-               ${offerTable(othersOffers)}`
+               ${offerTable(othersOffers, { mine: false, filters })}`
             : ''
         }`;
 
   const offerBody =
     offerCount === 0
-      ? empty('You are not offering anything yet. Upload your file and the items you share in game appear here.')
-      : `${mine.length > 0 ? inventoryTable(mine, { mine: true }) : ''}${
+      ? empty(
+          'You are not offering anything yet. Upload your file and the items you share in game appear here.'
+        )
+      : `${myItems.length > 0 ? inventoryTable(myItems, { mine: true, filters }) : ''}${
           myOffers.length > 0
             ? `<h3 class="subhead">Your standing offers</h3>
-               ${offerTable(myOffers)}`
+               ${offerTable(myOffers, { mine: true, filters })}`
             : ''
         }`;
 
   return `
-    <div class="item-lists" id="itemLists" data-signature="${escapeHtml(listRegionSignature({ accounts, facets }))}">
+    <div class="item-lists" id="itemLists" data-signature="${escapeHtml(
+      listRegionSignature({ accounts, facets })
+    )}">
       <section class="card">
         <div class="list-head">
           <div class="tabs" role="tablist" aria-label="Item lists">
@@ -503,6 +740,10 @@ export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, f
                     aria-selected="false" tabindex="-1" data-tab="offer">
               Offering <span class="tab-count">${offerCount}</span>
             </button>
+            <button class="tab" type="button" role="tab" id="tabMine" aria-controls="panelMine"
+                    aria-selected="false" tabindex="-1" data-tab="mine">
+              Your requests <span class="tab-count">${waitingCount}</span>
+            </button>
           </div>
           <span class="live-pill" data-live="wait" hidden>Live</span>
         </div>
@@ -510,7 +751,9 @@ export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, f
         <div class="list-panel" id="panelRequest" role="tabpanel" aria-labelledby="tabRequest" data-panel="request">
           ${
             requestCount > 0
-              ? `<p class="muted">${requestable.length} item${requestable.length === 1 ? '' : 's'} shared by other members of your guilds. Quantities are what each owner last reported.</p>`
+              ? `<p class="muted">${requestable.length} item${
+                  requestable.length === 1 ? '' : 's'
+                } shared by other members of your guilds. Counts are what each owner last reported, less whatever has already been asked for.</p>`
               : ''
           }
           ${requestBody}
@@ -518,6 +761,10 @@ export function renderListRegion({ accounts, sharedItems, alwaysShare, facets, f
 
         <div class="list-panel" id="panelOffer" role="tabpanel" aria-labelledby="tabOffer" data-panel="offer" hidden>
           ${offerBody}
+        </div>
+
+        <div class="list-panel" id="panelMine" role="tabpanel" aria-labelledby="tabMine" data-panel="mine" hidden>
+          ${myRequestsPanel(myRequests)}
         </div>
       </section>
     </div>`;
@@ -597,7 +844,9 @@ function uploadCard() {
       <h2>Share your file</h2>
       <p class="muted">
         Drop <code>ItemShareSavedVars.lua</code> here or click to choose it - it uploads as
-        soon as it is picked, and replaces your guilds and items in full. The file lives in
+        soon as it is picked. Everything in the file is written first and only then are the
+        items it no longer mentions removed, so nothing blinks out of the list in between.
+        The file lives in
         <code>Documents\\Elder Scrolls Online\\live\\SavedVariables\\</code>.
       </p>
       <label class="drop-zone" id="dropZone" for="savedvars">
@@ -608,7 +857,17 @@ function uploadCard() {
     </section>`;
 }
 
-export function renderPage({ user, providers, accounts, sharedItems, alwaysShare, facets, filters, dbError }) {
+export function renderPage({
+  user,
+  providers,
+  accounts,
+  sharedItems,
+  alwaysShare,
+  facets,
+  filters,
+  requests,
+  dbError,
+}) {
   const canUpload = !dbError && (!providers || providers.length === 0 || user);
   // Nothing is listed before the first upload: an account with no guilds shares no
   // guild with anybody, so it has nothing it could legitimately be shown.
@@ -623,7 +882,7 @@ export function renderPage({ user, providers, accounts, sharedItems, alwaysShare
     ${accountsCard(accounts, user)}
 
     ${bar ? `<section class="card card-filters">${bar}</section>` : ''}
-    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters })}`;
+    ${renderListRegion({ accounts, sharedItems, alwaysShare, facets, filters, requests })}`;
 
   return pageShell({ user, providers, content });
 }

@@ -106,9 +106,14 @@ signing in with Google. Unverified addresses are never used to merge people.
 - ItemShare 1.4.0 also saves the item id and the game's icon path for each entry,
   which is what feeds the thumbnails and the UESP links. Files from older versions
   import fine; those rows simply carry no icon until they are uploaded again.
-- Every upload **fully replaces** the items stored for that account: the previous
-  rows are deleted and rewritten in one transaction, so un-sharing items in game
-  and re-uploading removes them here too.
+- An upload **fills in, then prunes**. Every item in the file is written where it
+  already stands - same row, same id, same first-seen date - and only afterwards are
+  the rows the file no longer mentions deleted. Nothing blinks out of the list
+  between one upload and the next, and anything pointing at a row (a guild link, an
+  open request) keeps pointing at it. Un-sharing an item in game and re-uploading
+  still removes it here. The mark the prune uses is `upload_id`: everything the file
+  mentions is stamped with the new upload, so a row still holding an older id was
+  not in this file. All of it happens in one transaction.
 - Quantity is stored per item in `item_count`, and the upload total in
   `itemshare_uploads.total_quantity`.
 - The first upload from a signed-in person links their identity to the ESO
@@ -121,22 +126,61 @@ signing in with Google. Unverified addresses are never used to merge people.
 
 Any Discord or Google account can sign in; it only establishes identity. Once one or more
 ESO accounts are linked to it, the page lists every shared item offered to any
-guild any of those accounts belongs to, alphabetically, with the owning account,
-character, quantity, item type, trait and the guilds it is visible through. Items
-held by any of the viewer's own accounts are tagged `You`, and the summary card
-shows each linked account with its own totals and guilds.
+guild any of those accounts belongs to, with the owning account, character,
+quantity, item type and trait.
 
-Items are grouped by type (Weapon, Apparel, Furnishing, …) and alphabetical inside
-each group. A filter bar above the table narrows the list by item type, owner
-account and item name. Filters are ordinary query parameters
-(`/?type=Weapon&owner=@Name&q=sword`), so a filtered view can be bookmarked.
+The list is split into tabs - *Request* (other people's items), *Offering* (your own)
+and *Your requests* - so no row needs a `You` tag: the tab already says whose it is.
 
-The list refreshes automatically after an upload.
+Rows are grouped by type (Weapon, Apparel, Furnishing, …) and alphabetical inside
+each group by default. The **Item** and **Added** headings sort the list, and clicking
+one again reverses it; sorting by either drops the type headings, so the order you
+asked for is the order you get.
+
+`Added` is the day that item first entered its owner's shared list - the day they
+offered it. It is deliberately not the day of their latest upload, so re-uploading a
+long-held item does not make it look new.
+
+A filter bar above the table narrows the list by item type, owner account, how
+recently it was added (the last day, 7 days, 30 days) and item name. Filters are
+ordinary query parameters (`/?type=Weapon&owner=@Name&added=7&q=sword&sort=added&dir=desc`),
+so a filtered, sorted view can be bookmarked.
+
+The list refreshes automatically after an upload, and a request being cancelled
+reaches the person who asked the same way.
 
 Visibility joins three tables: the item's own guilds
 (`itemshare_shared_item_guilds`), the viewer's guilds
 (`itemshare_account_guilds`), and the guild names (`itemshare_guilds`). Nothing
 is readable without a guild overlap, so an account in no guilds sees nothing.
+
+## Asking for something
+
+Every row in *Request* has a **Request** button. It opens a small dialog offering one,
+the whole stack, or any number in between. The largest number offered is what is
+still unspoken for rather than the raw `item_count`, so two people can never be
+promised the same five. A standing offer has no count behind it, so it always means
+one copy.
+
+A request is a **reservation, not a delivery**:
+
+- Pending requests are summed per item and the row shows what is left. Once every
+  copy is spoken for the button becomes *All claimed*.
+- After every upload the owner's pending requests are settled oldest first, because
+  they were promised first. One whose item has gone, or whose turn the stack no
+  longer reaches, is cancelled with a sentence the requester can read: "Ghost Bane
+  now has 2 of Briarheart Dagger, which does not cover the 3 you asked for." A row
+  that merely moved (the item changed character, or was re-shared) is re-pointed by
+  `item_key_hash` instead of being cancelled.
+- *Your requests* lists what you asked for, waiting first, with the reason anything
+  closed. When a live update brings back a cancellation the page also says so in a
+  toast, once: opening the page does not replay old ones.
+- A requester can cancel their own waiting request. The owner sees "2 asked for" on
+  the row.
+
+Everything here is recorded server-side; the browser never decides how many are
+left. Handing an item over in game is not recorded yet, so nothing moves from
+*Waiting* to *Handed over* and nobody is emailed - see *Not done yet*.
 
 ## Item icons
 
@@ -218,6 +262,9 @@ every account is replaced inside one transaction, each with its own guilds.
 | `itemshare_guilds` | Guild ID → name, the stable identity for a guild |
 | `itemshare_shared_items` | One row per shared item per character |
 | `itemshare_shared_item_guilds` | Which guilds each shared item is offered to |
+| `itemshare_always_share` | Standing offers: items the owner will hand out whenever they have one |
+| `itemshare_always_share_guilds` | Which guilds each standing offer is shown in |
+| `itemshare_requests` | Who asked for what, how many, and how it ended |
 
 Guild IDs come from the addon (1.3.0+; `/ishare guilds` shows what was captured).
 Names are display only, because names are neither unique nor stable.
@@ -235,15 +282,17 @@ member's view. `getOwnerNotificationEmail(connection, accountName)` is the singl
 server-side helper for finding an owner's address when a request needs to notify
 them.
 
-Sending mail is not wired up yet, because the request flow does not exist. When it
-lands it will need mail credentials in `.env` (SMTP or an API key); nothing about
-the capture side needs to change.
+Sending mail is not wired up yet: requests are recorded, but nobody is emailed
+about them. When that lands it will need mail credentials in `.env` (SMTP or an API
+key); nothing about the capture side needs to change.
 
 ## Not done yet (next step)
 
-Requesting items is out of scope. The schema is shaped for it: a request would
-reference `itemshare_shared_items.id` and reuse the same guild overlap check as
-the item list.
+**Handing a request over.** Requests are recorded, reserved and cancelled correctly,
+but nothing yet marks one as delivered, and an owner is not told that somebody asked:
+no mail, and no in-page notice of their own. `itemshare_requests.status`
+(`pending` / `cancelled` / `fulfilled` / `declined`) and `closed_at` are in place for
+that step.
 
 Item icons are not shown. ESO icon art is keyed by icon name rather than the item
 ID in the link, so quality colour, type and trait are displayed instead of
@@ -341,9 +390,17 @@ handled by one process would otherwise never reach the sockets held by another.
 - **Uploads start on their own.** Dropping `ItemShareSavedVars.lua` on the upload
   card, or picking it with the file chooser, uploads it straight away. A toast says
   the file has been received and is being processed, then summarises what landed.
-- **Two tabs.** *Request* is what other people in your guilds are sharing; *Offering*
-  is your own items and your own standing offers. That split is why no row carries a
+- **Three tabs.** *Request* is what other people in your guilds are sharing,
+  *Offering* is your own items and your own standing offers, and *Your requests* is
+  what you asked others for and what became of it. That split is why no row carries a
   "You" tag - which tab it is in already says whose it is.
+- **Sort by clicking a heading.** *Item* and *Added* sort the table, and clicking the
+  same heading again reverses it. *Added* also has its own filter (day / 7 days /
+  30 days) for finding what is new.
+- **Ask for what you need.** Requestable rows have a Request button: one, the whole
+  stack, or any number up to what is still unclaimed. What you ask for is held for
+  you, shown under *Your requests*, and cancelled with a reason if the owner's file
+  stops containing the item.
 - **Nothing is listed before your first upload.** Items are shared through guilds,
   so until your account and its guilds are known there is nothing anyone could
   legitimately show you.
