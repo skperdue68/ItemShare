@@ -780,3 +780,54 @@ a.primary-button {
   object-fit: cover;
   border-radius: 50%;
 }
+
+/* Live updates. The pill stays hidden until the socket has something to say, so a
+   reader without scripts is never told a list is live when it cannot be. */
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.live-pill[hidden] {
+  display: none;
+}
+
+.live-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.live-pill[data-live="live"] {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+}
+
+.live-pill[data-live="live"]::before {
+  opacity: 1;
+  background: #4ade80;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.16);
+}
+
+.live-pill[data-live="wait"] {
+  color: #fcd34d;
+  border-color: rgba(252, 211, 77, 0.4);
+}
+
+.live-pill[data-live="off"] {
+  color: var(--muted);
+}

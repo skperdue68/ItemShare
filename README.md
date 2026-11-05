@@ -295,3 +295,38 @@ FLUSH PRIVILEGES;
 Leave the password inside `PASSWORD(...)` as the plain text one from `Database/.env`; MariaDB hashes it. If `Access denied for user ...` comes back instead, the plugin is fine and the password or the host grant is wrong — check that the account may connect from this machine's address, not just `localhost`.
 
 **`Sign-in providers: none`** — `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` (or the `GOOGLE_*` pair) are empty. Discord also needs `DISCORD_REDIRECT_URI` registered under OAuth2 -> Redirects in the Discord application, and the same URL must be the one the browser is sent to.
+
+## Live updates
+
+The item list updates itself when somebody else uploads. Socket.IO runs on the same
+HTTP server as the site, under `/socket.io`, so there is no second port and no extra
+proxy rule.
+
+The socket deliberately carries **no item data**: it only says "something you can see
+has changed". Each open page then re-fetches `/items` — the same query the page was
+built from, with the viewer's own session cookie — and swaps just that region into
+the page. Visibility therefore stays in exactly one place (`lib/store.js`), and a
+mistake in the push path cannot show another guild's items.
+
+Uploads broadcast after the rows are committed, and again if new icons were fetched.
+The icon backfill announces its own repairs, so a picture that was missing earlier
+appears without a reload.
+
+### Staying where you were
+
+A redraw that jumps to the top of the table is worse than a stale row, so every row
+is marked with its stable `item_key_hash` (`data-item-key="inv:…"` / `"offer:…"`).
+Before the swap the page notes which row crosses a line about a third of the way
+down the viewport and how far it sits from that line. After the swap it finds the
+same row and scrolls by the difference, so the reader keeps their exact place.
+
+If that item was removed, the row that moved up into its slot is used instead: the
+reader lands one item down the list rather than at the top. If the change adds or
+removes an item type or an owner, the filter controls would be out of date, so the
+page reloads and restores the same row from session storage.
+
+### One process
+
+The broadcast is in-process. Running several Node processes against the same
+database needs a shared Socket.IO adapter (`@socket.io/mysql`), because an upload
+handled by one process would otherwise never reach the sockets held by another.
