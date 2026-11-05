@@ -1,5 +1,11 @@
 const APP_TITLE = 'ESO Item Share';
-const EXPECTED_WINDOWS_PATH = String.raw`Documents\Elder Scrolls Online\live\SavedVariables\ItemShareSavedVars.lua`;
+// The location is only advice: a web page and an Apps Script dialog cannot read the
+// local file system, so the exact home directory is the browser's business. Windows
+// and macOS/Linux spell the same place differently, so both are shown.
+const EXPECTED_PATHS = [
+  String.raw`Documents\Elder Scrolls Online\live\SavedVariables\ItemShareSavedVars.lua`,
+  String.raw`~/Documents/Elder Scrolls Online/live/SavedVariables/ItemShareSavedVars.lua`
+];
 
 const MASTER_SHEET_NAME = 'Master';
 const BATCH_UPDATE_FLAG_KEY = 'ITEMSHARE_BATCH_UPDATING';
@@ -75,7 +81,7 @@ function showUploadDialog() {
 function getUploaderConfig() {
   return {
     appTitle: APP_TITLE,
-    expectedWindowsPath: EXPECTED_WINDOWS_PATH
+    expectedPaths: EXPECTED_PATHS
   };
 }
 

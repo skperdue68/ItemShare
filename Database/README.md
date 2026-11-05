@@ -562,7 +562,8 @@ Everything runs from `Database/`, through the `package.json` scripts:
 | --- | --- |
 | `npm start` | The site: migrations on boot, the request sweeper, the icon repair timer, sockets |
 | `npm run check` | Parses `SampleData/Sample1/ItemShareSavedVars.lua` without touching the database |
-| `npm run ingest -- <file>` | Imports one saved variables file from the command line |
+| `npm run ingest` | Imports the saved variables file found under your home directory |
+| `npm run ingest -- <file-or-folder>` | Imports a file, or the `SavedVariables` folder holding it, from any location |
 | `npm run backfill` | Retries item icons now instead of waiting for the timer |
 | `npm run seed:demo` | Adds `@DemoTrader` to your guilds so *Request* has rows; `-- --remove` takes it out |
 | `npm run simulate` | Drives three fake people through real asks, sends, timeouts and re-saves |
@@ -574,6 +575,8 @@ Nothing needs it to be inferred from the site afterwards.
 ## Command line equivalent
 
 ```bash
+node ingest.js                                                        # found under your home directory
+node ingest.js "D:/Users/skper/Documents/Elder Scrolls Online/live/SavedVariables"  # a folder is enough
 node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua           # import
 node ingest.js ../SampleData/Sample1/ItemShareSavedVars.lua --dry-run  # parse only
 node backfillIcons.js --dry-run                                       # what lacks an icon
@@ -589,6 +592,28 @@ longer embeds the image.
 
 The command line importer handles multi-account files exactly like the website:
 every account is replaced inside one transaction, each with its own guilds.
+
+### Finding the saved variables file
+
+With no path, the importer works the location out from the home directory instead of
+from a hard-coded drive, so the same command is right on Windows, macOS and Linux.
+`os.homedir()` is the base: `%USERPROFILE%` on Windows - which is why a Users folder
+that has been moved to another drive (`D:\Users\skper`) resolves correctly - and
+`$HOME` on macOS and Linux. From there it tries, in order:
+
+1. `Documents` under `%OneDrive%`, `%OneDriveConsumer%` and `%OneDriveCommercial%`,
+   because Windows moves Documents into OneDrive and the game writes there afterwards;
+2. `~/Documents` and `~/OneDrive/Documents`;
+3. the Steam Proton prefix on Linux, where ESO's `Documents` folder lives inside the
+   prefix (`~/.steam/steam/steamapps/compatdata/306130/pfx/drive_c/users/steamuser/Documents`).
+
+Within each of those it checks `Elder Scrolls Online/live`, then `liveeu`, then `pts`,
+for `SavedVariables/ItemShareSavedVars.lua`. The first file that exists is used, and if
+none does the error lists every path it tried. A pasted path may be the file or just
+the `SavedVariables` folder; the file name is appended when a folder is given.
+
+Go through the Google Sheets uploader instead and none of this applies: there the
+browser hands the file over, which is the only way a web page can read it at all.
 
 ## Tables
 

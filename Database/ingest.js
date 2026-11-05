@@ -4,12 +4,21 @@
 // website upload: each run fully replaces the items and guilds of every ESO
 // account found in the file, inside one transaction.
 //
-//   node ingest.js <path to ItemShareSavedVars.lua> [--dry-run]
+//   node ingest.js [path to ItemShareSavedVars.lua or its SavedVariables folder] [--dry-run]
+//
+// With no path it looks for the file in the ESO folder under this user's home
+// directory, so the same command works on Windows, macOS and Linux.
 
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import 'dotenv/config';
 
+import {
+  SAVED_VARIABLES_FILE,
+  findSavedVariablesFile,
+  homeDirectory,
+  savedVariablesCandidates,
+} from './lib/savedVarsPath.js';
 import { extractShareData } from './lib/savedVars.js';
 import { openDatabase, readConfig } from './lib/database.js';
 import { cacheItemIcons, resolveMissingIconPaths } from './lib/icons.js';
@@ -25,18 +34,47 @@ function groupByAccount(items) {
   }
   return groups;
 }
+/**
+ * A pasted path may be the file itself or the SavedVariables folder holding it; the
+ * file name never changes, so a folder is accepted and the name appended.
+ */
+async function resolveGivenPath(given) {
+  const absolute = path.resolve(given);
+
+  try {
+    const stats = await stat(absolute);
+    if (stats.isDirectory()) {
+      return path.join(absolute, SAVED_VARIABLES_FILE);
+    }
+  } catch {
+    // Not there: report the path as given so the error names what was typed.
+  }
+
+  return absolute;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const filePath = args.find((arg) => !arg.startsWith('--'));
 
-  if (!filePath) {
-    console.error('Usage: node ingest.js <ItemShareSavedVars.lua> [--dry-run]');
+  const absolutePath = filePath ? await resolveGivenPath(filePath) : await findSavedVariablesFile();
+
+  if (!absolutePath) {
+    console.error(`Could not find ${SAVED_VARIABLES_FILE} under your home directory (${homeDirectory() || 'home unknown'}).`);
+    console.error('Looked in:');
+    for (const candidate of savedVariablesCandidates()) {
+      console.error(`  ${candidate}`);
+    }
+    console.error('Pass the file, or its SavedVariables folder, as an argument to use another location.');
     process.exitCode = 1;
     return;
   }
 
-  const absolutePath = path.resolve(filePath);
+  if (!filePath) {
+    console.log('No path given, so this is the file found in the ESO folder under your home directory.');
+  }
+
   const fileText = await readFile(absolutePath, 'utf8');
   const { guilds, accountGuilds, items, alwaysShare, addonVersions, accounts } =
     extractShareData(fileText);
