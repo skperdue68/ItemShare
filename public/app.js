@@ -1032,13 +1032,13 @@ window.addEventListener('beforeunload', (event) => {
 
 // ------------------------------------------------------- removed basket rows
 // Taking something out of the basket leaves the row where it was, marked cancelled,
-// for half a minute, so the removal is visible instead of the row just vanishing.
+// for five seconds, so the removal is visible instead of the row just vanishing.
 // Then it fades and the rows under it close the gap on their own, because they are
 // table rows rather than absolutely placed boxes.
 //
 // Only basket rows do this. A sent request stays in the history for good - that list
 // is the record of what was asked for, newest first.
-const CLOSED_ROW_LINGER_MS = 30000;
+const CLOSED_ROW_LINGER_MS = 5000;
 const CLOSED_ROW_FADE_MS = 600;
 const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
 
@@ -1115,12 +1115,61 @@ const rowRegion = document.getElementById('itemLists');
 if (rowRegion) {
   // The table is replaced wholesale on a live update, so new rows are picked up from
   // the mutation instead of from one pass at load.
-  new MutationObserver(() => sweepClosedRequestRows()).observe(rowRegion, {
+  new MutationObserver(() => {
+    sweepClosedRequestRows();
+    sweepExhaustedRows();
+  }).observe(rowRegion, {
     childList: true,
     subtree: true,
   });
 
   sweepClosedRequestRows();
+}
+
+// ------------------------------------------------------------ rows that ran out
+// A row whose every copy was asked for and sent has nothing left to offer. It stays
+// just long enough to be seen going, then fades and the rows under it close up. The
+// server keeps sending it for the same few seconds and then stops (EXHAUSTED_ROW_
+// LINGER_MS in lib/store.js), so a refresh cannot bring it back.
+const exhaustedRowKeys = new Set();
+
+function sweepExhaustedRows() {
+  const region = document.getElementById('itemLists');
+
+  if (!region) {
+    return;
+  }
+
+  region.querySelectorAll('[data-exhausted]').forEach((row) => {
+    const key = row.dataset.itemKey || '';
+
+    if (!key) {
+      return;
+    }
+
+    // A refresh in the last seconds of the fade rebuilds the row; the one this page
+    // has already seen out must not come back for another turn.
+    if (exhaustedRowKeys.has(key)) {
+      row.remove();
+      return;
+    }
+
+    exhaustedRowKeys.add(key);
+    const wait = Math.max(0, Number(row.dataset.exhausted) || 5000);
+
+    window.setTimeout(() => {
+      if (!row.isConnected) {
+        return;
+      }
+
+      row.classList.add('row-fading');
+      window.setTimeout(() => row.remove(), CLOSED_ROW_FADE_MS);
+    }, wait);
+  });
+}
+
+if (rowRegion) {
+  sweepExhaustedRows();
 }
 
 // ------------------------------------------------------------- ESO accounts
