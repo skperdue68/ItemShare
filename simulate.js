@@ -2,8 +2,10 @@
 // Pretends a few other people are using the site, so a list with one real owner looks
 // like one with traffic on it.
 //
-//   npm run simulate                     one round of activity
-//   npm run simulate -- --rounds 12 --every 4000
+//   npm run simulate                     keep going until you press Ctrl+C
+//   npm run simulate -- --every 4000     one action every four seconds
+//   npm run simulate -- --rounds 12      stop after twelve actions
+//   npm run simulate -- --once           exactly one action, then exit
 //   npm run simulate -- --only requests  just asking and cancelling
 //   npm run simulate -- --only items     just people re-saving their files
 //   npm run simulate -- --reset          remove the simulated people and their data
@@ -13,7 +15,7 @@
 // person - there is no second implementation to drift.
 //
 // The site holds the socket connections, so the script cannot push on its own. After
-// each round it asks the running site to announce what happened; that needs
+// each action it asks the running site to announce what happened; that needs
 // SIMULATE_TOKEN in Database/.env (the same file the site reads) and the site
 // running. Without it the data still changes - you just see it on the next refresh.
 //
@@ -499,12 +501,44 @@ async function nudge(summary) {
   }
 }
 
+// Ctrl+C stops after the action in flight and cuts the wait short, so stopping is
+// immediate rather than "in up to ten seconds".
+let stopping = false;
+let wake = null;
+
+process.on('SIGINT', () => {
+  stopping = true;
+
+  if (wake) {
+    wake();
+  } else {
+    console.log('\nStopping after this action...');
+  }
+});
+
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      wake = null;
+      resolve();
+    }, ms);
+
+    wake = () => {
+      clearTimeout(timer);
+      wake = null;
+      resolve();
+    };
+  });
 }
 
-const rounds = Math.max(1, Number(valueAfter('--rounds')) || 1);
-const every = Math.max(0, Number(valueAfter('--every')) || 0);
+const once = process.argv.includes('--once');
+const wanted = Number(valueAfter('--rounds'));
+const rounds = once
+  ? 1
+  : Number.isFinite(wanted) && wanted > 0
+    ? Math.trunc(wanted)
+    : Number.POSITIVE_INFINITY;
+const every = Math.max(0, Number(valueAfter('--every')) || (once ? 0 : 10000));
 const only = valueAfter('--only');
 const removing = process.argv.includes('--reset');
 
@@ -582,61 +616,71 @@ try {
         await savePerson(connection, person, guilds);
       }
 
+      const order =
+        only === 'items'
+          ? ['save']
+          : only === 'requests'
+            ? ['request', 'cancel']
+            : ['request', 'cancel', 'save'];
+
       console.log(
         `Simulating ${PEOPLE.length} people into ${guilds.size} guild${
           guilds.size === 1 ? '' : 's'
         } alongside ${mine.join(', ')}.`
       );
       console.log(
-        only ? `Only: ${only}.` : 'Actions: ask for your items, cancel one, re-save a file.'
+        `${only ? `Only ${only}` : 'A mix of asks, cancels and re-saves'}${
+          Number.isFinite(rounds)
+            ? `, ${rounds} action${rounds === 1 ? '' : 's'}`
+            : ', running until you stop it'
+        }${every > 0 ? `, one every ${Math.round(every / 1000)}s` : ''}.`
       );
 
-      for (let round = 1; round <= rounds; round += 1) {
-        const lines = [];
-        const order = ['request', 'cancel', 'save'].filter((action) => !only || action === only);
+      if (!Number.isFinite(rounds) || rounds > 1) {
+        console.log('Press Ctrl+C to stop.');
+      }
 
-        for (const action of order) {
-          const person = PEOPLE[Math.floor(Math.random() * PEOPLE.length)];
+      let acted = 0;
 
-          if (action === 'request') {
-            const done = await requestSomething(connection, person, mine);
+      while (acted < rounds && !stopping) {
+        acted += 1;
 
-            if (done && done.item) {
-              lines.push(
-                `${done.person} asked ${done.owner} for ${done.quantity} x ${done.item}${
-                  done.sent ? '' : ' (still in their basket)'
-                }`
-              );
-            }
-          } else if (action === 'cancel') {
-            const done = await cancelSomething(connection, person);
+        const action = order[Math.floor(Math.random() * order.length)];
+        const person = PEOPLE[Math.floor(Math.random() * PEOPLE.length)];
+        let line = '';
 
-            if (done) {
-              lines.push(`${done.person} cancelled their request for ${done.item}`);
-            }
+        if (action === 'request') {
+          const done = await requestSomething(connection, person, mine);
+
+          if (done && done.item) {
+            line = `${done.person} asked ${done.owner} for ${done.quantity} x ${done.item}${
+              done.sent ? '' : ' (still in their basket)'
+            }`;
           } else {
-            const done = await saveSomething(connection, person, guilds);
-            lines.push(
-              `${done.person} saved again: ${done.items} items, now in ${done.where}`
-            );
+            line = `nothing free to ask for right now (${person.account})`;
           }
+        } else if (action === 'cancel') {
+          const done = await cancelSomething(connection, person);
+          line = done
+            ? `${done.person} cancelled their request for ${done.item}`
+            : `nothing for ${person.account} to cancel`;
+        } else {
+          const done = await saveSomething(connection, person, guilds);
+          line = `${done.person} saved again: ${done.items} items, now in ${done.where}`;
         }
 
-        console.log(`Round ${round}/${rounds}`);
-        for (const line of lines) {
-          console.log(`  ${line}`);
-        }
+        console.log(`[${new Date().toLocaleTimeString()}] ${line}`);
+        console.log(`  live: ${await nudge(line)}`);
 
-        if (lines.length > 0) {
-          console.log(`  live: ${await nudge(lines.join('; '))}`);
-        }
-
-        if (every > 0 && round < rounds) {
+        if (every > 0 && acted < rounds && !stopping) {
           await sleep(every);
         }
       }
 
-      console.log('Done. Undo everything with: npm run simulate -- --reset');
+      console.log(
+        `Stopped after ${acted} action${acted === 1 ? '' : 's'}. ` +
+          'Undo everything with: npm run simulate -- --reset'
+      );
     }
   }
 } finally {

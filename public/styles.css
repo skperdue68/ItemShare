@@ -1281,3 +1281,11 @@ tr.row-fading {
 .item-lists .item-cell {
   gap: 8px;
 }
+
+/* When a request went out. Narrow, muted, never wrapped. */
+.sent-cell {
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
