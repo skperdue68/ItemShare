@@ -1025,11 +1025,15 @@ window.addEventListener('beforeunload', (event) => {
   return event.returnValue;
 });
 
-// ------------------------------------------------------- finished request rows
-// A closed request stays where it was for a minute so the outcome can be read, then
-// fades out; the rows under it close the gap on their own because they are table
-// rows, not absolutely placed boxes.
-const CLOSED_ROW_LINGER_MS = 60000;
+// ------------------------------------------------------- removed basket rows
+// Taking something out of the basket leaves the row where it was, marked cancelled,
+// for half a minute, so the removal is visible instead of the row just vanishing.
+// Then it fades and the rows under it close the gap on their own, because they are
+// table rows rather than absolutely placed boxes.
+//
+// Only basket rows do this. A sent request stays in the history for good - that list
+// is the record of what was asked for, newest first.
+const CLOSED_ROW_LINGER_MS = 30000;
 const CLOSED_ROW_FADE_MS = 600;
 const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
 
@@ -1068,11 +1072,11 @@ function sweepClosedRequestRows() {
     return;
   }
 
-  region.querySelectorAll('[data-my-request]').forEach((row) => {
+  region.querySelectorAll('[data-basket-row]').forEach((row) => {
     const status = row.dataset.status;
     const id = row.dataset.requestId;
 
-    if (!id || status === 'pending' || status === 'draft') {
+    if (!id || status === 'draft') {
       return;
     }
 
