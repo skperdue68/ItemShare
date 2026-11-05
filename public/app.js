@@ -382,6 +382,84 @@ if (listRegion) {
     };
   })();
 
+  // A filter can hold several values, and what is switched on is shown as chips
+  // under the row, so the controls and the chips are built from one place.
+  function chosenValues(name) {
+    const values = [];
+
+    filterForm.querySelectorAll(`[data-filter][name="${name}"]`).forEach((field) => {
+      if (field.type === 'checkbox') {
+        if (field.checked && field.value) {
+          values.push(field.value);
+        }
+        return;
+      }
+
+      const value = String(field.value || '').trim();
+
+      if (value) {
+        values.push(value);
+      }
+    });
+
+    return values;
+  }
+
+  function renderFilterChips() {
+    const row = filterForm.querySelector('[data-filter-chips]');
+
+    if (!row) {
+      return;
+    }
+
+    row.textContent = '';
+
+    ['type', 'owner'].forEach((name) => {
+      chosenValues(name).forEach((value) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'filter-chip';
+        chip.dataset.chipFilter = name;
+        chip.dataset.chipValue = value;
+        chip.title = `Remove the ${value} filter`;
+        chip.setAttribute('aria-label', `Remove the ${value} filter`);
+        chip.append(document.createTextNode(value));
+
+        const cross = document.createElement('span');
+        cross.setAttribute('aria-hidden', 'true');
+        cross.textContent = '\u00d7';
+        chip.appendChild(cross);
+        row.appendChild(chip);
+      });
+    });
+  }
+
+  // Each menu says how many of its values are on, so a closed menu still answers
+  // whether it is doing anything.
+  function renderFilterMenus() {
+    filterForm.querySelectorAll('[data-filter-menu]').forEach((menu) => {
+      const checked = Array.from(
+        menu.querySelectorAll('input[type="checkbox"][data-filter]')
+      ).filter((box) => box.checked);
+      const label = menu.querySelector('.filter-select-label');
+      const badge = menu.querySelector('.filter-count');
+      const allLabel = menu.dataset.allLabel || 'All';
+
+      if (label) {
+        label.textContent =
+          checked.length === 0
+            ? allLabel
+            : checked.length === 1
+              ? checked[0].value
+              : `${checked.length} chosen`;
+      }
+      if (badge) {
+        badge.textContent = String(checked.length);
+        badge.hidden = checked.length === 0;
+      }
+    });
+  }
+
   function applyFilters() {
     if (!filterForm) {
       return;
@@ -389,11 +467,8 @@ if (listRegion) {
 
     const params = new URLSearchParams();
 
-    filterForm.querySelectorAll('[data-filter]').forEach((field) => {
-      const value = String(field.value || '').trim();
-      if (value) {
-        params.set(field.name, value);
-      }
+    ['type', 'owner', 'added', 'q'].forEach((name) => {
+      chosenValues(name).forEach((value) => params.append(name, value));
     });
 
     if (sortState.field !== 'type') {
@@ -403,6 +478,9 @@ if (listRegion) {
         params.set('dir', 'desc');
       }
     }
+
+    renderFilterChips();
+    renderFilterMenus();
 
     const query = params.toString();
 
@@ -417,9 +495,18 @@ if (listRegion) {
     let searchTimer = null;
 
     filterForm.addEventListener('change', (event) => {
-      if (event.target.matches('[data-filter]')) {
-        applyFilters();
+      if (!event.target.matches('[data-filter]')) {
+        return;
       }
+
+      // Picking something in a menu closes it; the chip below shows the result.
+      const menu = event.target.closest('details');
+
+      if (menu && event.target.type === 'checkbox') {
+        menu.open = false;
+      }
+
+      applyFilters();
     });
 
     // Typing filters as it is typed, just slowly enough not to fetch on every key.
@@ -437,16 +524,56 @@ if (listRegion) {
       applyFilters();
     });
 
+    // A chip removes its own value and leaves the rest of the filters alone.
+    filterForm.addEventListener('click', (event) => {
+      const chip = event.target.closest ? event.target.closest('[data-chip-filter]') : null;
+
+      if (!chip) {
+        return;
+      }
+
+      event.preventDefault();
+      const name = chip.dataset.chipFilter;
+      const value = chip.dataset.chipValue;
+
+      filterForm.querySelectorAll(`[data-filter][name="${name}"]`).forEach((field) => {
+        if (field.type === 'checkbox' && field.value === value) {
+          field.checked = false;
+        } else if (field.tagName === 'SELECT' && field.value === value) {
+          field.value = '';
+        }
+      });
+
+      applyFilters();
+    });
+
     const clearButton = filterForm.querySelector('[data-clear-filters]');
 
     if (clearButton) {
       clearButton.addEventListener('click', () => {
         filterForm.querySelectorAll('[data-filter]').forEach((field) => {
-          field.value = '';
+          if (field.type === 'checkbox') {
+            field.checked = false;
+          } else {
+            field.value = '';
+          }
         });
         applyFilters();
       });
     }
+
+    // A click outside a menu closes it, so two open menus never sit over each other
+    // while the reader is trying to use the one underneath.
+    document.addEventListener('click', (event) => {
+      filterForm.querySelectorAll('details[open]').forEach((menu) => {
+        if (!menu.contains(event.target)) {
+          menu.open = false;
+        }
+      });
+    });
+
+    renderFilterChips();
+    renderFilterMenus();
   }
 
   // -------------------------------------------------------- keeping the place
@@ -1055,7 +1182,8 @@ window.addEventListener('beforeunload', (event) => {
 // Only basket rows do this. A sent request stays in the history for good - that list
 // is the record of what was asked for, newest first.
 const CLOSED_ROW_LINGER_MS = 5000;
-const CLOSED_ROW_FADE_MS = 600;
+// Long enough to read as a fade rather than a blink: the row dims and then goes.
+const CLOSED_ROW_FADE_MS = 1200;
 const REMOVED_ROW_KEY = 'itemshare.dismissed-requests';
 
 // Dismissals outlive a reload. Otherwise a refresh rebuilds the table, the request
@@ -1318,6 +1446,66 @@ function placeTipCard() {
   tipCard.style.top = `${Math.round(top)}px`;
 }
 
+// ESO item text carries the game's own colour codes: |cRRGGBB switches colour and
+// |r returns to it, and |H...|h wraps a link nobody can follow from a card. They are
+// read here, after escaping, so a number arrives as a coloured number rather than
+// as "|cffffff10|r". Codes too dark for the card's panel are lifted towards white.
+function esoColour(hex) {
+  const value = parseInt(hex, 16);
+  const channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  const luminance =
+    (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]) / 255;
+
+  if (luminance >= 0.3) {
+    return `#${hex}`;
+  }
+
+  return `#${channels
+    .map((channel) =>
+      Math.round(channel + (255 - channel) * 0.7)
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`;
+}
+
+function esoMarkup(text) {
+  const escaped = String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  let open = 0;
+
+  const coloured = escaped.replace(/\|c([0-9a-fA-F]{6})/g, (match, hex) => {
+    open += 1;
+    return `<span style="color:${esoColour(hex)}">`;
+  });
+
+  const closed = coloured.replace(/\|r/g, () => {
+    if (open <= 0) {
+      return '';
+    }
+
+    open -= 1;
+    return '</span>';
+  });
+
+  return (
+    closed
+      // |H1:item:123|hLabel|h: keep the label and drop the link around it.
+      .replace(/\|H[^|]*\|h/g, '')
+      .replace(/\|h/g, '')
+      // Whatever else starts with a pipe is a code the game understands, not text.
+      .replace(/\|[A-Za-z]/g, '') + '</span>'.repeat(Math.max(0, open))
+  );
+}
+
+function tipText(tag, className, value) {
+  const element = tipElement(tag, className);
+  element.innerHTML = esoMarkup(value);
+  return element;
+}
+
 function renderTipCard(trigger, detail) {
   tipCard.textContent = '';
 
@@ -1339,10 +1527,10 @@ function renderTipCard(trigger, detail) {
     tipCard.appendChild(tipElement('div', 'item-tip-meta', meta));
   }
   if (detail && detail.description) {
-    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.description));
+    tipCard.appendChild(tipText('p', 'item-tip-text', detail.description));
   }
   if (detail && detail.traitDesc) {
-    tipCard.appendChild(tipElement('p', 'item-tip-text', detail.traitDesc));
+    tipCard.appendChild(tipText('p', 'item-tip-text', detail.traitDesc));
   }
 
   if (detail && detail.set && detail.set.name) {
@@ -1353,7 +1541,7 @@ function renderTipCard(trigger, detail) {
     if (Array.isArray(detail.set.bonuses) && detail.set.bonuses.length > 0) {
       const list = document.createElement('ul');
 
-      detail.set.bonuses.forEach((bonus) => list.appendChild(tipElement('li', '', bonus)));
+      detail.set.bonuses.forEach((bonus) => list.appendChild(tipText('li', '', bonus)));
       block.appendChild(list);
     }
 

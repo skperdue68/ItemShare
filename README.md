@@ -281,9 +281,13 @@ the item: an upload rewrites it, so moving something in game and saving again up
 it here without anyone touching the site.
 
 A filter bar above the table narrows the list by item type, owner account, how
-recently it was added (the last day, 7 days, 30 days) and item name. Filters are
-ordinary query parameters (`/?type=Weapon&owner=@Name&added=7&q=sword&sort=added&dir=desc`),
-so a filtered, sorted view can be bookmarked.
+recently it was added (the last day, 7 days, 30 days) and item name. Type and owner
+accept several values at once: each is a menu of tick boxes, and everything ticked
+appears as a chip on one long row under the controls, where clicking a chip takes
+just that value off again. "Clear filters" empties the whole row. Filters are
+ordinary query parameters, repeated once per value
+(`/?type=Weapon&type=Armor&owner=@Name&added=7&q=sword&sort=added&dir=desc`), so a
+filtered, sorted view can be bookmarked and still works with scripts off.
 
 The list refreshes automatically after an upload, and a request being cancelled
 reaches the person who asked the same way.
@@ -499,6 +503,12 @@ The card is placed beside the pointer rather than under it, flips to the other s
 near a window edge, opens on keyboard focus as well as hover, and ignores the pointer
 entirely so it can never steal the hover that opened it.
 
+ESO writes its own colour codes into item text (`|cffffff10|r` for a number in white,
+`|r` to go back to the card's colour). They are read rather than printed, so the game's
+numbers keep the colour the game gave them, link codes lose their link and keep their
+label, and a code too dark to read on the dark panel is lifted towards white. Text with
+no codes is unaffected.
+
 Item type, quality, trait and icon all come from the addon, not from UESP; only the
 description and set bonuses are looked up.
 
@@ -675,11 +685,13 @@ handled by one process would otherwise never reach the sockets held by another.
 
 ## Using the site
 
-- **Filters apply as you change them.** Type, "Offered by" and the item name box
-  update the list immediately; there is no Apply button, and "Clear filters" is a
-  button instead of a link. The address bar keeps up, so a reload or a live update
-  uses the same filters. With scripts off, the form's own submit button appears and
-  everything still works.
+- **Filters apply as you change them, and can hold more than one value.** Type and
+  "Offered by" are tick lists; each ticked value becomes a chip on the row underneath,
+  and clicking a chip removes that value and leaves the rest alone. "Clear filters"
+  is a button, coloured like the destructive action it is, and empties every control
+  at once. There is no Apply button. The address bar keeps up, so a reload or a live
+  update uses the same filters. With scripts off, the form's own submit button
+  appears and everything still works.
 - **Uploads start on their own.** Dropping `ItemShareSavedVars.lua` on the upload
   card, or picking it with the file chooser, uploads it straight away. A toast says
   the file has been received and is being processed, then summarises what landed.
