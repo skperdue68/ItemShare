@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.6"
+local ADDON_VERSION = "1.10.7"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2797,21 +2797,26 @@ local function AddInventoryContextMenu(slot)
 
     -- The reserve belongs to this place: the same item can keep 50 back in the bank
     -- and nothing back in your bags, so the menu speaks for the bag it was opened on.
+    -- A bound item cannot be shared, so a reserve on it would never count and the menu
+    -- offers no way to set one. An existing reserve can still be cleared, because a
+    -- reserve outlives the share it was set beside and would otherwise be stuck.
     local reserveLocationKey = select(1, GetBagLocationInfo(bagId))
     local reserve = GetShareReserve(itemLink, reserveLocationKey)
     if reserve > 0 then
-        AddCustomMenuItem(string.format("Share Reserve: Keep %d Back...", reserve), function()
-            if OpenShareReserveDialog then
-                OpenShareReserveDialog(bagId, slotIndex)
-            end
-        end, MENU_ADD_OPTION_LABEL)
+        if isEligible then
+            AddCustomMenuItem(string.format("Share Reserve: Keep %d Back...", reserve), function()
+                if OpenShareReserveDialog then
+                    OpenShareReserveDialog(bagId, slotIndex)
+                end
+            end, MENU_ADD_OPTION_LABEL)
+        end
         AddCustomMenuItem("Clear Share Reserve", function()
             if ApplyShareReserve then
                 ApplyShareReserve(itemLink, 0, reserveLocationKey)
                 d(string.format("[ItemShare] Share reserve cleared for %s.", tostring(itemName)))
             end
         end, MENU_ADD_OPTION_LABEL)
-    else
+    elseif isEligible then
         AddCustomMenuItem("Share Reserve", function()
             if OpenShareReserveDialog then
                 OpenShareReserveDialog(bagId, slotIndex)
