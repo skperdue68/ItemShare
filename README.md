@@ -59,6 +59,8 @@ If you want to keep some of a stack for yourself, give it a share reserve. The a
 
 The same reserve can be set from the item's right-click menu: **Share Reserve** opens a number box with the item already chosen, refuses anything that is not a whole number of at least 1, and offers **Clear Reserve** once something is kept back.
 
+The menu only offers a reserve on an item that can actually be shared: a bound item has no reserve option, because a reserve on it would never count. An old reserve left on an item that has since become bound can still be cleared from the same menu.
+
 A reserve belongs to the item **in one place**. Set 50 on the soul gems in your bank and the stack in your bags keeps its own number, so the bank can hold some back while you offer everything on you. The right-click menu and the number box always speak for the bag you opened them on, and each row in `/ishare list` subtracts only its own place's reserve - the bank row and the bag row never share one number. `/itemshare reserve` sets the reserve for the place the item is shared from when that is a single place, and tells you to use the right-click menu when it is in several. A reserve set before places existed still applies everywhere the item is, until you set one in a bag.
 
 The name only has to be part of the item name, and it is refused if it matches more than one shared item. A share that is entirely inside its reserve stays marked at zero, so it comes back on its own when you acquire more - nothing has to be re-marked. Items with no reserve behave exactly as before. A reserve covers standing offers too: the list only shows one while you hold more than the reserve, and the offer comes back by itself once you do.
