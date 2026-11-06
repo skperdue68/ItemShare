@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.5"
+local ADDON_VERSION = "1.10.6"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -32,6 +32,9 @@ local defaults = {
     sharedItems = {},
     alwaysShare = {},
     reserves = {},
+    -- Reserves set in one place at a time, keyed by item link and location. The table
+    -- above stays as the item-wide fallback an older file may have written.
+    locationReserves = {},
     debugEnabled = false,
     guildBankSharingEnabled = false,
     -- Guilds are stored once, by ID, and pointed at rather than copied: every
@@ -86,13 +89,13 @@ end
 
 GetEntryOfferedCount = function(entry)
     local link = entry and tostring(entry.itemLink or "") or ""
-    return ShareableCount(link, GetEntryHeldCount(entry))
+    return ShareableCount(link, GetEntryHeldCount(entry), entry and entry.locationKey or "")
 end
 
 -- Which of the four badges belongs on an item: standing offer or plain share, with
 -- an amber tag on either when a reserve is set on it.
-local function GetShareBadgeTexture(itemLink, isAlways)
-    local reserve = (GetShareReserve and GetShareReserve(itemLink)) or 0
+local function GetShareBadgeTexture(itemLink, isAlways, locationKey)
+    local reserve = (GetShareReserve and GetShareReserve(itemLink, locationKey)) or 0
     if reserve > 0 then
         return isAlways and ALWAYS_RESERVE_TEXTURE_PATH or RESERVE_TEXTURE_PATH
     end
@@ -102,7 +105,7 @@ end
 -- One wording for "keeping some back", so the bag badge, the list window and the
 -- chat messages cannot drift apart.
 local function DescribeReserveLine(itemLink, entry)
-    local reserve = (GetShareReserve and GetShareReserve(itemLink)) or 0
+    local reserve = (GetShareReserve and GetShareReserve(itemLink, entry and entry.locationKey)) or 0
     if reserve <= 0 then
         return nil
     end
@@ -168,6 +171,9 @@ end
 local function GetShareListEntries()
     local entries = {}
     local linksListed = {}
+    -- Which item-and-place pairs already have a row, so a reserve set on a place that
+    -- is shared anyway does not add a second row beside its own.
+    local placesListed = {}
 
     -- Asked at most once per refresh, and only when a number has to come from the
     -- bags, so an ordinary refresh stays as cheap as it was.
@@ -226,7 +232,9 @@ local function GetShareListEntries()
         local group = sharesByPlace[groupKey]
         local entry = group.entry
         local link = group.itemLink
-        local reserve = link ~= "" and GetShareReserve(link) or 0
+        -- The reserve is this place's: the bank's soul gems can keep 50 back while the
+        -- ones in your bags keep none, and each row subtracts only its own.
+        local reserve = link ~= "" and GetShareReserve(link, group.locationKey) or 0
 
         -- The count comes from the shares themselves, not from measuring the bags
         -- again. Each entry was written with the whole bag's worth of that item, and
@@ -234,9 +242,7 @@ local function GetShareListEntries()
         -- this window is a read of saved data. That is also why the bank's row is
         -- here while the bank is shut: it was counted when it was shared.
         local held = group.stacksHeld
-        -- The reserve is not taken off here: it belongs to the item, and with rows
-        -- per place it has to come off once across them, not once in each row.
-        local count = held
+        local count = ShareableCount(link, held, group.locationKey)
 
         -- A share that is entirely inside its reserve is still a share: it stays in
         -- the window with nothing on offer, so the reserve can be seen and changed
@@ -267,6 +273,7 @@ local function GetShareListEntries()
 
             if link ~= "" then
                 linksListed[link] = true
+                placesListed[link .. "||" .. group.locationKey] = true
             end
         end
     end
@@ -336,14 +343,15 @@ local function GetShareListEntries()
                                 quality = alwaysEntry.quality,
                                 trait = alwaysEntry.trait,
                                 heldCount = held,
-                                reserve = GetShareReserve(link),
-                                count = held,
+                                reserve = GetShareReserve(link, place.locationKey),
+                                count = ShareableCount(link, held, place.locationKey),
                                 sharedFrom = tostring(place.actual.sharedFrom or place.locationKey or "Not in a bag"),
                                 locationKey = place.locationKey,
                                 bagId = place.actual.bagId,
                                 slotIndex = place.actual.slotIndex,
                                 alwaysOnly = true,
                             }
+                            placesListed[link .. "||" .. place.locationKey] = true
                         end
                     end
 
@@ -353,39 +361,91 @@ local function GetShareListEntries()
         end
     end
 
-    -- A reserve belongs to the item rather than to a share, so it can be set on an
-    -- item that is not shared at all - that is the amber tag with no parcel under it
-    -- in the bags. Leaving those out of the window meant a reserve on an unshared
-    -- item could only be found again by remembering it had been set.
+    -- A reserve belongs to the item in one place, so it can be set on an item that is
+    -- not shared at all - the amber tag with no parcel under it in that bag - and an
+    -- item shared in one bag can carry a reserve in another. Every place keeps its
+    -- own row; an item-wide reserve keeps the single row it always had.
+    local reserveRows = {}
+
+    local function AddReserveRow(link, locationKey, amount)
+        local linkText = tostring(link or "")
+        local placeKey = tostring(locationKey or "")
+        if linkText == "" or amount <= 0 then
+            return
+        end
+        if placesListed[linkText .. "||" .. placeKey] then
+            return
+        end
+
+        placesListed[linkText .. "||" .. placeKey] = true
+        reserveRows[#reserveRows + 1] = { link = linkText, locationKey = placeKey }
+    end
+
+    local locationReserves = ItemShare.savedVars.locationReserves
+    if type(locationReserves) == "table" then
+        for placeKey, amount in pairs(locationReserves) do
+            local link, locationKey = string.match(tostring(placeKey or ""), "^(.*)||([^|]*)$")
+            local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+            if link then
+                AddReserveRow(link, locationKey, keep)
+            end
+        end
+    end
+
     local reserves = ItemShare.savedVars.reserves
-    local reserveLinks = {}
     if type(reserves) == "table" then
         for link, amount in pairs(reserves) do
             local linkText = tostring(link or "")
             local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
             if keep > 0 and linkText ~= "" and not linksListed[linkText] then
-                reserveLinks[#reserveLinks + 1] = linkText
+                AddReserveRow(linkText, "", keep)
             end
         end
     end
 
-    if #reserveLinks > 0 then
-        table.sort(reserveLinks)
+    if #reserveRows > 0 then
+        table.sort(reserveRows, function(left, right)
+            if left.link ~= right.link then
+                return left.link < right.link
+            end
+            return tostring(left.locationKey) < tostring(right.locationKey)
+        end)
+
         local reserveIndex = GetListInventoryIndex()
-        for _, link in ipairs(reserveLinks) do
-            local location = reserveIndex and reserveIndex.locationsByLink and reserveIndex.locationsByLink[link] or nil
-            local itemData = location and location.itemData or nil
-            -- One place, one place's count: the reserve is about the item, but the
-            -- number shown must not total bags the row does not name.
+        for _, reserveRow in ipairs(reserveRows) do
+            local link = reserveRow.link
+            local locationKey = reserveRow.locationKey
+            local location = nil
+            local itemData = nil
             local held = 0
-            if location then
-                local locationEntry = reserveIndex.countsByEntryKey
-                    and reserveIndex.countsByEntryKey[BuildSharedItemKey(link, tostring(location.locationKey or ""))]
-                held = math.max(0, tonumber(locationEntry and locationEntry.count or 0) or 0)
+
+            if reserveIndex then
+                if locationKey ~= "" then
+                    local placeEntry = reserveIndex.countsByEntryKey
+                        and reserveIndex.countsByEntryKey[BuildSharedItemKey(link, locationKey)]
+                    if placeEntry then
+                        held = math.max(0, tonumber(placeEntry.count or 0) or 0)
+                        itemData = placeEntry.itemData
+                        location = {
+                            sharedFrom = placeEntry.sharedFrom,
+                            locationKey = locationKey,
+                            bagId = placeEntry.bagId,
+                            slotIndex = placeEntry.slotIndex,
+                        }
+                    else
+                        location = { locationKey = locationKey }
+                    end
+                else
+                    location = reserveIndex.locationsByLink and reserveIndex.locationsByLink[link] or nil
+                    itemData = location and location.itemData or nil
+                    local placeEntry = location and reserveIndex.countsByEntryKey
+                        and reserveIndex.countsByEntryKey[BuildSharedItemKey(link, tostring(location.locationKey or ""))]
+                    held = math.max(0, tonumber(placeEntry and placeEntry.count or 0) or 0)
+                end
             end
 
             entries[#entries + 1] = {
-                itemKey = link,
+                itemKey = BuildSharedItemKey(link, locationKey),
                 itemLink = link,
                 itemName = tostring(itemData and itemData.itemName or link),
                 itemType = itemData and itemData.itemType,
@@ -396,12 +456,12 @@ local function GetShareListEntries()
                 icon = itemData and itemData.icon,
                 esoDetails = itemData and itemData.esoDetails,
                 heldCount = held,
-                reserve = GetShareReserve(link),
+                reserve = GetShareReserve(link, locationKey),
                 -- Nothing is on offer from a reserved item that is not shared, so the
                 -- count column says zero while the row still shows what is kept back.
                 count = 0,
                 sharedFrom = location and tostring(location.sharedFrom or "Not in a bag") or "Not in a bag",
-                locationKey = location and tostring(location.locationKey or "") or "",
+                locationKey = location and tostring(location.locationKey or locationKey) or locationKey,
                 bagId = location and location.bagId or nil,
                 slotIndex = location and location.slotIndex or nil,
                 reserveOnly = true,
@@ -429,27 +489,6 @@ local function GetShareListEntries()
 
         return tostring(a.itemLink or "") < tostring(b.itemLink or "")
     end)
-
-    -- The reserve is one number for the item, not one per place: taking it off every
-    -- row would quietly keep back one reserve per bag. It comes off once, from that
-    -- item's rows in the order the window shows them, so the rows still add up to the
-    -- item's total above the reserve and the top row is where the keep was taken.
-    local reserveLeftByLink = {}
-    for _, row in ipairs(entries) do
-        local link = tostring(row.itemLink or "")
-        local reserve = math.max(0, math.floor(tonumber(row.reserve or 0) or 0))
-        if link ~= "" and reserve > 0 and not row.reserveOnly then
-            local reserveLeft = reserveLeftByLink[link]
-            if reserveLeft == nil then
-                reserveLeft = reserve
-            end
-
-            local held = math.max(0, math.floor(tonumber(row.heldCount or 0) or 0))
-            local applied = math.min(reserveLeft, held)
-            reserveLeftByLink[link] = reserveLeft - applied
-            row.count = math.max(0, held - applied)
-        end
-    end
 
     return entries
 end
@@ -708,11 +747,13 @@ local function GetOrCreateShareListRow(index)
         -- A reserve can outlive the share it was set beside, and then the badge is
         -- the amber tag on its own rather than a parcel nobody can ask for. The same
         -- rule the bags use, so removing a share here does not leave a stale badge.
-        local reserve = link ~= "" and ((GetShareReserve and GetShareReserve(link)) or 0) or 0
+        local reserve = link ~= ""
+                and ((GetShareReserve and GetShareReserve(link, row.entryData and row.entryData.locationKey)) or 0)
+            or 0
         row.isReserveOnly = (not (isShared or isAlways)) and reserve > 0
         row.isShared = (isShared or isAlways) and true or false
         statusIcon:SetTexture(
-            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways)
+            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways, row.entryData and row.entryData.locationKey)
         )
         statusIcon:SetHidden(not (isShared or isAlways or row.isReserveOnly))
         RefreshRowAppearance()
@@ -976,7 +1017,7 @@ RefreshShareListWindow = function()
         -- The reserve is part of what the row has to say: "12" alone does not
         -- explain why a stack of 20 offers 8.
         local locationText = tostring(entry.sharedFrom or "-")
-        local reserve = GetShareReserve(entry.itemLink)
+        local reserve = GetShareReserve(entry.itemLink, entry.locationKey)
         if reserve > 0 then
             local held = GetEntryHeldCount(entry)
             locationText = held > 0
@@ -1813,8 +1854,9 @@ IsSavedEntryEligibleForShare = function(entry)
 end
 
 -- "Share reserve": keep this many for yourself and offer only what you have above
--- it. Keyed by item link, like a standing offer, so the number follows the item
--- between bags and survives it leaving them entirely.
+-- it. Kept per item and per place, so the bank's stack can keep 50 back while the
+-- same item in your bags keeps none; the item-wide table is the fallback an older
+-- file wrote, and it answers for any place that has no number of its own.
 local function GetShareReserveTable()
     if not ItemShare.savedVars then
         return {}
@@ -1825,25 +1867,54 @@ local function GetShareReserveTable()
     return ItemShare.savedVars.reserves
 end
 
-GetShareReserve = function(itemLink)
+local function GetLocationReserveTable()
+    if not ItemShare.savedVars then
+        return {}
+    end
+    if type(ItemShare.savedVars.locationReserves) ~= "table" then
+        ItemShare.savedVars.locationReserves = {}
+    end
+    return ItemShare.savedVars.locationReserves
+end
+
+GetShareReserve = function(itemLink, locationKey)
     local link = tostring(itemLink or "")
     if link == "" then
         return 0
+    end
+
+    -- A zero stored against a place is a real answer - "none here" - and it overrides
+    -- the item-wide number instead of falling back to it. Without that, clearing the
+    -- reserve in one bag would look as if it had failed.
+    local placeKey = tostring(locationKey or "")
+    if placeKey ~= "" then
+        local byPlace = tonumber(GetLocationReserveTable()[BuildSharedItemKey(link, placeKey)])
+        if byPlace ~= nil then
+            return math.max(0, math.floor(byPlace))
+        end
     end
 
     local reserve = tonumber(GetShareReserveTable()[link]) or 0
     return math.max(0, math.floor(reserve))
 end
 
-local function SetShareReserve(itemLink, reserve)
+local function SetShareReserve(itemLink, reserve, locationKey)
     local link = tostring(itemLink or "")
     if link == "" then
         return
     end
 
     local amount = math.max(0, math.floor(tonumber(reserve) or 0))
-    local reserves = GetShareReserveTable()
+    local placeKey = tostring(locationKey or "")
 
+    if placeKey ~= "" then
+        -- Stored even at zero: the place has been answered on purpose, which is what
+        -- lets clearing it in one bag leave the other bags' reserves alone.
+        GetLocationReserveTable()[BuildSharedItemKey(link, placeKey)] = amount
+        return
+    end
+
+    local reserves = GetShareReserveTable()
     if amount <= 0 then
         reserves[link] = nil
     else
@@ -1854,9 +1925,9 @@ end
 -- What is offered is what is held above the reserve. Twenty held with twelve kept
 -- shares eight; eight held with twelve kept shares nothing, and the share entry
 -- stays at zero so the marking comes back by itself when more are acquired.
-ShareableCount = function(itemLink, heldCount)
+ShareableCount = function(itemLink, heldCount, locationKey)
     local held = math.max(0, math.floor(tonumber(heldCount) or 0))
-    return math.max(0, held - GetShareReserve(itemLink))
+    return math.max(0, held - GetShareReserve(itemLink, locationKey))
 end
 
 local function IsItemLinkSharedInLocation(itemLink, locationKey)
@@ -2171,7 +2242,7 @@ local function UpdateSharedRowMarker(control, slotData)
     -- that is what the offer means. It used to show nothing at all in that state,
     -- which made the gold icon look as if it did not exist.
     local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
-    local reserve = (itemLink and GetShareReserve(itemLink)) or 0
+    local reserve = (itemLink and GetShareReserve(itemLink, locationKey)) or 0
 
     if isShared or isAlways then
         -- The plain glyph, saying only what the item offers. A reserve is a separate
@@ -2299,7 +2370,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
         RefreshShareListWindowIfVisible()
     end
 
-    local reserve = tonumber(GetShareReserve(savedEntry.itemLink)) or 0
+    local reserve = tonumber(GetShareReserve(savedEntry.itemLink, savedEntry.locationKey)) or 0
 
     if reserve > 0 then
         dmsg(string.format(
@@ -2724,9 +2795,10 @@ local function AddInventoryContextMenu(slot)
         end, MENU_ADD_OPTION_LABEL)
     end
 
-    -- The reserve belongs to the item, not to this copy, so it is offered wherever the
-    -- item can be shared from and stays visible when the copy leaves the bag.
-    local reserve = GetShareReserve(itemLink)
+    -- The reserve belongs to this place: the same item can keep 50 back in the bank
+    -- and nothing back in your bags, so the menu speaks for the bag it was opened on.
+    local reserveLocationKey = select(1, GetBagLocationInfo(bagId))
+    local reserve = GetShareReserve(itemLink, reserveLocationKey)
     if reserve > 0 then
         AddCustomMenuItem(string.format("Share Reserve: Keep %d Back...", reserve), function()
             if OpenShareReserveDialog then
@@ -2735,7 +2807,7 @@ local function AddInventoryContextMenu(slot)
         end, MENU_ADD_OPTION_LABEL)
         AddCustomMenuItem("Clear Share Reserve", function()
             if ApplyShareReserve then
-                ApplyShareReserve(itemLink, 0)
+                ApplyShareReserve(itemLink, 0, reserveLocationKey)
                 d(string.format("[ItemShare] Share reserve cleared for %s.", tostring(itemName)))
             end
         end, MENU_ADD_OPTION_LABEL)
@@ -3249,6 +3321,32 @@ local function SetShareReserveByName(searchText, amount)
         return
     end
     if #matches > 1 then
+        -- The same item in two bags is two matches, and more of the name cannot choose
+        -- between them now that a reserve is answered per place: the place has to come
+        -- from the bag the reserve is meant for.
+        local firstLink = tostring(matches[1] and matches[1].itemLink or "")
+        local sameItem = firstLink ~= ""
+        local places = {}
+
+        for _, match in ipairs(matches) do
+            if tostring(match and match.itemLink or "") ~= firstLink then
+                sameItem = false
+            end
+            local label = tostring(match and match.sharedFrom or "")
+            if label ~= "" then
+                places[label] = true
+            end
+        end
+
+        if sameItem then
+            dmsg(string.format(
+                "%s is shared from more than one place (%s); set its reserve from the item's right-click menu in the bag you mean.",
+                tostring(matches[1].itemName or "that item"),
+                JoinSortedLocations(places)
+            ))
+            return
+        end
+
         dmsg(string.format(
             "%d shared items match \"%s\"; use more of the name.",
             #matches,
@@ -3258,14 +3356,15 @@ local function SetShareReserveByName(searchText, amount)
     end
 
     local entry = matches[1]
-    SetShareReserve(entry.itemLink, amount)
+    local locationKey = tostring(entry.locationKey or "")
+    SetShareReserve(entry.itemLink, amount, locationKey)
 
     -- The count comes from what the file already recorded, so it is right even when
     -- the bag holding the item is not readable this session. The next rebuild
     -- corrects it from live inventory data.
     local held = GetEntryHeldCount(entry)
-    local reserve = GetShareReserve(entry.itemLink)
-    local offered = ShareableCount(entry.itemLink, held)
+    local reserve = GetShareReserve(entry.itemLink, locationKey)
+    local offered = ShareableCount(entry.itemLink, held, locationKey)
     entry.heldCount = held
 
     TryRefreshInventoryVisuals()
@@ -3292,18 +3391,20 @@ end
 -- share entry and the count it implies, the standing offer, the bag badges and the
 -- share list. Everything that changes a reserve comes through here, so a number typed
 -- into the box and a number typed after the slash command cannot disagree.
-ApplyShareReserve = function(itemLink, amount)
+ApplyShareReserve = function(itemLink, amount, locationKey)
     local link = tostring(itemLink or "")
     if link == "" then
         return nil
     end
 
     local keep = math.max(0, math.floor(tonumber(amount) or 0))
-    SetShareReserve(link, keep)
+    local placeKey = tostring(locationKey or "")
+    SetShareReserve(link, keep, placeKey)
 
     local updated = nil
     for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        if tostring(entry.itemLink or "") == link then
+        if tostring(entry.itemLink or "") == link
+            and (placeKey == "" or tostring(entry.locationKey or "") == placeKey) then
             entry.heldCount = GetEntryHeldCount(entry)
             updated = entry
         end
@@ -3469,7 +3570,7 @@ local function BuildReserveDialog()
             return
         end
 
-        local entry = ApplyShareReserve(pending.itemLink, amount)
+        local entry = ApplyShareReserve(pending.itemLink, amount, pending.locationKey)
         local held = GetEntryHeldCount(entry)
         local offered = GetEntryOfferedCount(entry)
 
@@ -3498,7 +3599,7 @@ local function BuildReserveDialog()
             return
         end
 
-        local entry = ApplyShareReserve(pending.itemLink, 0)
+        local entry = ApplyShareReserve(pending.itemLink, 0, pending.locationKey)
         local held = GetEntryHeldCount(entry)
         d(string.format(
             "[ItemShare] %s: reserve cleared, so everything held is shared (%d).",
@@ -3539,14 +3640,15 @@ OpenShareReserveDialog = function(bagId, slotIndex)
         return
     end
 
-    local reserve = GetShareReserve(itemLink)
-    dialog.pending = { itemLink = itemLink, itemName = itemName }
+    local locationKey = select(1, GetBagLocationInfo(bagId))
+    local reserve = GetShareReserve(itemLink, locationKey)
+    dialog.pending = { itemLink = itemLink, itemName = itemName, locationKey = locationKey }
     dialog.itemLabel:SetText(tostring(itemName))
     dialog.editBox:SetText(reserve > 0 and tostring(reserve) or "")
     dialog.clearButton:SetHidden(reserve <= 0)
     dialog.status:SetColor(0.85, 0.85, 0.85, 1)
     dialog.status:SetText(
-        reserve > 0 and string.format("Keeping %d back now.", reserve) or "Nothing is kept back yet."
+        reserve > 0 and string.format("Keeping %d back here.", reserve) or "Nothing is kept back here yet."
     )
     dialog.window:SetHidden(false)
     dialog.editBox:TakeFocus()
@@ -3562,9 +3664,17 @@ local function PrintShareReserves()
         end
 
         local link = tostring(entry.itemLink or "")
-        if link ~= "" and not listed[link] and GetShareReserve(link) > 0 then
+        local locationKey = tostring(entry.locationKey or "")
+        local placeKey = BuildSharedItemKey(link, locationKey)
+        if link ~= "" and not listed[placeKey] and GetShareReserve(link, locationKey) > 0 then
+            listed[placeKey] = true
             listed[link] = true
-            rows[#rows + 1] = { entry = entry, link = link }
+            rows[#rows + 1] = {
+                entry = entry,
+                link = link,
+                locationKey = locationKey,
+                place = tostring(entry.sharedFrom or ""),
+            }
         end
     end
 
@@ -3575,20 +3685,55 @@ local function PrintShareReserves()
         AddEntryRow(entry)
     end
 
-    -- The reserve table is the authority, because a reserve can be set on an item
-    -- that is not shared at all. Reading only the shares left those out of this list
-    -- as well as out of the window.
+    -- The reserve tables are the authority, because a reserve can be set on an item
+    -- that is not shared at all, and now on one place of it. Reading only the shares
+    -- left those out of this list as well as out of the window.
     local index = (BuildActualInventoryIndex and BuildActualInventoryIndex()) or nil
+
+    local function NameFromIndex(link, locationKey)
+        local place = locationKey ~= "" and index and index.countsByEntryKey
+            and index.countsByEntryKey[BuildSharedItemKey(link, locationKey)]
+        local itemData = place and place.itemData
+        if not itemData and index and index.locationsByLink then
+            local location = index.locationsByLink[link]
+            itemData = location and location.itemData
+        end
+        return tostring(itemData and itemData.itemName or ""), tostring(place and place.sharedFrom or "")
+    end
+
+    local locationReserves = ItemShare.savedVars.locationReserves
+    if type(locationReserves) == "table" then
+        for placeKey, amount in pairs(locationReserves) do
+            local link, locationKey = string.match(tostring(placeKey or ""), "^(.*)||([^|]*)$")
+            local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
+            link = tostring(link or "")
+            locationKey = tostring(locationKey or "")
+            if link ~= "" and keep > 0 and not listed[link .. "||" .. locationKey] then
+                listed[link .. "||" .. locationKey] = true
+                local name, place = NameFromIndex(link, locationKey)
+                rows[#rows + 1] = {
+                    link = link,
+                    locationKey = locationKey,
+                    reserveOnly = true,
+                    name = name,
+                    place = place,
+                }
+            end
+        end
+    end
+
     for link, amount in pairs(GetShareReserveTable()) do
         local linkText = tostring(link or "")
         local keep = math.max(0, math.floor(tonumber(amount or 0) or 0))
         if keep > 0 and linkText ~= "" and not listed[linkText] then
             listed[linkText] = true
-            local location = index and index.locationsByLink and index.locationsByLink[linkText] or nil
+            local name = NameFromIndex(linkText, "")
             rows[#rows + 1] = {
                 link = linkText,
+                locationKey = "",
                 reserveOnly = true,
-                name = tostring(location and location.itemData and location.itemData.itemName or ""),
+                name = name,
+                place = "",
             }
         end
     end
@@ -3608,25 +3753,44 @@ local function PrintShareReserves()
         return string.format("item %s", tostring(string.match(row.link, "item:(%d+)") or row.link))
     end
 
+    local function PlaceOf(row)
+        local place = tostring(row.place or "")
+        if place ~= "" then
+            return place
+        end
+        local locationKey = tostring(row.locationKey or "")
+        if locationKey ~= "" then
+            return locationKey
+        end
+        return "any place"
+    end
+
     table.sort(rows, function(a, b)
-        return string.lower(NameOf(a)) < string.lower(NameOf(b))
+        local aName = string.lower(NameOf(a))
+        local bName = string.lower(NameOf(b))
+        if aName ~= bName then
+            return aName < bName
+        end
+        return PlaceOf(a) < PlaceOf(b)
     end)
 
     dmsg(string.format("Share reserves (%d):", #rows))
     for _, row in ipairs(rows) do
         if row.entry then
             dmsg(string.format(
-                "  %s: keep %d, sharing %d of %d held",
+                "  %s [%s]: keep %d, sharing %d of %d held",
                 NameOf(row),
-                GetShareReserve(row.link),
-                GetEntryOfferedCount(row.entry),
+                PlaceOf(row),
+                GetShareReserve(row.link, row.locationKey),
+                ShareableCount(row.link, GetEntryHeldCount(row.entry), row.locationKey),
                 GetEntryHeldCount(row.entry)
             ))
         else
             dmsg(string.format(
-                "  %s: keep %d, not shared",
+                "  %s [%s]: keep %d, not shared",
                 NameOf(row),
-                GetShareReserve(row.link)
+                PlaceOf(row),
+                GetShareReserve(row.link, row.locationKey)
             ))
         end
     end
@@ -3751,6 +3915,7 @@ local function OnAddonLoaded(event, addonName)
         ItemShare.savedVars.sharedItems = {}
         ItemShare.savedVars.alwaysShare = {}
         ItemShare.savedVars.reserves = {}
+        ItemShare.savedVars.locationReserves = {}
         ItemShare.savedVars.guilds = {}
         ItemShare.savedVars.characterGuilds = {}
         ItemShare.savedVars.schema = SAVED_VARS_VERSION
