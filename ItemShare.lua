@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.10.7"
+local ADDON_VERSION = "1.11.0"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -35,6 +35,15 @@ local defaults = {
     -- Reserves set in one place at a time, keyed by item link and location. The table
     -- above stays as the item-wide fallback an older file may have written.
     locationReserves = {},
+    -- Which platform and which megaserver this file was written on. Both describe the
+    -- account rather than an item, so they sit once at the top of the table: the
+    -- website cannot tell a PC/EU offer from a PC/NA one without them, and nothing
+    -- trades between those two worlds.
+    platform = "",
+    platformRaw = 0,
+    world = "",
+    worldName = "",
+    serverCapturedAt = 0,
     debugEnabled = false,
     guildBankSharingEnabled = false,
     -- Guilds are stored once, by ID, and pointed at rather than copied: every
@@ -1127,6 +1136,110 @@ local function GetCurrentDisplayName()
     return CURRENT_DISPLAY_NAME
 end
 
+
+-- The platform arrives as one of the UI_PLATFORM_* numbers. The constants are read
+-- rather than hardcoded, so a client that renumbers them still records the right name;
+-- a number with no name of its own is recorded as "unknown" instead of guessed at.
+local function GetPlatformToken(rawPlatform)
+    local raw = tonumber(rawPlatform) or 0
+    if raw > 0 then
+        if UI_PLATFORM_PC and raw == UI_PLATFORM_PC then
+            return "pc"
+        elseif UI_PLATFORM_MAC and raw == UI_PLATFORM_MAC then
+            return "mac"
+        elseif UI_PLATFORM_PS4 and raw == UI_PLATFORM_PS4 then
+            return "ps4"
+        elseif UI_PLATFORM_XBOX and raw == UI_PLATFORM_XBOX then
+            return "xbox"
+        elseif UI_PLATFORM_STADIA and raw == UI_PLATFORM_STADIA then
+            return "stadia"
+        end
+    end
+
+    return "unknown"
+end
+
+-- GetWorldName is translated into the client's language and can read "PTS", so the raw
+-- string is kept for display and a token is matched out of it for everything that has
+-- to compare one file with another. The region has to stand on its own as a word: the
+-- French "Mégaserveur" contains the letters "eu" and is not Europe.
+local function GetWorldToken(worldName)
+    local text = zo_strlower(tostring(worldName or ""))
+    if text == "" then
+        return ""
+    end
+
+    if string.find(text, "pts", 1, true) or string.find(text, "public test", 1, true) then
+        return "pts"
+    end
+
+    if string.find(text, "%f[%a]na%f[%A]") then
+        return "na"
+    end
+
+    if string.find(text, "%f[%a]eu%f[%A]") then
+        return "eu"
+    end
+
+    return ""
+end
+
+-- Recorded once for the account and rewritten on every load, which is what keeps it
+-- honest: if the same account plays the other megaserver, the next login says so and
+-- the file stops claiming the old one. Identical values change nothing in the saved
+-- file beyond the timestamp.
+CaptureServerEnvironment = function()
+    if not ItemShare.savedVars then
+        return "", ""
+    end
+
+    local rawPlatform = 0
+    if type(GetUIPlatform) == "function" then
+        local ok, value = pcall(GetUIPlatform)
+        if ok then
+            rawPlatform = tonumber(value) or 0
+        end
+    end
+
+    local worldName = ""
+    if type(GetWorldName) == "function" then
+        local ok, value = pcall(GetWorldName)
+        if ok and value ~= nil then
+            worldName = tostring(value)
+        end
+    end
+
+    local saved = ItemShare.savedVars
+    saved.platform = GetPlatformToken(rawPlatform)
+    saved.platformRaw = rawPlatform
+    saved.world = GetWorldToken(worldName)
+    saved.worldName = worldName
+    saved.serverCapturedAt = GetTimeStamp()
+
+    return saved.platform, saved.world
+end
+
+local function PrintServerEnvironment()
+    local platform, world = CaptureServerEnvironment()
+    local saved = ItemShare.savedVars or {}
+
+    dmsg(string.format(
+        "This file is recorded for %s on %s.",
+        string.upper(tostring(platform ~= "" and platform or "unknown")),
+        string.upper(tostring(world ~= "" and world or "unknown"))
+    ))
+
+    local worldName = tostring(saved.worldName or "")
+    if worldName ~= "" then
+        dmsg(string.format(
+            "The game reports the megaserver as \"%s\" and the platform as %d.",
+            worldName,
+            tonumber(saved.platformRaw or 0) or 0
+        ))
+    end
+
+    dmsg("Every share in this file is offered on that platform and megaserver only.")
+end
 
 local function GetCharacterGuilds()
     local guilds = {}
@@ -3820,6 +3933,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     elseif lowerArg == "list" then
@@ -3871,6 +3985,8 @@ local function OnSlashCommand(arg)
         else
             SetShareReserveByName(zo_strtrim(needle), tonumber(amount) or 0)
         end
+    elseif lowerArg == "server" then
+        PrintServerEnvironment()
     elseif lowerArg == "guildbank" then
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
@@ -3893,6 +4009,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
         dmsg("                   - Furnishings also check furnishing vault and placed furniture")
     end
@@ -3929,6 +4046,9 @@ local function OnAddonLoaded(event, addonName)
     GetAlwaysShareTable()
 
     ItemShare.savedVars.addonVersion = ADDON_VERSION
+    -- The platform and megaserver are read once per load, before anything is offered:
+    -- every entry in the file belongs to them, and the site matches on them.
+    CaptureServerEnvironment()
 
     RefreshGuildSnapshot()
     -- Guilds are often not loaded this early, so this is a head start only; the
