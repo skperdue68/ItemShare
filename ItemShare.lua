@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.0"
+local ADDON_VERSION = "1.11.1"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -1323,6 +1323,12 @@ RecordGuildInRegistry = function(guildId, guildName)
     return true
 end
 
+-- The game gives an account five guild slots, and every one of them is written,
+-- including the empty ones: a file that listed only the guilds you are in could not be
+-- told apart from one written before you left, while five slots with zeros in them show
+-- exactly which have gone.
+local MAX_GUILD_SLOTS = 5
+
 -- Membership is per character because guilds are. A snapshot is now only the ids
 -- and the time they were read; the names stay in the registry above.
 local function RefreshGuildSnapshot()
@@ -1338,6 +1344,10 @@ local function RefreshGuildSnapshot()
         RecordGuildInRegistry(guild.guildId, guild.guildName)
     end
 
+    for slot = #guildIds + 1, MAX_GUILD_SLOTS do
+        guildIds[slot] = 0
+    end
+
     local now = GetTimeStamp()
     GetCharacterGuildSnapshots()[GetCurrentCharacterName()] = {
         guildIds = guildIds,
@@ -1346,6 +1356,113 @@ local function RefreshGuildSnapshot()
     ItemShare.savedVars.guildsUpdatedAt = now
 
     return guilds
+end
+
+local function GuildIdFromLocationKey(locationKey)
+    return tonumber(string.match(tostring(locationKey or ""), "^guildbank:(%d+)$"))
+end
+
+-- Keys look like "itemLink||locationKey", and an item link contains single pipes of
+-- its own, so the split is taken at the last double pipe.
+local function LocationKeyOfSavedKey(savedKey)
+    return tostring(savedKey or ""):match("^.*||(.*)$") or ""
+end
+
+-- Leaving a guild leaves its bank behind: a share or reserve filed against that guild's
+-- id can never be reached again, because the bank cannot be opened, and the sync that
+-- drops items no longer held deliberately keeps anything it could not look at. So they
+-- are removed here, where the guild list is known. A guild id that no character on the
+-- account is in any more takes its name with it.
+PruneDepartedGuilds = function(quiet)
+    local removedShares, removedReserves, removedNames = 0, 0, 0
+    if not ItemShare.savedVars then
+        return removedShares, removedReserves, removedNames
+    end
+
+    local guilds = GetCharacterGuilds()
+
+    -- Nothing is removed until the guild list has actually loaded. An empty list this
+    -- early in a login means "not read yet", and reading that as "in no guilds" would
+    -- delete every guild bank share the player has.
+    if #guilds == 0 then
+        return removedShares, removedReserves, removedNames
+    end
+
+    local currentIds = {}
+    for _, guild in ipairs(guilds) do
+        currentIds[tostring(guild.guildId)] = true
+    end
+
+    local function IsDeparted(locationKey)
+        local guildId = GuildIdFromLocationKey(locationKey)
+        if not guildId then
+            return false
+        end
+        return currentIds[tostring(guildId)] ~= true
+    end
+
+    local sharedItems = ItemShare.savedVars.sharedItems or {}
+    local departedShareKeys = {}
+    for itemKey, entry in pairs(sharedItems) do
+        if type(entry) == "table" and IsDeparted(entry.locationKey) then
+            departedShareKeys[#departedShareKeys + 1] = itemKey
+        end
+    end
+    for _, itemKey in ipairs(departedShareKeys) do
+        sharedItems[itemKey] = nil
+        removedShares = removedShares + 1
+    end
+
+    local locationReserves = ItemShare.savedVars.locationReserves or {}
+    local departedReserveKeys = {}
+    for savedKey in pairs(locationReserves) do
+        if IsDeparted(LocationKeyOfSavedKey(savedKey)) then
+            departedReserveKeys[#departedReserveKeys + 1] = savedKey
+        end
+    end
+    for _, savedKey in ipairs(departedReserveKeys) do
+        locationReserves[savedKey] = nil
+        removedReserves = removedReserves + 1
+    end
+
+    -- The registry is account-wide, so a name goes only when no character's snapshot
+    -- still points at that guild.
+    local stillKnown = {}
+    for _, snapshot in pairs(GetCharacterGuildSnapshots()) do
+        local ids = type(snapshot) == "table" and snapshot.guildIds or nil
+        if type(ids) == "table" then
+            for _, guildId in ipairs(ids) do
+                local id = tonumber(guildId) or 0
+                if id > 0 then
+                    stillKnown[tostring(id)] = true
+                end
+            end
+        end
+    end
+
+    local registry = GetSavedGuildRegistry()
+    local departedNameKeys = {}
+    for guildId in pairs(registry) do
+        if not stillKnown[tostring(guildId)] then
+            departedNameKeys[#departedNameKeys + 1] = guildId
+        end
+    end
+    for _, guildId in ipairs(departedNameKeys) do
+        registry[guildId] = nil
+        removedNames = removedNames + 1
+    end
+
+    if (removedShares > 0 or removedReserves > 0) and not quiet then
+        dmsg(string.format(
+            "Removed %d share%s and %d reserve%s filed against guilds you are no longer in.",
+            removedShares,
+            removedShares == 1 and "" or "s",
+            removedReserves,
+            removedReserves == 1 and "" or "s"
+        ))
+    end
+
+    return removedShares, removedReserves, removedNames
 end
 
 
@@ -3961,13 +4078,27 @@ local function OnSlashCommand(arg)
         if #guilds == 0 then
             dmsg("No guilds detected for this character yet. Try again once the guild list has loaded.")
         else
-            dmsg(string.format("Guilds for %s:", GetCurrentCharacterName()))
-            for _, guild in ipairs(guilds) do
-                dmsg(string.format(
-                    "  %s (id: %d)",
-                    guild.guildName ~= "" and guild.guildName or "Unknown guild",
-                    guild.guildId
-                ))
+            PruneDepartedGuilds()
+            RefreshShareListWindowIfVisible()
+
+            local snapshots = GetCharacterGuildSnapshots()
+            local snapshot = snapshots[GetCurrentCharacterName()]
+            local slots = type(snapshot) == "table" and snapshot.guildIds or nil
+
+            dmsg(string.format("Guild slots for %s:", GetCurrentCharacterName()))
+            for slot = 1, MAX_GUILD_SLOTS do
+                local guildId = type(slots) == "table" and (tonumber(slots[slot]) or 0) or 0
+                if guildId > 0 then
+                    local guildName = GetGuildNameById(guildId)
+                    dmsg(string.format(
+                        "  %d: %s (id: %d)",
+                        slot,
+                        guildName ~= "" and guildName or "Unknown guild",
+                        guildId
+                    ))
+                else
+                    dmsg(string.format("  %d: no guild", slot))
+                end
             end
         end
     elseif lowerArg == "always" then
@@ -4056,7 +4187,23 @@ local function OnAddonLoaded(event, addonName)
     if zo_callLater then
         zo_callLater(function()
             RefreshGuildSnapshot()
+            -- Only safe once the list has loaded, which PruneDepartedGuilds checks for
+            -- itself: it removes nothing while the guild list is still empty.
+            PruneDepartedGuilds()
         end, 3000)
+    end
+
+    if EVENT_GUILD_SELF_LEFT_GUILD then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_GUILD_SELF_LEFT_GUILD, function()
+            -- The guild list is not always updated in the same frame as the event, so the
+            -- snapshot is taken again shortly afterwards rather than immediately.
+            if zo_callLater then
+                zo_callLater(function()
+                    RefreshGuildSnapshot()
+                    PruneDepartedGuilds()
+                end, 2000)
+            end
+        end)
     end
 
     if EVENT_PLAYER_ACTIVATED then
