@@ -31,6 +31,8 @@ You can use commands
 /ishare guildbank - toggles sharing from the guild bank.
 /ishare server - shows the platform and megaserver this file is recorded for.
 
+Guild bank shares and reserves are filed against the guild's id, and the file records all five guild slots for the character, writing `0` in every slot with no guild in it. That is what makes a dropped guild visible in the file itself, and on login the addon removes any share or reserve filed against a guild you are no longer in - those banks cannot be opened again, so nothing else would ever clear them. A guild's name is forgotten once no character on the account is in it any more. `/ishare guilds` shows all five slots, empty ones included.
+
 The window and the item menus cover the same ground without typing:
 
 - Right-click an item in a bag, the bank, house storage or the furnishing vault: **Add to Share**, **Remove from Shared List**, **Always Share This Item**, **Stop Always Sharing**, **Share Reserve** (asks for a number of at least 1) and, when a reserve is set, **Share Reserve: Keep N Back...** and **Clear Share Reserve**.
