@@ -29,6 +29,7 @@ You can use commands
 /ishare noreserve <part of the name> - shares the whole stack again.
 /ishare reserves - lists every item with a reserve, and what it is offering.
 /ishare guildbank - toggles sharing from the guild bank.
+/ishare server - shows the platform and megaserver this file is recorded for.
 
 The window and the item menus cover the same ground without typing:
 
@@ -64,6 +65,8 @@ The menu only offers a reserve on an item that can actually be shared: a bound i
 A reserve belongs to the item **in one place**. Set 50 on the soul gems in your bank and the stack in your bags keeps its own number, so the bank can hold some back while you offer everything on you. The right-click menu and the number box always speak for the bag you opened them on, and each row in `/ishare list` subtracts only its own place's reserve - the bank row and the bag row never share one number. `/itemshare reserve` sets the reserve for the place the item is shared from when that is a single place, and tells you to use the right-click menu when it is in several. A reserve set before places existed still applies everywhere the item is, until you set one in a bag.
 
 The name only has to be part of the item name, and it is refused if it matches more than one shared item. A share that is entirely inside its reserve stays marked at zero, so it comes back on its own when you acquire more - nothing has to be re-marked. Items with no reserve behave exactly as before. A reserve covers standing offers too: the list only shows one while you hold more than the reserve, and the offer comes back by itself once you do.
+
+The file also records which platform and which megaserver the account plays on; `/ishare server` shows what was captured. They are written once for the whole account rather than onto each share, because that is what they describe, and the ItemShare site matches on them: a file written on the North American megaserver is only ever offered to readers on the same platform and megaserver, because nothing trades between them. The megaserver's own name is kept as the game reports it for display, and the site matches on the short form - `na`, `eu` or `pts` - since the game's name is translated into the client's language.
 
 Once Everything is as you want it, save the file by doing /ishare save or typing /reloadui
 
