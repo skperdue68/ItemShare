@@ -8,6 +8,8 @@ The upload site that turns your saved file into a shareable list is a separate
 project: https://github.com/skperdue68/ItemShare-Web. Nothing in this repository
 needs it; the addon only writes ItemShareSavedVars.lua.
 
+`tools/make_reserve_only_badge.py` redraws `media/itemshare_reserve_only.dds`, the badge for a reserve left on an item that is not shared at all. It needs Python 3 and Pillow; run it from the repository root with `python3 tools/make_reserve_only_badge.py`. The game never loads it.
+
 Download and extract to your ESO AddOns Directory
 Ensure Add on is loaded at startup
 
