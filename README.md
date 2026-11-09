@@ -20,7 +20,7 @@ You can use commands
 
 /ishare list - opens or closes the shared items window. Right-click a row there to cycle it: share it, make it a standing offer, or stop offering it.
 /ishare reset (or clear) - clears every share and every standing offer.
-/ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy.
+/ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy. Its summary's `Kept furnishings` count is shares of furniture that the readable bags no longer held: they are kept rather than deleted, because a furnishing may be placed in a house.
 /ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
 /ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
 /ishare debug - turns the addon's own status messages on or off.
@@ -41,6 +41,8 @@ The window and the item menus cover the same ground without typing:
 - In `/ishare list`, right-click a row to walk it through the three states and back: not shared, shared, always shared.
 
 You may add items to the shared list from Inventory, House Storage, Your Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
+
+Home storage is recorded under the name of the chest, not its number: ESO lets you rename each of the ten storage chests, and the addon reads that name, falling back to the chest's own collectible name and then to `House Storage N`. A row therefore says `Materials` or `Gear I might keep` instead of `House Storage 8`, and the name is saved with the share, so it still reads that way while you are away from home. Rename a chest and the next rebuild relabels its shares; two chests given the same name stay separate rows, because the slot is recorded as well.
 
 Items that are bound to you cannot be shared, and neither can items the game only lets you hand to your group for a short while (bind on pickup, still tradeable). The addon refuses both with a message instead of adding them, and it checks again when an item is re-added from the share list window, because an item can become bound after it was filed.
 

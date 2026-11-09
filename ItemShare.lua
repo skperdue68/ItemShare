@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.2"
+local ADDON_VERSION = "1.11.3"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -1567,6 +1567,41 @@ local function GetPlacedFurnitureLocationInfo()
     return "placedfurniture", "Placed Furniture"
 end
 
+-- The ten home storage chests can each be renamed in game, and the name is the only
+-- thing that makes one findable: "House Storage 8" says nothing about what is inside it.
+-- Each chest is a collectible, so the game can name its bag - the nickname the player
+-- gave it first, then the collectible's own name, then the slot number.
+local function GetHouseStorageDisplayName(bagId, chestIndex)
+    local fallback = string.format("House Storage %d", chestIndex)
+
+    if not (GetCollectibleForBag and GetCollectibleNickname and GetCollectibleName) then
+        return fallback
+    end
+
+    local idOk, collectibleId = pcall(GetCollectibleForBag, bagId)
+    if not idOk or type(collectibleId) ~= "number" or collectibleId <= 0 then
+        return fallback
+    end
+
+    local nicknameOk, nickname = pcall(GetCollectibleNickname, collectibleId)
+    if nicknameOk and type(nickname) == "string" then
+        nickname = string.gsub(nickname, "^%s*(.-)%s*$", "%1")
+        if nickname ~= "" then
+            return nickname
+        end
+    end
+
+    local nameOk, collectibleName = pcall(GetCollectibleName, collectibleId)
+    if nameOk and type(collectibleName) == "string" and collectibleName ~= "" then
+        local normalizedName = GetNormalizedText(collectibleName)
+        if normalizedName and normalizedName ~= "" then
+            return normalizedName
+        end
+    end
+
+    return fallback
+end
+
 local function GetBagLocationInfo(bagId)
     if bagId == BAG_BACKPACK then
         local characterName = GetCurrentCharacterName()
@@ -1583,7 +1618,7 @@ local function GetBagLocationInfo(bagId)
 
     local chestIndex = GetHouseStorageChestIndex(bagId)
     if chestIndex > 0 then
-        return string.format("housestorage:%d", chestIndex), string.format("House Storage %d", chestIndex)
+        return string.format("housestorage:%d", chestIndex), GetHouseStorageDisplayName(bagId, chestIndex)
     end
 
     if BAG_FURNITURE_VAULT and bagId == BAG_FURNITURE_VAULT then
@@ -3258,7 +3293,7 @@ end
 
 local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, furnishingProtectedCount, quiet)
     local summary = string.format(
-        "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Furnishing protected: %d",
+        "%s complete. Updated: %d, Removed: %d, Unchanged: %d, Kept furnishings: %d",
         tostring(actionName or "Sync"),
         updatedCount,
         removedCount,
@@ -3268,6 +3303,13 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
 
     d("[ItemShare] " .. summary)
     if not quiet then
+        if furnishingProtectedCount > 0 then
+            d("[ItemShare] " .. string.format(
+                "%d furnishing share%s kept: the bag was read and the piece was not in it, but a furnishing can be placed in a house, so it is kept rather than removed.",
+                furnishingProtectedCount,
+                furnishingProtectedCount == 1 and "" or "s"
+            ))
+        end
         d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
     end
     dmsg(summary)
@@ -3324,16 +3366,20 @@ SyncSharedItemsWithInventory = function(quiet)
         local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
-            if isFurnishing then
-                furnishingProtectedCount = furnishingProtectedCount + 1
-                unchangedCount = unchangedCount + 1
-                if not quiet then
-                    dmsg(string.format("Kept furnishing share entry (unverified instead of removing): %s", itemName))
-                end
-            elseif not canVerify then
+            if not canVerify then
                 -- That bag could not be read this session, so "not found" proves
                 -- nothing about the item. Keep the share rather than delete blind.
                 unchangedCount = unchangedCount + 1
+            elseif isFurnishing then
+                -- The bag was read and the piece was not in it, but a furnishing can be
+                -- placed in a house, and only the house the character is standing in can
+                -- be read. Kept, and counted on its own so the number is never mistaken
+                -- for shares that were found.
+                furnishingProtectedCount = furnishingProtectedCount + 1
+                unchangedCount = unchangedCount + 1
+                if not quiet then
+                    dmsg(string.format("Kept furnishing share entry (not in its bag, and possibly placed in a house): %s", itemName))
+                end
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
@@ -3431,15 +3477,17 @@ RebuildSharedItemsWithInventory = function(quiet)
         local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
-            if isFurnishing then
+            if not canVerify then
+                -- Unreadable bag: keep the share until a session can see it.
+                unchangedCount = unchangedCount + 1
+            elseif isFurnishing then
+                -- Readable bag, no piece in it, but a furnishing can be placed in a house
+                -- that cannot be read from here, so it is kept rather than removed.
                 furnishingProtectedCount = furnishingProtectedCount + 1
                 unchangedCount = unchangedCount + 1
                 if not quiet then
-                    dmsg(string.format("Kept furnishing share entry during rebuild (unverified instead of removing): %s", itemName))
+                    dmsg(string.format("Kept furnishing share entry during rebuild (not in its bag, and possibly placed in a house): %s", itemName))
                 end
-            elseif not canVerify then
-                -- Unreadable bag: keep the share until a session can see it.
-                unchangedCount = unchangedCount + 1
             else
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
