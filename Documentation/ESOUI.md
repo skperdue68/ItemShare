@@ -55,7 +55,7 @@ ItemShare keeps track of the tradeable items you are willing to hand out, so you
 
 [b]House storage by name.[/b] ESO lets you rename each of the ten storage chests, so a row reads [i]Materials[/i] instead of [i]House Storage 8[/i]. The chest's own name is used when you have not renamed it, and the slot number only when neither is available. Rename a chest and the next rebuild relabels its shares, and two chests given the same name stay separate rows.
 
-[b]Furnishings are looked for twice.[/b] A furnishing may be placed in a house rather than sitting in a bag, so the addon also checks placed furniture. A furnishing it cannot find is therefore kept rather than deleted, and the summary counts it as [i]Kept furnishings[/i]. A bag being read and not containing the piece is not proof that the piece is gone.
+[b]Furnishings are looked for twice.[/b] A furnishing may be placed in a house rather than sitting in a bag, so the addon also checks placed furniture. Each house is tracked on its own: a piece on display in two homes is two rows, one per house, and a sync inside one of them never renames the other. Only the house you are standing in can be read, so a piece placed somewhere else is kept exactly as it is rather than moved or dropped. Stand in the house a row names, with the piece no longer there, and that row keeps its share but stops naming the house, reading plain [i]Placed Furniture[/i]; a sync inside the house that still holds the piece puts the name back. A furnishing the addon cannot find at all is therefore kept rather than deleted, and the summary counts it as [i]Kept furnishings[/i]. A bag being read and not containing the piece is not proof that the piece is gone.
 
 [b]Bound items are refused[/b], and so are items the game only lets you hand to your group for a short while (bind on pickup, still tradeable). The addon says so instead of adding them, and checks again when an item is re-added from the shared window, because an item can become bound after it was filed.
 
@@ -94,8 +94,20 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*]A [color=#5BA85B][b]green gift[/b][/color] on an item icon means it is shared right now.
 [*]The same gift in [color=#D4AF37][b]gold[/b][/color], with a closed ring, means it is always shared, and the badge stays on the item even when you hold none.
 [*]A small [color=#E3B341][b]amber padlock[/b][/color] tag is added to either badge when the item has a share reserve. An item with a reserve that is not shared at all shows the padlock on its own, so a reserve left behind can be seen and cleared instead of forgotten.
+[*]A [color=#D9534F][b]red-ringed stopwatch[/b][/color] takes the gift's place when a share has been on offer longer than the limit set with [b]/ishare expire[/b], so an offer that has quietly become clutter is obvious at a glance.
 [*]Hovering a badge says which state the item is in and, with a reserve, how much is being kept back.
 [/list]
+
+[b][size=4][color=#D4AF37]Old shares: the expire stopwatch[/color][/size][/b]
+
+Things that sit in the list for months stop being offers worth making, and nothing on the icon used to say so. Set a limit once and the addon marks them:
+
+[code]/ishare expire 30    shares 30 days or older show the stopwatch
+/ishare expire 0     turn the marking off[/code]
+
+The stopwatch is the same size as the other badges and sits in the same corner, taking the place of the share gift rather than being drawn beside it, so an old offer reads as old in your bags, the bank, house storage and the shared items window. The limit is one number for the whole file and is saved with your shares, so it keeps applying after a reload and to whatever you look at next - you set it once, not item by item. [b]/ishare expire[/b] with no number reports the limit and how many shares are past it. Hovering the badge says how many days the share has been on offer.
+
+An item's age starts when it was first shared. Re-sharing it, moving it to another bag or running [b]/ishare sync[/b] keeps the original date, so only removing it from the list and sharing it again starts the clock over. Nothing is hidden, removed or dropped by the limit: a share past it is still offered normally, and the stopwatch is a nudge to sell or give the thing away. A share with no recorded date, one carried over from an older version of the file, is never treated as old.
 
 [b][size=4][color=#D4AF37]Guilds and server[/color][/size][/b]
 
@@ -125,6 +137,7 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*][b]reserve <n> <name>[/b] - keep n back and offer the rest
 [*][b]noreserve <name>[/b] - share the whole stack again
 [*][b]reserves[/b] - list every item with a reserve
+[*][b]expire <n>[/b] - mark shares on offer n days or more with the stopwatch; no number reports the limit, 0 turns it off
 [*][b]guildbank[/b] - toggle sharing from the guild bank
 [*][b]server[/b] - show the platform and megaserver this file is recorded for
 [/list]
@@ -142,7 +155,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.4, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.6, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]
