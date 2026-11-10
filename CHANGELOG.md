@@ -10,6 +10,20 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.7
+- Placed furniture is no longer inferred. The addon used to guess, on every sync, that
+  a furnishing missing from a readable bag might be standing in whichever house you
+  happened to be in, and it relabelled shares on that guess. That is gone.
+- `/ishare scan` replaces it, and it is explicit: stand in your storage house and run
+  it, and every non-bound furnishing placed in that house is shared as
+  `Placed (<house>)`, one row per furnishing with the number of copies standing there.
+- The scan is the record for that house, so a piece you picked up is taken back by the
+  next scan, while every other house is left alone because nothing can read it.
+- Bound furnishings are counted and skipped. Rows written by an older version under the
+  old placed-furniture key are removed once on login with a message saying to scan
+  again, because there is no way any more to tell a piece that had been picked up from
+  one that was never placed.
+
 ### 1.11.6
 - `/ishare expire <days>` puts a stopwatch badge on every share that has been on offer
   that many days or more. It takes the share gift's place in the icon's corner instead
