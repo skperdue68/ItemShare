@@ -10,6 +10,8 @@ needs it; the addon only writes ItemShareSavedVars.lua.
 
 The text of the addon's page on ESOUI, both the short description and the full BBCode description, is kept in [Documentation/ESOUI.md](Documentation/ESOUI.md).
 
+Version history, the addon's and the website's, is in [CHANGELOG.md](CHANGELOG.md).
+
 `tools/make_reserve_only_badge.py` redraws `media/itemshare_reserve_only.dds`, the badge for a reserve left on an item that is not shared at all. It needs Python 3 and Pillow; run it from the repository root with `python3 tools/make_reserve_only_badge.py`. The game never loads it.
 
 Download and extract to your ESO AddOns Directory
