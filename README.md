@@ -10,9 +10,9 @@ needs it; the addon only writes ItemShareSavedVars.lua.
 
 The text of the addon's page on ESOUI, both the short description and the full BBCode description, is kept in [Documentation/ESOUI.md](Documentation/ESOUI.md).
 
-Version history, the addon's and the website's, is in [CHANGELOG.md](CHANGELOG.md).
+`tools/make_reserve_only_badge.py` redraws `media/itemshare_reserve_only.dds`, the badge for a reserve left on an item that is not shared at all.
 
-`tools/make_reserve_only_badge.py` redraws `media/itemshare_reserve_only.dds`, the badge for a reserve left on an item that is not shared at all. It needs Python 3 and Pillow; run it from the repository root with `python3 tools/make_reserve_only_badge.py`. The game never loads it.
+`tools/make_expired_badge.py` redraws `media/itemshare_expired.dds`, the stopwatch used by `/ishare expire`. It needs Python 3 and Pillow as well; run it from the repository root with `python3 tools/make_expired_badge.py`. The game never loads it.
 
 Download and extract to your ESO AddOns Directory
 Ensure Add on is loaded at startup
@@ -36,6 +36,7 @@ You can use commands
 /ishare reserve <amount> <part of the name> - keeps that many back and offers the rest.
 /ishare noreserve <part of the name> - shares the whole stack again.
 /ishare reserves - lists every item with a reserve, and what it is offering.
+/ishare expire <days> - marks shares that have been on offer that many days or more with a stopwatch badge; `0` turns it off.
 /ishare guildbank - toggles sharing from the guild bank.
 /ishare server - shows the platform and megaserver this file is recorded for.
 
@@ -61,6 +62,8 @@ Right-click an item and choose "Always Share This Item" to make it a standing of
 The badge on an item icon shows which of the two it is. A green gift means it is shared right now; the same gift in gold with a closed ring means it is always shared, and that gold badge stays on the item even when you have none in your bags. A small amber padlock tag is added to either badge when the item has a share reserve. An item that has a reserve but is not shared at all shows the padlock on its own, so a reserve left behind on something you stopped sharing is still visible - and can be cleared - instead of being forgotten. Hovering the badge says which state it is in and, when there is a reserve, how much is being kept back. The same badges are drawn in the deconstruction and refinement panels and at the ragpicker: those lists belong to the crafting UI rather than to your bags, so they used to be the one place a shared piece went unmarked.
 
 An item shared from a place refuses to be sold or deconstructed from that same place, so an offer cannot be destroyed by accident while it is on the list. The guard follows the location, not the item: something shared from your bags can still be sold out of the bank, and a copy in a place nothing was shared from is left completely alone. Standing offers do not lock anything, because they promise the item rather than the copy in front of you. Removing the share is the only way out - right-click the row in `/ishare list`, or use the item's own menu - and `/ishare protect` turns the whole guard off if it ever gets in the way.
+
+`/ishare expire 30` puts a stopwatch badge on every share that has been on offer for 30 days or more. It is the same size as the other badges and sits in the same corner, taking the place of the share gift rather than being added beside it, so an item that has quietly become clutter is obvious in your bags, the bank, house storage and the window. The number is one setting for the whole file and is saved with your shares, so it keeps applying after a reload and to anything you look at next; `/ishare expire 0` clears it. An item's clock starts when it was first shared and is kept when you re-share it, move it to another bag or sync, so only removing it from the list and sharing it again resets the age. Nothing is hidden or removed by the limit - the stopwatch is a nudge to sell, not a rule. Hovering it says how long the share has been on offer.
 
 `/ishare list` shows what is on offer right now: every share with something above its reserve, plus any standing offer that has a copy in your bags even if that copy was never marked by hand. A row that offers nothing is not listed at all, a row with a reserve says `keep N` beside its location, and right-clicking a row steps it on to the next state: not shared, shared, always shared, and back to not shared. There is one row per item per place: stacks of the same thing in one bag are added together - two stacks of 200 soul gems in the bank are 400 on offer - but a share in your bags and a share in the bank stay two rows, each naming its own place and counting only what is there, so the row you want to take back is the row you right-click. The window reads the counts saved with your shares rather than measuring the bags again, which is why the bank's row is still there while the bank is shut.
 

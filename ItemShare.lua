@@ -26,6 +26,10 @@ local ALWAYS_RESERVE_TEXTURE_PATH = "ItemShare/media/itemshare_always_reserve.dd
 -- it. Without a badge of its own a reserve on an unshared item was invisible, so the
 -- only way to find out it needed clearing was to remember setting it.
 local RESERVE_ONLY_TEXTURE_PATH = "ItemShare/media/itemshare_reserve_only.dds"
+-- A share that has been on offer past the limit in the saved variables wears this
+-- instead of the share glyph: same corner, same size, so nothing on the slot moves and
+-- an item that has quietly become clutter reads as clutter at a glance.
+local EXPIRED_TEXTURE_PATH = "ItemShare/media/itemshare_expired.dds"
 local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
@@ -49,6 +53,11 @@ local defaults = {
     shareProtection = true,
     debugEnabled = false,
     guildBankSharingEnabled = false,
+    -- How long a share may stay on offer, in days, before its badge becomes the
+    -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
+    -- share: what counts as "too long" is a decision about the list, and changing it
+    -- needs no pass over the entries.
+    expireDays = 0,
     -- Guilds are stored once, by ID, and pointed at rather than copied: every
     -- character's membership and every shared item used to carry its own list.
     guilds = {},
@@ -102,6 +111,52 @@ end
 GetEntryOfferedCount = function(entry)
     local link = entry and tostring(entry.itemLink or "") or ""
     return ShareableCount(link, GetEntryHeldCount(entry), entry and entry.locationKey or "")
+end
+
+local SECONDS_PER_DAY = 86400
+
+local function GetExpireDays()
+    local days = tonumber(ItemShare.savedVars and ItemShare.savedVars.expireDays) or 0
+    if days <= 0 then
+        return 0
+    end
+    return math.floor(days)
+end
+
+-- Days this share has been on offer, or nil when there is no timestamp to go by. An
+-- unknown age is never treated as old: a file that predates the timestamps would
+-- otherwise have every share show the stopwatch on its first load.
+local function GetShareAgeInDays(entry)
+    local firstDumpedAt = tonumber(entry and entry.firstDumpedAt) or 0
+    local now = tonumber(GetTimeStamp()) or 0
+    if firstDumpedAt <= 0 or now <= 0 or now < firstDumpedAt then
+        return nil
+    end
+    return (now - firstDumpedAt) / SECONDS_PER_DAY
+end
+
+local function IsShareEntryExpired(entry)
+    local days = GetExpireDays()
+    if days <= 0 then
+        return false
+    end
+    local age = GetShareAgeInDays(entry)
+    return age ~= nil and age >= days
+end
+
+-- What the command reports back: how many shares are past the limit, out of how many.
+local function CountSharesAboveExpireLimit()
+    local sharedItems = (ItemShare.savedVars and ItemShare.savedVars.sharedItems) or {}
+    local expired, total = 0, 0
+    for _, entry in pairs(sharedItems) do
+        if type(entry) == "table" and not entry.reserveOnly then
+            total = total + 1
+            if IsShareEntryExpired(entry) then
+                expired = expired + 1
+            end
+        end
+    end
+    return expired, total
 end
 
 -- Which of the four badges belongs on an item: standing offer or plain share, with
@@ -764,8 +819,11 @@ local function GetOrCreateShareListRow(index)
             or 0
         row.isReserveOnly = (not (isShared or isAlways)) and reserve > 0
         row.isShared = (isShared or isAlways) and true or false
+        local isExpired = row.entryData ~= nil and IsShareEntryExpired(row.entryData)
         statusIcon:SetTexture(
-            row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH or GetShareBadgeTexture(link, isAlways, row.entryData and row.entryData.locationKey)
+            (row.isReserveOnly and RESERVE_ONLY_TEXTURE_PATH)
+                or (isExpired and EXPIRED_TEXTURE_PATH)
+                or GetShareBadgeTexture(link, isAlways, row.entryData and row.entryData.locationKey)
         )
         statusIcon:SetHidden(not (isShared or isAlways or row.isReserveOnly))
         RefreshRowAppearance()
@@ -1047,6 +1105,7 @@ RefreshShareListWindow = function()
         -- icon in this window until the row happened to be reused for something else.
         row.statusIcon:SetTexture(
             (entry.reserveOnly and RESERVE_ONLY_TEXTURE_PATH)
+                or (IsShareEntryExpired(entry) and EXPIRED_TEXTURE_PATH)
                 or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink))
         )
         row.statusIcon:SetHidden(false)
@@ -2516,6 +2575,14 @@ local function EnsureShareMarker(control)
         InitializeTooltip(InformationTooltip, self, BOTTOMLEFT, 0, -4)
 
         local lines = {}
+        if self.ItemShareExpired then
+            lines[#lines + 1] = string.format("|cFF8A70Shared for %d days|r", tonumber(self.ItemShareAgeDays) or 0)
+            lines[#lines + 1] = string.format(
+                "Past the /itemshare expire limit of %d days.",
+                GetExpireDays()
+            )
+            lines[#lines + 1] = "It may be time to sell it."
+        end
         if self.ItemShareAlways then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
@@ -2669,11 +2736,20 @@ local function UpdateSharedRowMarker(control, slotData)
     local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
     local reserve = (itemLink and GetShareReserve(itemLink, locationKey)) or 0
 
+    local isExpired = isShared and IsShareEntryExpired(sharedEntry)
+    marker.ItemShareExpired = isExpired and true or false
+    marker.ItemShareAgeDays = isExpired and math.floor(GetShareAgeInDays(sharedEntry) or 0) or 0
+
     if isShared or isAlways then
         -- The plain glyph, saying only what the item offers. A reserve is a separate
         -- fact and gets its own corner below, so a share that keeps some back shows
-        -- both instead of one badge having to mean two things.
-        marker:SetTexture(isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
+        -- both instead of one badge having to mean two things. A share past the expire
+        -- limit is the one case where the age is the thing to say, so the stopwatch
+        -- takes the glyph's place rather than being added to it.
+        marker:SetTexture(
+            isExpired and EXPIRED_TEXTURE_PATH
+                or (isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
+        )
         marker.ItemShareAlways = isAlways and true or false
         marker.ItemShareReserve = reserve
         marker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
@@ -4394,6 +4470,51 @@ local function PrintShareReserves()
     dmsg("Clear one with /itemshare noreserve <part of the name>, or from the item's right-click menu.")
 end
 
+-- /itemshare expire <days> is a statement about the list, not about one item, so it
+-- is kept in the saved variables and read when a badge is painted. That is what makes
+-- it apply by itself after a reload, and on the next inventory, bank or storage view.
+local function SetShareExpireDays(rawArg)
+    local value = zo_strtrim(tostring(rawArg or ""):match("^%s*[Ee]xpire%s*(.*)$") or "")
+    local days = tonumber(value)
+    local current = GetExpireDays()
+    local expired, total = CountSharesAboveExpireLimit()
+
+    if value == "" then
+        if current > 0 then
+            d(string.format(
+                "[ItemShare] Shares older than %d days show the stopwatch: %d of %d are past it.",
+                current,
+                expired,
+                total
+            ))
+        else
+            d("[ItemShare] No expire limit is set, so no share shows the stopwatch.")
+        end
+        d("Use /itemshare expire <days> to mark shares older than that many days, or /itemshare expire 0 to stop marking them.")
+        return
+    end
+
+    if not days or days < 0 or days ~= math.floor(days) then
+        d("Usage: /itemshare expire <days>   (0 turns the stopwatch off)")
+        return
+    end
+
+    ItemShare.savedVars.expireDays = days
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
+
+    if days <= 0 then
+        d("[ItemShare] Expire limit cleared: no share shows the stopwatch.")
+    else
+        d(string.format(
+            "[ItemShare] Shares older than %d days now show the stopwatch: %d of %d are past it.",
+            days,
+            expired,
+            total
+        ))
+    end
+end
+
 local function OnSlashCommand(arg)
     local rawArg = zo_strtrim(arg or "")
     local lowerArg = zo_strlower(rawArg)
@@ -4412,6 +4533,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
         dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
@@ -4489,6 +4611,8 @@ local function OnSlashCommand(arg)
             wasEnabled and "off" or "on",
             wasEnabled and "Shared copies can be sold and deconstructed again." or "A copy shared from a place will refuse to be sold or deconstructed from that place."
         ))
+    elseif lowerArg == "expire" or string.match(lowerArg, "^expire%s") then
+        SetShareExpireDays(rawArg)
     elseif lowerArg == "server" then
         PrintServerEnvironment()
     elseif lowerArg == "guildbank" then
@@ -4513,6 +4637,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
         dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
+        dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
         dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")

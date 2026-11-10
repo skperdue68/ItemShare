@@ -94,9 +94,21 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*]A [color=#5BA85B][b]green gift[/b][/color] on an item icon means it is shared right now.
 [*]The same gift in [color=#D4AF37][b]gold[/b][/color], with a closed ring, means it is always shared, and the badge stays on the item even when you hold none.
 [*]A small [color=#E3B341][b]amber padlock[/b][/color] tag is added to either badge when the item has a share reserve. An item with a reserve that is not shared at all shows the padlock on its own, so a reserve left behind can be seen and cleared instead of forgotten.
+[*]A [color=#D9534F][b]red-ringed stopwatch[/b][/color] takes the gift's place when a share has been on offer longer than the limit set with [b]/ishare expire[/b], so an offer that has quietly become clutter is obvious at a glance.
 [*]The same badges are drawn in the deconstruction and refinement panels and at the ragpicker, so a shared piece is marked in the window where it would otherwise be destroyed.
 [*]Hovering a badge says which state the item is in and, with a reserve, how much is being kept back.
 [/list]
+
+[b][size=4][color=#D4AF37]Old shares: the expire stopwatch[/color][/size][/b]
+
+Things that sit in the list for months stop being offers worth making, and nothing on the icon used to say so. Set a limit once and the addon marks them:
+
+[code]/ishare expire 30    shares 30 days or older show the stopwatch
+/ishare expire 0     turn the marking off[/code]
+
+The stopwatch is the same size as the other badges and sits in the same corner, taking the place of the share gift rather than being drawn beside it, so an old offer reads as old in your bags, the bank, house storage and the shared items window. The limit is one number for the whole file and is saved with your shares, so it keeps applying after a reload and to whatever you look at next - you set it once, not item by item. [b]/ishare expire[/b] with no number reports the limit and how many shares are past it. Hovering the badge says how many days the share has been on offer.
+
+An item's age starts when it was first shared. Re-sharing it, moving it to another bag or running [b]/ishare sync[/b] keeps the original date, so only removing it from the list and sharing it again starts the clock over. Nothing is hidden, removed or dropped by the limit: a share past it is still offered normally, and the stopwatch is a nudge to sell or give the thing away. A share with no recorded date, one carried over from an older version of the file, is never treated as old.
 
 [b][size=4][color=#D4AF37]Shared items are protected[/color][/size][/b]
 
@@ -132,6 +144,7 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*][b]reserve <n> <name>[/b] - keep n back and offer the rest
 [*][b]noreserve <name>[/b] - share the whole stack again
 [*][b]reserves[/b] - list every item with a reserve
+[*][b]expire <n>[/b] - mark shares on offer n days or more with the stopwatch; no number reports the limit, 0 turns it off
 [*][b]guildbank[/b] - toggle sharing from the guild bank
 [*][b]server[/b] - show the platform and megaserver this file is recorded for
 [/list]
