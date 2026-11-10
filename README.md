@@ -51,6 +51,8 @@ Home storage is recorded under the name of the chest, not its number: ESO lets y
 
 Furnishings you set aside for sharing live in a house, not in a bag, so they are filed by hand rather than inferred. Stand in your storage house and run `/ishare scan`: every furnishing placed in that house is collected, every piece that is not bound to you is put up for sharing as `Placed (<house>)`, and the row carries the number of copies standing there. Running the scan again is the record for that house - a piece you picked up is taken back, and one carried in from another house is added. Only the house you are standing in can be read, so a scan never touches another house, and furnishings in the vault or in a bag are shared the usual way, with no scan needed. Bound furnishings are counted and skipped: a piece that can never leave the account is not an offer.
 
+Rows an older version saved under its own placed-furniture label are discarded, at login and again whenever the addon rewrites the file, so nothing stale is written back out.
+
 Items that are bound to you cannot be shared, and neither can items the game only lets you hand to your group for a short while (bind on pickup, still tradeable). The addon refuses both with a message instead of adding them, and it checks again when an item is re-added from the share list window, because an item can become bound after it was filed.
 
 Right-click an item and choose "Always Share This Item" to make it a standing offer: it stays offered even when you no longer have a copy, and `/ishare sync` never removes it. A normally shared item is different - it is only offered while it is in a bag the addon can read, and it disappears from the list once it is gone.

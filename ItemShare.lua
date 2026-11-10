@@ -3570,7 +3570,9 @@ end
 RebuildSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
-    local removedCount, updatedCount, unchangedCount = 0, 0, 0
+    -- Dropped here as well as at login: whatever wrote the file, a row from the
+    -- removed placed-furniture idea must not be carried forward into the next save.
+    local removedCount, updatedCount, unchangedCount = PruneLegacyPlacedFurnitureShares(), 0, 0
 
     local snapshot = {}
     for itemKey, entry in pairs(sharedItems) do

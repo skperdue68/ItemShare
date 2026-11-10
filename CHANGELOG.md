@@ -20,9 +20,9 @@ in the addon's status messages.
 - The scan is the record for that house, so a piece you picked up is taken back by the
   next scan, while every other house is left alone because nothing can read it.
 - Bound furnishings are counted and skipped. Rows written by an older version under the
-  old placed-furniture key are removed once on login with a message saying to scan
-  again, because there is no way any more to tell a piece that had been picked up from
-  one that was never placed.
+  old placed-furniture key are discarded at login and again whenever the addon rewrites
+  the file, with a message on login saying to scan again, because there is no way any
+  more to tell a piece that had been picked up from one that was never placed.
 
 ### 1.11.6
 - `/ishare expire <days>` puts a stopwatch badge on every share that has been on offer
