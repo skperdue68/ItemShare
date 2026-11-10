@@ -10,6 +10,14 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.8
+- Share badges now appear in the deconstruction and refinement panels and at the
+  ragpicker, not only in the bags and the bank. Those lists belong to the crafting UI
+  and were never hooked, so a shared piece looked unmarked exactly where it was about
+  to be destroyed.
+- The crafting lists are hooked as each panel opens, and a share toggled while one is
+  open repaints there immediately.
+
 ### 1.11.7
 - Placed furniture is no longer inferred. The addon used to guess, on every sync, that
   a furnishing missing from a readable bag might be standing in whichever house you

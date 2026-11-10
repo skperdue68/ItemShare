@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.7"
+local ADDON_VERSION = "1.11.8"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2242,14 +2242,23 @@ IsItemLinkAlwaysShared = function(itemLink)
     return alwaysShare[tostring(itemLink or "")] ~= nil
 end
 
+-- Crafting panels own their inventories and are built when a station or the
+-- ragpicker first opens, so they are kept here and repainted with the bags: a share
+-- toggled while the deconstruction pane is open has to update in that pane too.
+local itemShareExtraListViews = {}
+
 TryRefreshInventoryVisuals = function()
-    if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
-        return
+    if PLAYER_INVENTORY and PLAYER_INVENTORY.inventories then
+        for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
+            local listView = inventory and inventory.listView
+            if listView and ZO_ScrollList_RefreshVisible then
+                ZO_ScrollList_RefreshVisible(listView)
+            end
+        end
     end
 
-    for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
-        local listView = inventory and inventory.listView
-        if listView and ZO_ScrollList_RefreshVisible then
+    for listView in pairs(itemShareExtraListViews) do
+        if ZO_ScrollList_RefreshVisible then
             ZO_ScrollList_RefreshVisible(listView)
         end
     end
@@ -2548,46 +2557,93 @@ local function UpdateSharedRowMarker(control, slotData)
     end
 end
 
-local function HookInventoryRowCallbacks()
-    if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
-        return
+-- Every item row in the game is drawn by a scroll list data type, whether it belongs
+-- to the bags or to a crafting panel. Hooking only PLAYER_INVENTORY left the
+-- deconstruction, refinement and ragpicker lists unmarked: those are separate
+-- inventories that the crafting UI builds when its panel first opens.
+local function HookListViewDataTypes(listView)
+    local dataTypes = listView and listView.dataTypes
+    if not dataTypes then
+        return false
     end
 
-    for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
-        local listView = inventory and inventory.listView
-        local dataTypes = listView and listView.dataTypes
+    local hooked = false
+    for _, dataType in pairs(dataTypes) do
+        if dataType and not dataType.ItemShareWrapped then
+            local wrapped = false
 
-        if dataTypes then
-            for _, dataType in pairs(dataTypes) do
-                if dataType and not dataType.ItemShareWrapped then
-                    if type(dataType.callbackFunction) == "function" then
-                        local originalCallbackFunction = dataType.callbackFunction
-                        dataType.callbackFunction = function(control, slotData, ...)
-                            originalCallbackFunction(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    elseif type(dataType.callback) == "function" then
-                        local originalCallback = dataType.callback
-                        dataType.callback = function(control, slotData, ...)
-                            originalCallback(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    elseif type(dataType.setupCallback) == "function" then
-                        local originalSetupCallback = dataType.setupCallback
-                        dataType.setupCallback = function(control, slotData, ...)
-                            originalSetupCallback(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    end
+            if type(dataType.callbackFunction) == "function" then
+                local originalCallbackFunction = dataType.callbackFunction
+                dataType.callbackFunction = function(control, slotData, ...)
+                    originalCallbackFunction(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
                 end
+                wrapped = true
+            elseif type(dataType.callback) == "function" then
+                local originalCallback = dataType.callback
+                dataType.callback = function(control, slotData, ...)
+                    originalCallback(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
+                end
+                wrapped = true
+            elseif type(dataType.setupCallback) == "function" then
+                local originalSetupCallback = dataType.setupCallback
+                dataType.setupCallback = function(control, slotData, ...)
+                    originalSetupCallback(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
+                end
+                wrapped = true
+            end
+
+            if wrapped then
+                dataType.ItemShareWrapped = true
+                hooked = true
             end
         end
     end
 
+    if hooked then
+        itemShareExtraListViews[listView] = true
+        if ZO_ScrollList_RefreshVisible then
+            ZO_ScrollList_RefreshVisible(listView)
+        end
+    end
+
+    return hooked
+end
+
+local function HookInventoryRowCallbacks()
+    if PLAYER_INVENTORY and PLAYER_INVENTORY.inventories then
+        for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
+            HookListViewDataTypes(inventory and inventory.listView)
+        end
+    end
+
     TryRefreshInventoryVisuals()
+end
+
+-- Where the crafting UI keeps the lists that show your items. Each lookup is pcall'd
+-- and may answer nothing yet: a panel is created the first time its scene opens, so
+-- anything missing here is hooked by a later pass rather than treated as an error.
+local CRAFTING_INVENTORY_LOOKUPS = {
+    function() return SMITHING and SMITHING.deconstructPanel and SMITHING.deconstructPanel.inventory end,
+    function() return SMITHING and SMITHING.refinePanel and SMITHING.refinePanel.inventory end,
+    function() return SMITHING and SMITHING.creationPanel and SMITHING.creationPanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.deconstructPanel and ENCHANTING.deconstructPanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.refinePanel and ENCHANTING.refinePanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.creationPanel and ENCHANTING.creationPanel.inventory end,
+    function() return ALCHEMY and ALCHEMY.refinePanel and ALCHEMY.refinePanel.inventory end,
+    function() return PROVISIONER and PROVISIONER.refinePanel and PROVISIONER.refinePanel.inventory end,
+    function() return ZO_DeconstructPane and ZO_DeconstructPane.inventory end,
+}
+
+local function HookCraftingInventoryRows()
+    for _, lookup in ipairs(CRAFTING_INVENTORY_LOOKUPS) do
+        local ok, inventory = pcall(lookup)
+        if ok and type(inventory) == "table" and inventory.listView then
+            HookListViewDataTypes(inventory.listView)
+        end
+    end
 end
 
 -- What one bag holds of an item, as one number. Sharing any stack of soul gems in
@@ -4403,8 +4459,22 @@ local function OnAddonLoaded(event, addonName)
 
     RegisterContextMenus()
     HookInventoryRowCallbacks()
+    HookCraftingInventoryRows()
     if zo_callLater then
         zo_callLater(HookInventoryRowCallbacks, 500)
+        zo_callLater(HookCraftingInventoryRows, 1000)
+    end
+
+    -- A crafting panel is built as its scene opens, so the pass is repeated once the
+    -- scene has had a frame to create the inventory it holds.
+    if SCENE_MANAGER and SCENE_MANAGER.RegisterCallback then
+        SCENE_MANAGER:RegisterCallback("SceneStateChanged", function()
+            if zo_callLater then
+                zo_callLater(HookCraftingInventoryRows, 100)
+            else
+                HookCraftingInventoryRows()
+            end
+        end)
     end
 
     SLASH_COMMANDS["/itemshare"] = OnSlashCommand
