@@ -24,8 +24,9 @@ You can use commands
 
 /ishare list - opens or closes the shared items window. Right-click a row there to cycle it: share it, make it a standing offer, or stop offering it.
 /ishare reset (or clear) - clears every share and every standing offer.
-/ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy. Its summary's `Kept furnishings` count is shares of furniture that the readable bags no longer held: they are kept rather than deleted, because a furnishing may be placed in a house.
+/ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy. Shares filed by `/ishare scan` are left alone too: they stand in a house, and no bag can confirm or deny them.
 /ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
+/ishare scan - in your storage house, shares every non-bound furnishing placed there as `Placed (<house>)` and takes back the ones no longer standing there.
 /ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
 /ishare debug - turns the addon's own status messages on or off.
 /ishare guilds - lists the guilds captured for the current character.
@@ -49,7 +50,9 @@ You may add items to the shared list from Inventory, House Storage, Your Bank, o
 
 Home storage is recorded under the name of the chest, not its number: ESO lets you rename each of the ten storage chests, and the addon reads that name, falling back to the chest's own collectible name and then to `House Storage N`. A row therefore says `Materials` or `Gear I might keep` instead of `House Storage 8`, and the name is saved with the share, so it still reads that way while you are away from home. Rename a chest and the next rebuild relabels its shares; two chests given the same name stay separate rows, because the slot is recorded as well.
 
-A furnishing that is placed in a house keeps its share. `/ishare sync` reads the furniture placed in the house the character is standing in, and a share of that piece is recorded as `Placed Furniture` with the house name beside it, because the zone name is the house name while you are inside one. Every house is tracked on its own: a chair on display in two homes is two rows, one per house, and a sync inside one of them never renames the other. Only the house you are standing in can be read, so a piece placed somewhere else is kept as it is rather than moved or dropped. If you stand in the house a row names and the piece is no longer there, that row stops naming the house and reads plain `Placed Furniture` - the share is kept, and a sync inside the house that still holds the piece puts its name back.
+Furnishings you set aside for sharing live in a house, not in a bag, so they are filed by hand rather than inferred. Stand in your storage house and run `/ishare scan`: every furnishing placed in that house is collected, every piece that is not bound to you is put up for sharing as `Placed (<house>)`, and the row carries the number of copies standing there. Running the scan again is the record for that house - a piece you picked up is taken back, and one carried in from another house is added. Only the house you are standing in can be read, so a scan never touches another house, and furnishings in the vault or in a bag are shared the usual way, with no scan needed. Bound furnishings are counted and skipped: a piece that can never leave the account is not an offer.
+
+Rows an older version saved under its own placed-furniture label are discarded, at login and again whenever the addon rewrites the file, so nothing stale is written back out.
 
 Items that are bound to you cannot be shared, and neither can items the game only lets you hand to your group for a short while (bind on pickup, still tradeable). The addon refuses both with a message instead of adding them, and it checks again when an item is re-added from the share list window, because an item can become bound after it was filed.
 
