@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.4"
+local ADDON_VERSION = "1.11.5"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -1559,10 +1559,19 @@ local function GetCurrentZoneDisplayName()
     return GetNormalizedText(zoneName) or ""
 end
 
+-- One bucket per house. A furnishing placed in two homes is two offers, and a sync
+-- inside one of them must not rename the row that belongs to the other, so the house
+-- is part of the key and not only of the label.
+IsPlacedFurnitureHouseKey = function(locationKey)
+    local text = tostring(locationKey or "")
+    return string.sub(text, 1, 16) == "placedfurniture:"
+end
+
 local function GetPlacedFurnitureLocationInfo()
     local zoneName = GetCurrentZoneDisplayName()
     if zoneName ~= "" then
-        return "placedfurniture", string.format("Placed Furniture (%s)", zoneName)
+        return "placedfurniture:" .. zo_strlower(zoneName),
+            string.format("Placed Furniture (%s)", zoneName)
     end
     return "placedfurniture", "Placed Furniture"
 end
@@ -1654,6 +1663,12 @@ local function BuildLocationKeyFromSharedFrom(sharedFrom)
     elseif string.find(value, "furnishing vault", 1, true) == 1 then
         return "furnishingvault"
     elseif string.find(value, "placed furniture", 1, true) == 1 then
+        -- The label carries the house, so the key has to carry it too, or two houses
+        -- would collapse back into one row the next time the file is read.
+        local houseName = string.match(tostring(sharedFrom or ""), "^Placed Furniture %((.*)%)$")
+        if houseName and houseName ~= "" then
+            return "placedfurniture:" .. zo_strlower(houseName)
+        end
         return "placedfurniture"
     elseif string.find(value, "inventory %(", 1, true) == 1 then
         local characterName = string.match(tostring(sharedFrom or ""), "^Inventory %((.*)%)$")
@@ -2787,6 +2802,37 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
     return SaveSharedEntry(itemData, GetEntryHeldCount(entry), entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
 end
 
+-- The same furnishing placed in a second house is another copy on display, not the
+-- same offer seen twice: it is filed under its own house instead of taking over the
+-- row the first house holds.
+SavePlacedFurnitureShare = function(entry, placedKey, placedLabel, placedCount)
+    if not entry or tostring(entry.itemLink or "") == "" or tostring(placedKey or "") == "" then
+        return nil
+    end
+
+    local count = tonumber(placedCount) or 0
+    if count <= 0 then
+        return nil
+    end
+
+    local targetKey = BuildSharedItemKey(entry.itemLink, placedKey)
+    if ItemShare.savedVars.sharedItems[targetKey] then
+        return nil
+    end
+
+    local copy = {}
+    for field, value in pairs(entry) do
+        copy[field] = value
+    end
+    copy.locationKey = placedKey
+    copy.sharedFrom = placedLabel
+    copy.heldCount = count
+    copy.reserveOnly = nil
+    copy.alwaysOnly = nil
+
+    return SaveSharedEntryFromSavedEntry(copy, false)
+end
+
 -- "Always share" is a standing offer rather than an inventory entry: it says "if
 -- I ever have this again, offer it". It lives in its own table so the rebuild
 -- pass, which prunes anything missing from a readable bag, can never delete it.
@@ -3158,6 +3204,7 @@ BuildActualInventoryIndex = function()
     local bagCountsByFurnitureDataId = {}
     local placedCountsByFurnitureDataId = {}
     local placedCountsByName = {}
+    local placedFurnitureScanCompleted = false
     local observableLocationKeys = {}
 
     for _, bagId in ipairs(GetTrackedBagIds()) do
@@ -3211,6 +3258,7 @@ BuildActualInventoryIndex = function()
     end
 
     if GetPlacedFurnitureCount and GetPlacedFurnitureIdInfo then
+        placedFurnitureScanCompleted = true
         local placedCount = GetPlacedFurnitureCount() or 0
         for index = 1, placedCount do
             local furnitureId = GetPlacedFurnitureIdInfo(index)
@@ -3223,6 +3271,7 @@ BuildActualInventoryIndex = function()
             end
         end
     elseif GetNextPlacedHousingFurnitureId and GetPlacedHousingFurnitureInfo then
+        placedFurnitureScanCompleted = true
         local furnitureId = GetNextPlacedHousingFurnitureId()
         while furnitureId do
             local _, itemName, _, _, _, _, _, _, furnitureDataId = GetPlacedHousingFurnitureInfo(furnitureId)
@@ -3247,6 +3296,7 @@ BuildActualInventoryIndex = function()
         bagCountsByFurnitureDataId = bagCountsByFurnitureDataId,
         placedCountsByFurnitureDataId = placedCountsByFurnitureDataId,
         placedCountsByName = placedCountsByName,
+        placedFurnitureScanCompleted = placedFurnitureScanCompleted,
     }
 end
 
@@ -3347,18 +3397,34 @@ SyncSharedItemsWithInventory = function(quiet)
 
         if isFurnishing and actualCount == 0 then
             local extraCount = 0
+            local placedHere = 0
             if furnitureDataId > 0 then
-                extraCount = (inventoryIndex.bagCountsByFurnitureDataId[furnitureDataId] or 0) + (inventoryIndex.placedCountsByFurnitureDataId[furnitureDataId] or 0)
+                placedHere = inventoryIndex.placedCountsByFurnitureDataId[furnitureDataId] or 0
+                extraCount = (inventoryIndex.bagCountsByFurnitureDataId[furnitureDataId] or 0) + placedHere
             else
-                extraCount = inventoryIndex.placedCountsByName[entry.itemName] or 0
+                placedHere = inventoryIndex.placedCountsByName[entry.itemName] or 0
+                extraCount = placedHere
             end
 
-            if extraCount > 0 then
+            -- Only a piece actually on display here can claim this house: counts that
+            -- came from bags belong to the rows those bags already have.
+            if placedHere > 0 then
                 local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
-                actualCount = extraCount
-                currentLocation = placedLabel
-                currentLocationKey = placedKey
-                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
+                local recordedKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+                if IsPlacedFurnitureHouseKey(recordedKey) and recordedKey ~= placedKey then
+                    -- Another house already holds this share, so what is on display here
+                    -- is a copy: it is filed on its own, never by renaming that row.
+                    if SavePlacedFurnitureShare(entry, placedKey, placedLabel, placedHere) then
+                        if not quiet then
+                            dmsg(string.format("Placed in another house as well, so filed separately: %s - %s", itemName, placedLabel))
+                        end
+                    end
+                else
+                    actualCount = extraCount
+                    currentLocation = placedLabel
+                    currentLocationKey = placedKey
+                    currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
+                end
             end
         end
 
@@ -3366,7 +3432,30 @@ SyncSharedItemsWithInventory = function(quiet)
         local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
-            if not canVerify then
+            local currentHouseKey = GetPlacedFurnitureLocationInfo()
+            local houseFallbackKey = BuildSharedItemKey(entry.itemLink, "placedfurniture")
+            local leftThisHouse = isFurnishing
+                and inventoryIndex.placedFurnitureScanCompleted
+                and (furnitureDataId > 0 or next(inventoryIndex.placedCountsByName) ~= nil)
+                and tostring(entry.itemLink or "") ~= ""
+                and IsPlacedFurnitureHouseKey(entryLocationKey)
+                and tostring(entryLocationKey) == currentHouseKey
+                and not sharedItems[houseFallbackKey]
+
+            if leftThisHouse then
+                -- This house can be read in full and the piece is not in it, so the row
+                -- cannot go on claiming this house. The share is kept and only the claim
+                -- is dropped; a sync inside the house that holds the piece names it again.
+                entry.locationKey = "placedfurniture"
+                entry.sharedFrom = "Placed Furniture"
+                entry.lastDumpedAt = GetTimeStamp()
+                sharedItems[itemKey] = nil
+                sharedItems[houseFallbackKey] = entry
+                updatedCount = updatedCount + 1
+                if not quiet then
+                    dmsg(string.format("Not placed in this house any more, so the share reads Placed Furniture: %s", itemName))
+                end
+            elseif not canVerify then
                 -- That bag could not be read this session, so "not found" proves
                 -- nothing about the item. Keep the share rather than delete blind.
                 unchangedCount = unchangedCount + 1
@@ -3458,18 +3547,34 @@ RebuildSharedItemsWithInventory = function(quiet)
 
         if isFurnishing and actualCount == 0 then
             local extraCount = 0
+            local placedHere = 0
             if furnitureDataId > 0 then
-                extraCount = (inventoryIndex.bagCountsByFurnitureDataId[furnitureDataId] or 0) + (inventoryIndex.placedCountsByFurnitureDataId[furnitureDataId] or 0)
+                placedHere = inventoryIndex.placedCountsByFurnitureDataId[furnitureDataId] or 0
+                extraCount = (inventoryIndex.bagCountsByFurnitureDataId[furnitureDataId] or 0) + placedHere
             else
-                extraCount = inventoryIndex.placedCountsByName[entry.itemName] or 0
+                placedHere = inventoryIndex.placedCountsByName[entry.itemName] or 0
+                extraCount = placedHere
             end
 
-            if extraCount > 0 then
+            -- Only a piece actually on display here can claim this house: counts that
+            -- came from bags belong to the rows those bags already have.
+            if placedHere > 0 then
                 local placedKey, placedLabel = GetPlacedFurnitureLocationInfo()
-                actualCount = extraCount
-                currentLocation = placedLabel
-                currentLocationKey = placedKey
-                currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
+                local recordedKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
+                if IsPlacedFurnitureHouseKey(recordedKey) and recordedKey ~= placedKey then
+                    -- Another house already holds this share, so what is on display here
+                    -- is a copy: it is filed on its own, never by renaming that row.
+                    if SavePlacedFurnitureShare(entry, placedKey, placedLabel, placedHere) then
+                        if not quiet then
+                            dmsg(string.format("Placed in another house as well, so filed separately: %s - %s", itemName, placedLabel))
+                        end
+                    end
+                else
+                    actualCount = extraCount
+                    currentLocation = placedLabel
+                    currentLocationKey = placedKey
+                    currentItemKey = BuildSharedItemKey(entry.itemLink, placedKey)
+                end
             end
         end
 
@@ -3477,7 +3582,28 @@ RebuildSharedItemsWithInventory = function(quiet)
         local canVerify = inventoryIndex.observableLocationKeys[entryLocationKey] == true
 
         if actualCount <= 0 then
-            if not canVerify then
+            local currentHouseKey = GetPlacedFurnitureLocationInfo()
+            local houseFallbackKey = BuildSharedItemKey(entry.itemLink, "placedfurniture")
+            local leftThisHouse = isFurnishing
+                and inventoryIndex.placedFurnitureScanCompleted
+                and (furnitureDataId > 0 or next(inventoryIndex.placedCountsByName) ~= nil)
+                and tostring(entry.itemLink or "") ~= ""
+                and IsPlacedFurnitureHouseKey(entryLocationKey)
+                and tostring(entryLocationKey) == currentHouseKey
+                and not sharedItems[houseFallbackKey]
+
+            if leftThisHouse then
+                -- Readable house, piece absent: the share survives, the claim does not.
+                entry.locationKey = "placedfurniture"
+                entry.sharedFrom = "Placed Furniture"
+                entry.lastDumpedAt = GetTimeStamp()
+                sharedItems[itemKey] = nil
+                sharedItems[houseFallbackKey] = entry
+                updatedCount = updatedCount + 1
+                if not quiet then
+                    dmsg(string.format("Not placed in this house any more during rebuild, so the share reads Placed Furniture: %s", itemName))
+                end
+            elseif not canVerify then
                 -- Unreadable bag: keep the share until a session can see it.
                 unchangedCount = unchangedCount + 1
             elseif isFurnishing then
