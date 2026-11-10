@@ -95,6 +95,7 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*]The same gift in [color=#D4AF37][b]gold[/b][/color], with a closed ring, means it is always shared, and the badge stays on the item even when you hold none.
 [*]A small [color=#E3B341][b]amber padlock[/b][/color] tag is added to either badge when the item has a share reserve. An item with a reserve that is not shared at all shows the padlock on its own, so a reserve left behind can be seen and cleared instead of forgotten.
 [*]A [color=#D9534F][b]red-ringed stopwatch[/b][/color] takes the gift's place when a share has been on offer longer than the limit set with [b]/ishare expire[/b], so an offer that has quietly become clutter is obvious at a glance.
+[*]The same badges are drawn in the deconstruction and refinement panels and at the ragpicker, so a shared piece is marked in the window where it would otherwise be destroyed.
 [*]Hovering a badge says which state the item is in and, with a reserve, how much is being kept back.
 [/list]
 
@@ -108,6 +109,10 @@ Things that sit in the list for months stop being offers worth making, and nothi
 The stopwatch is the same size as the other badges and sits in the same corner, taking the place of the share gift rather than being drawn beside it, so an old offer reads as old in your bags, the bank, house storage and the shared items window. The limit is one number for the whole file and is saved with your shares, so it keeps applying after a reload and to whatever you look at next - you set it once, not item by item. [b]/ishare expire[/b] with no number reports the limit and how many shares are past it. Hovering the badge says how many days the share has been on offer.
 
 An item's age starts when it was first shared. Re-sharing it, moving it to another bag or running [b]/ishare sync[/b] keeps the original date, so only removing it from the list and sharing it again starts the clock over. Nothing is hidden, removed or dropped by the limit: a share past it is still offered normally, and the stopwatch is a nudge to sell or give the thing away. A share with no recorded date, one carried over from an older version of the file, is never treated as old.
+
+[b][size=4][color=#D4AF37]Shared items are protected[/color][/size][/b]
+
+[b]An item shared from a place is not sold or deconstructed from that same place.[/b] The guard follows the location rather than the item: something shared from your bags can still be sold out of the bank, and a copy in a place nothing was shared from is left completely alone. Standing offers lock nothing, because they promise the item rather than the copy in front of you. Remove the share to get the item back - right-click its row in [b]/ishare list[/b], or use the item's own menu. [b]/ishare protect[/b] turns the guard off and on.
 
 [b][size=4][color=#D4AF37]Guilds and server[/color][/size][/b]
 
@@ -130,6 +135,7 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 [*][b]sync[/b] (cleanup, reconcile) - recount shares against the bags readable now and drop the ones you no longer have. Standing offers are left alone.
 [*][b]rebuild[/b] - rewrite every share from your current bags. Also runs on login and when a bank opens or closes.
 [*][b]scan[/b] - share every non-bound furnishing placed in the house you are standing in, and take back the ones no longer there
+[*][b]protect[/b] - stop (or allow) selling and deconstructing an item shared from the place you are acting in
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
 [*][b]debug[/b] - turn the addon's status messages on or off
 [*][b]guilds[/b] - list the guilds captured for the current character
@@ -156,7 +162,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.7, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.8, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]

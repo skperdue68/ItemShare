@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.7"
+local ADDON_VERSION = "1.11.8"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -48,6 +48,9 @@ local defaults = {
     world = "",
     worldName = "",
     serverCapturedAt = 0,
+    -- A share refuses to be sold or deconstructed from the place it was made from,
+    -- so an offer cannot be destroyed by accident while it is on the list.
+    shareProtection = true,
     debugEnabled = false,
     guildBankSharingEnabled = false,
     -- How long a share may stay on offer, in days, before its badge becomes the
@@ -2276,6 +2279,141 @@ local function IsItemLinkSharedInLocation(itemLink, locationKey)
     return ItemShare.savedVars.sharedItems[entryKey] ~= nil
 end
 
+-- A share reserves the copy it was made from, and only that copy: something shared
+-- from your bags is still yours to sell if it happens to be sitting in the bank, and
+-- a copy in a place nothing was shared from is not protected at all. A standing offer
+-- is deliberately not part of this - it promises the item, not the copy in front of
+-- you - so it locks nothing.
+local function GetSharedEntryProtectingSlot(bagId, slotIndex)
+    if bagId == nil or slotIndex == nil or not ItemShare.savedVars then
+        return nil
+    end
+    if ItemShare.savedVars.shareProtection == false then
+        return nil
+    end
+
+    local itemLink = GetNormalizedItemLink(bagId, slotIndex)
+    if not itemLink or itemLink == "" then
+        return nil
+    end
+
+    local locationKey = select(1, GetBagLocationInfo(bagId))
+    if not locationKey then
+        return nil
+    end
+
+    if not IsItemLinkSharedInLocation(itemLink, locationKey) then
+        return nil
+    end
+
+    return ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
+end
+
+-- One line per second at most: a blocked action can be tried repeatedly, and the
+-- reason only has to be said once for it to be read.
+local lastShareProtectionNotice = 0
+
+local function NotifyShareProtected(entry, actionName)
+    local now = GetTimeStamp()
+    if now == lastShareProtectionNotice then
+        return
+    end
+    lastShareProtectionNotice = now
+
+    dmsg(string.format(
+        "%s is shared from %s, so it cannot be %s. Remove the share first - /ishare list, then right-click the row.",
+        tostring(entry and entry.itemName or "That item"),
+        tostring(entry and entry.sharedFrom or "that place"),
+        tostring(actionName or "taken")
+    ))
+end
+
+-- Only the windows where a piece would be destroyed count as deconstruction. Using,
+-- equipping or moving a shared item has to keep working: sharing something is not the
+-- same as refusing to touch it yourself.
+local function IsDeconstructionShown()
+    local panels = {
+        DECONSTRUCTION_BAG,
+        SMITHING and SMITHING.deconstructPanel,
+        ENCHANTING and ENCHANTING.deconstructPanel,
+    }
+
+    for _, panel in ipairs(panels) do
+        if panel and type(panel.IsHidden) == "function" and not panel:IsHidden() then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function GetBagAndSlotFromSlotActions(slotActions)
+    local slot = slotActions and (slotActions.m_inventorySlot or slotActions.inventorySlot)
+    if slot and ZO_InventorySlot_GetBagAndIndex then
+        local bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(slot)
+        if bagId ~= nil and slotIndex ~= nil then
+            return bagId, slotIndex
+        end
+    end
+
+    local data = slotActions and (slotActions.dataEntry and slotActions.dataEntry.data or slotActions.slotData)
+    if type(data) == "table" then
+        return data.bagId, data.slotIndex
+    end
+
+    return nil, nil
+end
+
+local shareProtectionInstalled = false
+
+-- The two actions a share has to survive, hooked where the game itself runs them:
+-- clicking a row in the deconstruction panel is the primary action, and selling is a
+-- slot action whose entry is simply never added for a protected copy.
+local function InstallShareProtection()
+    if shareProtectionInstalled or not ZO_PreHook then
+        return
+    end
+    shareProtectionInstalled = true
+
+    if ZO_InventorySlot_DoPrimaryAction then
+        ZO_PreHook("ZO_InventorySlot_DoPrimaryAction", function(inventorySlot)
+            if not IsDeconstructionShown() then
+                return false
+            end
+
+            local bagId, slotIndex = nil, nil
+            if ZO_InventorySlot_GetBagAndIndex then
+                bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(inventorySlot)
+            end
+
+            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry, "deconstructed")
+            return true
+        end)
+    end
+
+    if ZO_InventorySlotActions then
+        ZO_PreHook(ZO_InventorySlotActions, "AddSlotAction", function(slotActions, actionStringId, ...)
+            if actionStringId ~= SI_ITEM_ACTION_SELL then
+                return false
+            end
+
+            local bagId, slotIndex = GetBagAndSlotFromSlotActions(slotActions)
+            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry, "sold")
+            return true
+        end)
+    end
+end
+
 local function FindSharedEntryKeyForBagSlot(bagId, slotIndex)
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     if not itemLink then
@@ -2301,14 +2439,23 @@ IsItemLinkAlwaysShared = function(itemLink)
     return alwaysShare[tostring(itemLink or "")] ~= nil
 end
 
+-- Crafting panels own their inventories and are built when a station or the
+-- ragpicker first opens, so they are kept here and repainted with the bags: a share
+-- toggled while the deconstruction pane is open has to update in that pane too.
+local itemShareExtraListViews = {}
+
 TryRefreshInventoryVisuals = function()
-    if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
-        return
+    if PLAYER_INVENTORY and PLAYER_INVENTORY.inventories then
+        for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
+            local listView = inventory and inventory.listView
+            if listView and ZO_ScrollList_RefreshVisible then
+                ZO_ScrollList_RefreshVisible(listView)
+            end
+        end
     end
 
-    for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
-        local listView = inventory and inventory.listView
-        if listView and ZO_ScrollList_RefreshVisible then
+    for listView in pairs(itemShareExtraListViews) do
+        if ZO_ScrollList_RefreshVisible then
             ZO_ScrollList_RefreshVisible(listView)
         end
     end
@@ -2624,46 +2771,93 @@ local function UpdateSharedRowMarker(control, slotData)
     end
 end
 
-local function HookInventoryRowCallbacks()
-    if not PLAYER_INVENTORY or not PLAYER_INVENTORY.inventories then
-        return
+-- Every item row in the game is drawn by a scroll list data type, whether it belongs
+-- to the bags or to a crafting panel. Hooking only PLAYER_INVENTORY left the
+-- deconstruction, refinement and ragpicker lists unmarked: those are separate
+-- inventories that the crafting UI builds when its panel first opens.
+local function HookListViewDataTypes(listView)
+    local dataTypes = listView and listView.dataTypes
+    if not dataTypes then
+        return false
     end
 
-    for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
-        local listView = inventory and inventory.listView
-        local dataTypes = listView and listView.dataTypes
+    local hooked = false
+    for _, dataType in pairs(dataTypes) do
+        if dataType and not dataType.ItemShareWrapped then
+            local wrapped = false
 
-        if dataTypes then
-            for _, dataType in pairs(dataTypes) do
-                if dataType and not dataType.ItemShareWrapped then
-                    if type(dataType.callbackFunction) == "function" then
-                        local originalCallbackFunction = dataType.callbackFunction
-                        dataType.callbackFunction = function(control, slotData, ...)
-                            originalCallbackFunction(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    elseif type(dataType.callback) == "function" then
-                        local originalCallback = dataType.callback
-                        dataType.callback = function(control, slotData, ...)
-                            originalCallback(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    elseif type(dataType.setupCallback) == "function" then
-                        local originalSetupCallback = dataType.setupCallback
-                        dataType.setupCallback = function(control, slotData, ...)
-                            originalSetupCallback(control, slotData, ...)
-                            UpdateSharedRowMarker(control, slotData)
-                        end
-                        dataType.ItemShareWrapped = true
-                    end
+            if type(dataType.callbackFunction) == "function" then
+                local originalCallbackFunction = dataType.callbackFunction
+                dataType.callbackFunction = function(control, slotData, ...)
+                    originalCallbackFunction(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
                 end
+                wrapped = true
+            elseif type(dataType.callback) == "function" then
+                local originalCallback = dataType.callback
+                dataType.callback = function(control, slotData, ...)
+                    originalCallback(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
+                end
+                wrapped = true
+            elseif type(dataType.setupCallback) == "function" then
+                local originalSetupCallback = dataType.setupCallback
+                dataType.setupCallback = function(control, slotData, ...)
+                    originalSetupCallback(control, slotData, ...)
+                    UpdateSharedRowMarker(control, slotData)
+                end
+                wrapped = true
+            end
+
+            if wrapped then
+                dataType.ItemShareWrapped = true
+                hooked = true
             end
         end
     end
 
+    if hooked then
+        itemShareExtraListViews[listView] = true
+        if ZO_ScrollList_RefreshVisible then
+            ZO_ScrollList_RefreshVisible(listView)
+        end
+    end
+
+    return hooked
+end
+
+local function HookInventoryRowCallbacks()
+    if PLAYER_INVENTORY and PLAYER_INVENTORY.inventories then
+        for _, inventory in pairs(PLAYER_INVENTORY.inventories) do
+            HookListViewDataTypes(inventory and inventory.listView)
+        end
+    end
+
     TryRefreshInventoryVisuals()
+end
+
+-- Where the crafting UI keeps the lists that show your items. Each lookup is pcall'd
+-- and may answer nothing yet: a panel is created the first time its scene opens, so
+-- anything missing here is hooked by a later pass rather than treated as an error.
+local CRAFTING_INVENTORY_LOOKUPS = {
+    function() return SMITHING and SMITHING.deconstructPanel and SMITHING.deconstructPanel.inventory end,
+    function() return SMITHING and SMITHING.refinePanel and SMITHING.refinePanel.inventory end,
+    function() return SMITHING and SMITHING.creationPanel and SMITHING.creationPanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.deconstructPanel and ENCHANTING.deconstructPanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.refinePanel and ENCHANTING.refinePanel.inventory end,
+    function() return ENCHANTING and ENCHANTING.creationPanel and ENCHANTING.creationPanel.inventory end,
+    function() return ALCHEMY and ALCHEMY.refinePanel and ALCHEMY.refinePanel.inventory end,
+    function() return PROVISIONER and PROVISIONER.refinePanel and PROVISIONER.refinePanel.inventory end,
+    function() return ZO_DeconstructPane and ZO_DeconstructPane.inventory end,
+}
+
+local function HookCraftingInventoryRows()
+    for _, lookup in ipairs(CRAFTING_INVENTORY_LOOKUPS) do
+        local ok, inventory = pcall(lookup)
+        if ok and type(inventory) == "table" and inventory.listView then
+            HookListViewDataTypes(inventory.listView)
+        end
+    end
 end
 
 -- What one bag holds of an item, as one number. Sharing any stack of soul gems in
@@ -4342,6 +4536,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -4408,6 +4603,14 @@ local function OnSlashCommand(arg)
         else
             SetShareReserveByName(zo_strtrim(needle), tonumber(amount) or 0)
         end
+    elseif lowerArg == "protect" then
+        local wasEnabled = ItemShare.savedVars.shareProtection ~= false
+        ItemShare.savedVars.shareProtection = not wasEnabled
+        dmsg(string.format(
+            "Share protection %s. %s",
+            wasEnabled and "off" or "on",
+            wasEnabled and "Shared copies can be sold and deconstructed again." or "A copy shared from a place will refuse to be sold or deconstructed from that place."
+        ))
     elseif lowerArg == "expire" or string.match(lowerArg, "^expire%s") then
         SetShareExpireDays(rawArg)
     elseif lowerArg == "server" then
@@ -4437,6 +4640,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     end
 end
@@ -4527,9 +4731,24 @@ local function OnAddonLoaded(event, addonName)
     end
 
     RegisterContextMenus()
+    InstallShareProtection()
     HookInventoryRowCallbacks()
+    HookCraftingInventoryRows()
     if zo_callLater then
         zo_callLater(HookInventoryRowCallbacks, 500)
+        zo_callLater(HookCraftingInventoryRows, 1000)
+    end
+
+    -- A crafting panel is built as its scene opens, so the pass is repeated once the
+    -- scene has had a frame to create the inventory it holds.
+    if SCENE_MANAGER and SCENE_MANAGER.RegisterCallback then
+        SCENE_MANAGER:RegisterCallback("SceneStateChanged", function()
+            if zo_callLater then
+                zo_callLater(HookCraftingInventoryRows, 100)
+            else
+                HookCraftingInventoryRows()
+            end
+        end)
     end
 
     SLASH_COMMANDS["/itemshare"] = OnSlashCommand
