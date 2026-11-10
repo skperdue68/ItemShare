@@ -98,6 +98,10 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*]Hovering a badge says which state the item is in and, with a reserve, how much is being kept back.
 [/list]
 
+[b][size=4][color=#D4AF37]Shared items are protected[/color][/size][/b]
+
+[b]An item shared from a place is not sold or deconstructed from that same place.[/b] The guard follows the location rather than the item: something shared from your bags can still be sold out of the bank, and a copy in a place nothing was shared from is left completely alone. Standing offers lock nothing, because they promise the item rather than the copy in front of you. Remove the share to get the item back - right-click its row in [b]/ishare list[/b], or use the item's own menu. [b]/ishare protect[/b] turns the guard off and on.
+
 [b][size=4][color=#D4AF37]Guilds and server[/color][/size][/b]
 
 [list]
@@ -119,6 +123,7 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*][b]sync[/b] (cleanup, reconcile) - recount shares against the bags readable now and drop the ones you no longer have. Standing offers are left alone.
 [*][b]rebuild[/b] - rewrite every share from your current bags. Also runs on login and when a bank opens or closes.
 [*][b]scan[/b] - share every non-bound furnishing placed in the house you are standing in, and take back the ones no longer there
+[*][b]protect[/b] - stop (or allow) selling and deconstructing an item shared from the place you are acting in
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
 [*][b]debug[/b] - turn the addon's status messages on or off
 [*][b]guilds[/b] - list the guilds captured for the current character

@@ -17,6 +17,13 @@ in the addon's status messages.
   to be destroyed.
 - The crafting lists are hooked as each panel opens, and a share toggled while one is
   open repaints there immediately.
+- An item shared from a place now refuses to be sold or deconstructed from that same
+  place, so an offer cannot be destroyed by accident while it is on the list. The guard
+  is per location: a copy shared from the bags can still be sold out of the bank, and a
+  copy nothing was shared from is untouched. Standing offers lock nothing.
+- Selling is refused at the slot action the vendor builds, and deconstruction at the
+  primary action the panel runs, so a shared piece cannot be added to the
+  deconstruction selection. `/ishare protect` turns the guard off.
 
 ### 1.11.7
 - Placed furniture is no longer inferred. The addon used to guess, on every sync, that

@@ -44,6 +44,9 @@ local defaults = {
     world = "",
     worldName = "",
     serverCapturedAt = 0,
+    -- A share refuses to be sold or deconstructed from the place it was made from,
+    -- so an offer cannot be destroyed by accident while it is on the list.
+    shareProtection = true,
     debugEnabled = false,
     guildBankSharingEnabled = false,
     -- Guilds are stored once, by ID, and pointed at rather than copied: every
@@ -2217,6 +2220,141 @@ local function IsItemLinkSharedInLocation(itemLink, locationKey)
     return ItemShare.savedVars.sharedItems[entryKey] ~= nil
 end
 
+-- A share reserves the copy it was made from, and only that copy: something shared
+-- from your bags is still yours to sell if it happens to be sitting in the bank, and
+-- a copy in a place nothing was shared from is not protected at all. A standing offer
+-- is deliberately not part of this - it promises the item, not the copy in front of
+-- you - so it locks nothing.
+local function GetSharedEntryProtectingSlot(bagId, slotIndex)
+    if bagId == nil or slotIndex == nil or not ItemShare.savedVars then
+        return nil
+    end
+    if ItemShare.savedVars.shareProtection == false then
+        return nil
+    end
+
+    local itemLink = GetNormalizedItemLink(bagId, slotIndex)
+    if not itemLink or itemLink == "" then
+        return nil
+    end
+
+    local locationKey = select(1, GetBagLocationInfo(bagId))
+    if not locationKey then
+        return nil
+    end
+
+    if not IsItemLinkSharedInLocation(itemLink, locationKey) then
+        return nil
+    end
+
+    return ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
+end
+
+-- One line per second at most: a blocked action can be tried repeatedly, and the
+-- reason only has to be said once for it to be read.
+local lastShareProtectionNotice = 0
+
+local function NotifyShareProtected(entry, actionName)
+    local now = GetTimeStamp()
+    if now == lastShareProtectionNotice then
+        return
+    end
+    lastShareProtectionNotice = now
+
+    dmsg(string.format(
+        "%s is shared from %s, so it cannot be %s. Remove the share first - /ishare list, then right-click the row.",
+        tostring(entry and entry.itemName or "That item"),
+        tostring(entry and entry.sharedFrom or "that place"),
+        tostring(actionName or "taken")
+    ))
+end
+
+-- Only the windows where a piece would be destroyed count as deconstruction. Using,
+-- equipping or moving a shared item has to keep working: sharing something is not the
+-- same as refusing to touch it yourself.
+local function IsDeconstructionShown()
+    local panels = {
+        DECONSTRUCTION_BAG,
+        SMITHING and SMITHING.deconstructPanel,
+        ENCHANTING and ENCHANTING.deconstructPanel,
+    }
+
+    for _, panel in ipairs(panels) do
+        if panel and type(panel.IsHidden) == "function" and not panel:IsHidden() then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function GetBagAndSlotFromSlotActions(slotActions)
+    local slot = slotActions and (slotActions.m_inventorySlot or slotActions.inventorySlot)
+    if slot and ZO_InventorySlot_GetBagAndIndex then
+        local bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(slot)
+        if bagId ~= nil and slotIndex ~= nil then
+            return bagId, slotIndex
+        end
+    end
+
+    local data = slotActions and (slotActions.dataEntry and slotActions.dataEntry.data or slotActions.slotData)
+    if type(data) == "table" then
+        return data.bagId, data.slotIndex
+    end
+
+    return nil, nil
+end
+
+local shareProtectionInstalled = false
+
+-- The two actions a share has to survive, hooked where the game itself runs them:
+-- clicking a row in the deconstruction panel is the primary action, and selling is a
+-- slot action whose entry is simply never added for a protected copy.
+local function InstallShareProtection()
+    if shareProtectionInstalled or not ZO_PreHook then
+        return
+    end
+    shareProtectionInstalled = true
+
+    if ZO_InventorySlot_DoPrimaryAction then
+        ZO_PreHook("ZO_InventorySlot_DoPrimaryAction", function(inventorySlot)
+            if not IsDeconstructionShown() then
+                return false
+            end
+
+            local bagId, slotIndex = nil, nil
+            if ZO_InventorySlot_GetBagAndIndex then
+                bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(inventorySlot)
+            end
+
+            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry, "deconstructed")
+            return true
+        end)
+    end
+
+    if ZO_InventorySlotActions then
+        ZO_PreHook(ZO_InventorySlotActions, "AddSlotAction", function(slotActions, actionStringId, ...)
+            if actionStringId ~= SI_ITEM_ACTION_SELL then
+                return false
+            end
+
+            local bagId, slotIndex = GetBagAndSlotFromSlotActions(slotActions)
+            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry, "sold")
+            return true
+        end)
+    end
+end
+
 local function FindSharedEntryKeyForBagSlot(bagId, slotIndex)
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     if not itemLink then
@@ -4276,6 +4414,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
@@ -4342,6 +4481,14 @@ local function OnSlashCommand(arg)
         else
             SetShareReserveByName(zo_strtrim(needle), tonumber(amount) or 0)
         end
+    elseif lowerArg == "protect" then
+        local wasEnabled = ItemShare.savedVars.shareProtection ~= false
+        ItemShare.savedVars.shareProtection = not wasEnabled
+        dmsg(string.format(
+            "Share protection %s. %s",
+            wasEnabled and "off" or "on",
+            wasEnabled and "Shared copies can be sold and deconstructed again." or "A copy shared from a place will refuse to be sold or deconstructed from that place."
+        ))
     elseif lowerArg == "server" then
         PrintServerEnvironment()
     elseif lowerArg == "guildbank" then
@@ -4368,6 +4515,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
         dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     end
 end
@@ -4458,6 +4606,7 @@ local function OnAddonLoaded(event, addonName)
     end
 
     RegisterContextMenus()
+    InstallShareProtection()
     HookInventoryRowCallbacks()
     HookCraftingInventoryRows()
     if zo_callLater then
