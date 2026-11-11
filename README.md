@@ -49,6 +49,8 @@ The window and the item menus cover the same ground without typing:
 
 You may add items to the shared list from Inventory, House Storage, Your Bank, or the Furnishings Vault, just right click the item and select "Add to Share" or "Remove from Share" as you desire.
 
+Two keybinds do the same two things without opening a menu. They are in the game's own keybind list - **ESC, Controls, Keybinds**, in the **ItemShare** category - and both act on the item you hovered last, so hover it first. **Toggle share** shares that item from the place you are looking at, and pressing it again takes the share back off. **Toggle always share** makes it a standing offer for that place, and pressing it again stops the offer. Turning one on turns the other off, which is what the menu already does: sharing a copy replaces a standing offer of the same item, and making an offer replaces the share.
+
 Home storage is recorded under the name of the chest, not its number: ESO lets you rename each of the ten storage chests, and the addon reads that name, falling back to the chest's own collectible name and then to `House Storage N`. A row therefore says `Materials` or `Gear I might keep` instead of `House Storage 8`, and the name is saved with the share, so it still reads that way while you are away from home. Rename a chest and the next rebuild relabels its shares; two chests given the same name stay separate rows, because the slot is recorded as well.
 
 Furnishings you set aside for sharing live in a house, not in a bag, so they are filed by hand rather than inferred. Keep one house as your dump and put the furnishings you are willing to give away in it.

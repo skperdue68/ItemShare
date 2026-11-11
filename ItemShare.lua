@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.25"
+local ADDON_VERSION = "1.11.26"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3944,6 +3944,99 @@ local function AddInventoryContextMenu(slot)
     end
 end
 
+-- ---------------------------------------------------------------- keybinds --
+-- Both menu entries are also keybinds, listed in the game's own keybind list: ESC, Controls,
+-- Keybinds, category ItemShare. A keybind has no row to click, so each one acts on the item
+-- last hovered - hovering is the only way the addon is told which item you mean.
+ZO_CreateStringId("SI_BINDING_NAME_ITEMSHARE_TOGGLE_SHARE", "Toggle share on the hovered item")
+ZO_CreateStringId("SI_BINDING_NAME_ITEMSHARE_TOGGLE_ALWAYS_SHARE", "Toggle always share on the hovered item")
+
+local hoveredShareBagId, hoveredShareSlotIndex = nil, nil
+
+local function RememberHoveredShareSlot(bagId, slotIndex)
+    if type(bagId) == "number" and type(slotIndex) == "number" then
+        hoveredShareBagId, hoveredShareSlotIndex = bagId, slotIndex
+    end
+end
+
+-- Every item tooltip in the game goes through ItemTooltip:SetBagItem - a bag row, the bank,
+-- house storage, the furnishing vault, the deconstruction panel - so hooking that is what
+-- keeps the remembered slot honest instead of guessing from what has focus.
+local function InstallHoveredShareSlotTracking()
+    if type(ZO_PreHook) ~= "function" then
+        return
+    end
+    if ItemTooltip == nil or type(ItemTooltip.SetBagItem) ~= "function" then
+        return
+    end
+
+    ZO_PreHook(ItemTooltip, "SetBagItem", function(_, bagId, slotIndex)
+        RememberHoveredShareSlot(bagId, slotIndex)
+        return false
+    end)
+end
+
+-- The remembered slot can go stale - the item was sold, moved, or the bag was closed - and
+-- sharing whatever has since taken its place would be worse than doing nothing.
+local function GetHoveredShareSlot()
+    if hoveredShareBagId == nil or hoveredShareSlotIndex == nil then
+        PrintMessage("Hover the item first, then press the key again.")
+        return nil, nil
+    end
+
+    local itemLink = GetNormalizedItemLink(hoveredShareBagId, hoveredShareSlotIndex)
+    if not itemLink or itemLink == "" then
+        PrintMessage("Nothing is in that slot any more - hover the item and press again.")
+        return nil, nil
+    end
+
+    return hoveredShareBagId, hoveredShareSlotIndex
+end
+
+-- Pressing the key on an item that is not shared shares it; pressing it again takes the share
+-- back off. Sharing a copy replaces a standing offer of the same item, which is what the menu
+-- does as well, so the two keybinds cannot leave an item in both states.
+function ItemShare_ToggleShare()
+    local bagId, slotIndex = GetHoveredShareSlot()
+    if not bagId then
+        return
+    end
+
+    if FindSharedEntryKeyForBagSlot(bagId, slotIndex) then
+        RemoveItemFromShareFromBagSlot(bagId, slotIndex)
+    else
+        AddItemToShareFromBagSlot(bagId, slotIndex)
+    end
+end
+
+-- The same for the standing offer: on, off, on, off. Marking one clears any share of the item,
+-- and stopping one leaves the copy alone, so this goes through the same entries the menu uses.
+function ItemShare_ToggleAlwaysShare()
+    local bagId, slotIndex = GetHoveredShareSlot()
+    if not bagId then
+        return
+    end
+
+    local itemLink = GetNormalizedItemLink(bagId, slotIndex)
+    local locationKey = select(1, GetBagLocationInfo(bagId))
+    local alwaysShare = GetAlwaysShareTable()
+    local key = (itemLink and locationKey) and GetAlwaysShareKey(itemLink, locationKey) or nil
+    local existing = key and alwaysShare[key] or nil
+
+    if existing then
+        alwaysShare[key] = nil
+        TryRefreshInventoryVisuals()
+        RefreshShareListWindowIfVisible()
+        PrintMessage(string.format(
+            "Stopped always sharing %s.",
+            tostring(existing.itemName or itemLink)
+        ))
+        return
+    end
+
+    AddAlwaysShareFromBagSlot(bagId, slotIndex)
+end
+
 local function RegisterContextMenus()
     if not LibCustomMenu then
         PrintMessage("LibCustomMenu not found.")
@@ -5244,6 +5337,7 @@ local function OnAddonLoaded(event, addonName)
 
     RegisterContextMenus()
     InstallShareProtection()
+    InstallHoveredShareSlotTracking()
     HookInventoryRowCallbacks()
     HookCraftingInventoryRows()
     if zo_callLater then
