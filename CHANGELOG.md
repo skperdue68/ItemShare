@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.16
+- `/ishare scan` reads placed furniture the way the housing API actually works: pieces are
+  enumerated by id with `GetNextPlacedHousingFurnitureId`, and each id is asked for its own
+  name, icon, furniture data id and link. The old code counted with a `GetPlacedFurnitureCount`
+  pair that does not exist, then read the data id out of the icon's slot, so every piece was
+  reported as unidentified with a data id of 0.
+- The link comes from `GetPlacedFurnitureLink`, and a housing id prints through
+  `Id64ToString` instead of showing as a raw 64-bit number.
+
 ### 1.11.15
 - The addon now loads from a folder whose name is not exactly `ItemShare`, which is what a
   GitHub zip produces (`ItemShare-main`). The name check was an exact match, so those copies
