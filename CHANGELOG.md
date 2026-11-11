@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.29
+- A shared copy can now be banked and taken back out, put into a house storage chest or the
+  furnishing vault and retrieved again, and placed as furniture and picked up. Every one of those
+  moves was refused along with selling and destroying, which made the vaults unusable for exactly
+  the items the share list is about. The lock is keyed to the place a copy was shared from, so the
+  copy stays protected at both ends of the trip.
+- The refusal line now reads "mailing, trading or storing it is all it will allow", so what it
+  says is allowed matches what is.
+
 ### 1.11.28
 - The share badge now appears at the ragpicker's sell and launder tabs, and in any other window
   that draws your own items. The badge used to be created by a list's row-setup callback, and the
