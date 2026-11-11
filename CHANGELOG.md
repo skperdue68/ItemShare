@@ -17,8 +17,8 @@ in the addon's status messages.
   shown - a command that printed nothing really had printed nothing.
 - The scan report uses the same function now, so a scan, a sync, a reserve change and the
   command list all appear in chat without any setting to find first.
-- `/ishare debug` says messages are always shown instead of toggling a flag that no longer
-  gates anything, and it is gone from the command list.
+- `/ishare debug` is gone, along with the saved `debugEnabled` flag it set: messages are
+  always shown now, so the command had nothing left to control.
 
 ### 1.11.12
 - `/ishare scan` now says why it did nothing: outside a house it reports that it only

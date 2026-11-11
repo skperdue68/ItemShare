@@ -29,7 +29,6 @@ You can use commands
 /ishare scan - in a house you own, shares every non-bound furnishing placed there as `Placed (<house>)` and takes back the ones no longer standing there.
 /ishare protect - turns off (or back on) refusing to sell or deconstruct a copy shared from the place you are acting in.
 /ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
-/ishare debug - turns the addon's own status messages on or off.
 /ishare guilds - lists the guilds captured for the current character.
 /ishare always - lists the items you always offer, whether or not a copy is in your bags.
 /ishare noalways <part of the name> - stops always sharing one item.

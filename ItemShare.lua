@@ -51,7 +51,6 @@ local defaults = {
     -- A share refuses to be sold or deconstructed from the place it was made from,
     -- so an offer cannot be destroyed by accident while it is on the list.
     shareProtection = true,
-    debugEnabled = false,
     guildBankSharingEnabled = false,
     -- How long a share may stay on offer, in days, before its badge becomes the
     -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
@@ -4861,8 +4860,6 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "save" then
         RebuildSharedItemsWithInventory()
         ConfirmReloadUI()
-    elseif lowerArg == "debug" then
-        PrintMessage("Every message is shown already, so there is nothing left for debug to switch on.")
     elseif lowerArg == "guilds" then
         local guilds = RefreshGuildSnapshot()
         if #guilds == 0 then
