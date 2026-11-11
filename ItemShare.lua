@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.10"
+local ADDON_VERSION = "1.11.11"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3733,6 +3733,18 @@ local function GetTrackedBagIds()
     return bagIds
 end
 
+-- The bags this addon counts are a fixed list, so a change anywhere else is none of
+-- its business. Asked once per slot update, so it stays a plain walk of that list.
+local function IsTrackedBagId(bagId)
+    for _, trackedBagId in ipairs(GetTrackedBagIds()) do
+        if trackedBagId == bagId then
+            return true
+        end
+    end
+
+    return false
+end
+
 BuildActualInventoryIndex = function()
     local countsByEntryKey = {}
     local countsByLink = {}
@@ -4119,6 +4131,23 @@ end
 -- data (item id, icon, guild ids, set, enchant, style, level, CP, flavour text),
 -- and entries whose location was readable but no longer holds the item are
 -- dropped. Locations that could not be read are left alone.
+-- Nothing to refresh means nothing to scan: a player with no shares and no standing
+-- offers should not pay for a rebuild every time they pick something up.
+local function HasEntriesToRefresh()
+    local savedVars = ItemShare.savedVars
+    if not savedVars then
+        return false
+    end
+
+    return next(savedVars.alwaysShare or {}) ~= nil or next(savedVars.sharedItems or {}) ~= nil
+end
+
+-- A slot change is worth a pass only when it happened in a bag this addon counts and
+-- there is a table that could have gone stale.
+local function ShouldReconcileForInventoryChange(bagId)
+    return IsTrackedBagId(bagId) and HasEntriesToRefresh()
+end
+
 local autoReconcilePending = false
 
 local function ScheduleAutoReconcile(reason)
@@ -4899,6 +4928,33 @@ local function OnAddonLoaded(event, addonName)
     if EVENT_CLOSE_BANK then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
             ScheduleAutoReconcile("the bank closing")
+        end)
+    end
+
+    -- A count goes stale the moment something leaves a bag, and selling, deconstructing,
+    -- trading, mailing or destroying never opens the bank, so nothing used to notice and
+    -- the number kept whatever the last sync or reload left behind. A slot update covers
+    -- every one of those, and ScheduleAutoReconcile collapses a burst into one pass, so a
+    -- loot run or a stack split costs a single rebuild rather than one per item.
+    if EVENT_INVENTORY_SINGLE_SLOT_UPDATE then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_INVENTORY_SINGLE_SLOT_UPDATE, function(_, bagId)
+            if not ShouldReconcileForInventoryChange(bagId) then
+                return
+            end
+
+            ScheduleAutoReconcile("a change in your bags")
+        end)
+    end
+
+    -- A completed trade can move a whole stack without a slot update for the copy that
+    -- left, so the window closing is the second chance to notice it.
+    if EVENT_CLOSE_TRADE_WINDOW then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_TRADE_WINDOW, function()
+            if not HasEntriesToRefresh() then
+                return
+            end
+
+            ScheduleAutoReconcile("a trade")
         end)
     end
 

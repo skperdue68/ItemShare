@@ -10,6 +10,12 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.11
+- A standing offer's number is rewritten within a few seconds of items leaving a bag.
+  Selling, deconstructing, trading away, mailing or destroying the last copy now leaves
+  0 behind instead of the count from the last sync or reload, and a completed trade is
+  caught even when it moves a stack without a slot update.
+
 ### 1.11.10
 - A standing offer belongs to the place it was marked in. Marking lockpicks in your bags
   leaves the stack in the bank unmarked, each place carries its own offer, count and

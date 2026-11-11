@@ -73,7 +73,7 @@ ItemShare keeps track of the tradeable items you are willing to hand out, so you
 
 [b][size=4][color=#D4AF37]Standing offers[/color][/size][/b]
 
-[color=#E3B341][b]Always Share This Item[/b][/color] on an item's menu makes it a standing offer. It stays offered even when you hold no copy, and [b]/ishare sync[/b] never removes it. The number beside it is the count in the place you marked it: mark a Companion's Cuirass in your bags, hand the last one over and run [b]/ishare sync[/b], and its row reads 0 offered - the site offers no Request button for it - until one is back in that bag and you sync again, when the row reads 1. A standing offer belongs to the place it was marked in: mark a stack of lockpicks in your bags and the stack in your bank stays unmarked, and each place offers and counts only what it holds. A normally shared item is different: it is offered only while it is in a bag the addon can read, and it disappears from the list once it is gone.
+[color=#E3B341][b]Always Share This Item[/b][/color] on an item's menu makes it a standing offer. It stays offered even when you hold no copy, and [b]/ishare sync[/b] never removes it. The number beside it is the count in the place you marked it: mark a Companion's Cuirass in your bags, hand the last one over and run [b]/ishare sync[/b], and its row reads 0 offered - the site offers no Request button for it - until one is back in that bag and you sync again, when the row reads 1. The count keeps up on its own: sell, deconstruct, trade away or mail the last copy and it is rewritten a few seconds later, with no reload and no sync. A standing offer belongs to the place it was marked in: mark a stack of lockpicks in your bags and the stack in your bank stays unmarked, and each place offers and counts only what it holds. A normally shared item is different: it is offered only while it is in a bag the addon can read, and it disappears from the list once it is gone.
 
 [b]/ishare always[/b] lists your standing offers, and [b]/ishare noalways <part of the name>[/b] ends one.
 
@@ -162,7 +162,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.10, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.11, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]
