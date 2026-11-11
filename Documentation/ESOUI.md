@@ -116,7 +116,7 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 
 [b][size=4][color=#D4AF37]Shared items are protected[/color][/size][/b]
 
-[b]An item shared from a place is not sold or deconstructed from that same place.[/b] The guard follows the location rather than the item: something shared from your bags can still be sold out of the bank, and a copy in a place nothing was shared from is left completely alone. Standing offers lock nothing, because they promise the item rather than the copy in front of you. Remove the share to get the item back - right-click its row in [b]/ishare list[/b], or use the item's own menu. [b]/ishare protect[/b] turns the guard off and on.
+[b]An item shared from a place is locked while the share stands.[/b] From that place it can be mailed or traded, and nothing else: not sold, destroyed, deconstructed, refined, researched, enchanted, used, equipped, laundered, banked, listed in a guild store, placed as furniture, put on a quickslot or moved into a craft bag. The lock is written as a list of what is still allowed, so anything the game adds later is refused too rather than slipping through. It follows the location rather than the item: something shared from your bags is left alone once it is sitting in the bank, and a copy in a place nothing was shared from is not locked at all. Standing offers lock nothing, because they promise the item rather than the copy in front of you. Looking at a locked item still works - linking it in chat, previewing it, the map and quest entries, marking it as junk or locked, reporting it, and splitting a stack, which keeps both halves shared. Remove the share to get the item back - right-click its row in [b]/ishare list[/b], or use the item's own menu. [b]/ishare protect[/b] turns the lock off and on.
 
 [b][size=4][color=#D4AF37]Guilds and server[/color][/size][/b]
 
@@ -140,7 +140,7 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 [*][b]rebuild[/b] - rewrite every share from your current bags. Also runs on login and when a bank opens or closes.
 [*][b]scan[/b] - share every unbound furnishing placed in the house you own and are standing in, and take back the ones no longer there
 [*][b]scan clear[/b] - clear every share filed as [i]Placed (<house>)[/i] for the house you are standing in
-[*][b]protect[/b] - stop (or allow) selling and deconstructing an item shared from the place you are acting in
+[*][b]protect[/b] - turn the share lock off (or back on): a shared copy can be mailed or traded, nothing else
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
 [*][b]guilds[/b] - list the guilds captured for the current character
 [*][b]always[/b] - list the items you always offer
@@ -166,7 +166,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.23, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.24, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]

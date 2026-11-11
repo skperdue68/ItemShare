@@ -10,6 +10,20 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.24
+- The lock on a shared copy now covers everything the game can be asked to do with it, not just
+  selling and deconstruction. While the share stands, the only things left are mailing it and
+  trading it: destroying, deconstructing, refining, researching, enchanting, charging, repairing,
+  using, equipping, laundering, banking, guild bank, guild store, the craft bag, quickslots and
+  placing it as furniture are all refused.
+- It is written as a list of what is still allowed rather than a list of what is not, so an
+  action this version has never heard of is refused too instead of slipping through.
+- Looking at the item still works - linking it in chat, previewing it, the map and quest entries,
+  marking it as junk or locked, reporting it - and splitting a stack is allowed, because both
+  halves carry the same item link and stay protected.
+- The message names the item and the place it is shared from, and says the way out: remove the
+  share in `/ishare list`.
+
 ### 1.11.23
 - A share actually refuses to be sold now. The guard asked the game for
   `ZO_InventorySlot_GetBagAndIndex`, which is not a client function - the helper is
