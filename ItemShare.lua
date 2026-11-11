@@ -5100,7 +5100,20 @@ local function OnAddonLoaded(event, addonName)
 
 end
 
-EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoaded)
+-- An error anywhere in the setup above used to abort the handler with nothing to show for
+-- it: no command, no event, no line in chat, and the addon still listed at its current
+-- version. The handler is called through pcall so the message lands in chat instead.
+local function OnAddonLoadedGuarded(event, addonName)
+    local ok, err = pcall(OnAddonLoaded, event, addonName)
+    if not ok then
+        PrintMessage(string.format(
+            "Setup stopped with an error, so most of the addon is not running: %s",
+            tostring(err)
+        ))
+    end
+end
+
+EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoadedGuarded)
 
 -- Registered here rather than inside the load handler: the file only runs if the addon
 -- is enabled, so the command exists as soon as the addon does, and a setup error later

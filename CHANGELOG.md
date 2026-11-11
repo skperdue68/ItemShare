@@ -18,6 +18,8 @@ in the addon's status messages.
 - The commands are registered outside the load handler, and say so if the addon has not
   finished loading, so a failure during setup cannot leave a slash command that is silent.
 - A load line now prints before any setup work, naming the folder it loaded from.
+- If that setup throws, the handler reports the error in chat instead of aborting silently,
+  which is what left the addon looking installed, current and mute.
 
 ### 1.11.14
 - Removed code nothing calls: two helpers that were never used, the local character name
