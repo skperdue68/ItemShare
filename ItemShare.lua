@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.14"
+local ADDON_VERSION = "1.11.15"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -4804,6 +4804,11 @@ local function SetShareExpireDays(rawArg)
 end
 
 local function OnSlashCommand(arg)
+    if not ItemShare.savedVars then
+        PrintMessage("The addon has not finished loading, so there is nothing to run yet. If this never changes, check the addon folder is named ItemShare.")
+        return
+    end
+
     local rawArg = zo_strtrim(arg or "")
     local lowerArg = zo_strlower(rawArg)
 
@@ -4929,12 +4934,36 @@ local function OnSlashCommand(arg)
     end
 end
 
+-- ESO hands this event the addon's folder name, not the Title in the manifest. A copy
+-- unzipped from GitHub arrives as "ItemShare-main", so an exact comparison loaded this
+-- file, showed its version, and then returned before registering a single command,
+-- event or message - which looks exactly like an addon that is running but mute.
+local function IsItemShareAddonName(name)
+    local lower = zo_strlower(tostring(name or ""))
+    return lower == "itemshare" or string.sub(lower, 1, #"itemshare") == "itemshare"
+end
+
 local function OnAddonLoaded(event, addonName)
-    if addonName ~= ItemShare.name then
+    if not IsItemShareAddonName(addonName) then
         return
     end
 
     EVENT_MANAGER:UnregisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED)
+
+    -- Said first, before any setup that could go wrong, so a silent failure cannot be
+    -- mistaken for a command that did not run.
+    PrintMessage(string.format(
+        "Loaded (version %s) from the folder '%s'. Shared items refresh from your bags on login and when you open the bank.",
+        ADDON_VERSION,
+        tostring(addonName)
+    ))
+    if tostring(addonName) ~= ItemShare.name then
+        PrintMessage(string.format(
+            "That folder name is not '%s'. Renaming it to '%s' is what the update instructions expect.",
+            ItemShare.name,
+            ItemShare.name
+        ))
+    end
 
     ItemShare.savedVars = ZO_SavedVars:NewAccountWide(
         "ItemShareSavedVars",
@@ -5063,19 +5092,18 @@ local function OnAddonLoaded(event, addonName)
         end)
     end
 
-    SLASH_COMMANDS["/itemshare"] = OnSlashCommand
-    SLASH_COMMANDS["/ishare"] = OnSlashCommand
-
     if ItemShare.savedVars.listWindowState and ItemShare.savedVars.listWindowState.isOpen then
         PrintSharedItems()
     else
         CreateShareListWindow()
     end
 
-    PrintMessage(string.format(
-        "Loaded (version %s). Shared items refresh from your bags on login and when you open the bank.",
-        ADDON_VERSION
-    ))
 end
 
 EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ADD_ON_LOADED, OnAddonLoaded)
+
+-- Registered here rather than inside the load handler: the file only runs if the addon
+-- is enabled, so the command exists as soon as the addon does, and a setup error later
+-- in the handler can no longer leave the player with a slash command that does nothing.
+SLASH_COMMANDS["/itemshare"] = OnSlashCommand
+SLASH_COMMANDS["/ishare"] = OnSlashCommand

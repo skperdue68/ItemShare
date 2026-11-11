@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.15
+- The addon now loads from a folder whose name is not exactly `ItemShare`, which is what a
+  GitHub zip produces (`ItemShare-main`). The name check was an exact match, so those copies
+  loaded the file, showed their version in the addon list, and then returned before
+  registering any command or event - the addon appeared to be running but answered nothing.
+- The commands are registered outside the load handler, and say so if the addon has not
+  finished loading, so a failure during setup cannot leave a slash command that is silent.
+- A load line now prints before any setup work, naming the folder it loaded from.
+
 ### 1.11.14
 - Removed code nothing calls: two helpers that were never used, the local character name
   built at load, and two saved fields written on every platform capture and guild refresh
