@@ -11,33 +11,19 @@ in the addon's status messages.
 ## Addon
 
 ### 1.11.20
-- The rescan reminder is now a panel in the addon's own style - dark backdrop, the gold
-  ITEMSHARE label, a wrapped explanation and a plain "Got It" button - rather than the
-  client's stock dialog, which reads like an error.
-- It appears once per session, at the moment a piece filed as `Placed (<house>)` goes into
-  a trade, instead of after every trade. The trade-close reconcile is unchanged.
-
-### 1.11.19
-- `/ishare scan clear` (or `/ishare scan reset`) removes every share filed as
-  `Placed (<house>)` for the house you are standing in, so a house scanned by mistake, or
-  one that is no longer the storage house, can be taken back out of the file in one go. It
-  touches only that house's rows; bags and other houses are left alone.
-- A completed trade that carries an item filed as `Placed (<house>)` now shows a reminder
-  to run `/ishare scan` in that house again, because the count on the row only changes
-  when the house is read. The addon reads what a trade carries while the window is open,
-  so it can tell a furniture trade from an unrelated one.
-- The house messages no longer say "nothing was scanned" when the command was a clear,
-  and the help and documentation describe both scan and scan clear as the pair they are:
-  fill a dump house, scan it, clear it when it should not be offered any more.
-
-### 1.11.18
-- `/ishare scan` now says "Scanning, one moment..." before it reads the house, so the pause
-  is not a silent one, and ends with "Scan complete: N unbound items found in <house>",
-  naming what was skipped when anything was.
+- `/ishare scan` says "Scanning, one moment..." before it reads the house, so the pause on a
+  full house is not a silent one, and finishes with "Scan complete: N unbound items found in
+  <house>", naming bound, collectible and unreadable pieces on the same line when there are any.
 - The one-line-per-piece output is gone, and with it the per-piece placed id and bound state.
   Bound, collectible and unreadable pieces are counted, not narrated.
-- The bag index a placed piece falls back to is built once per scan instead of once per
-  piece, which is what made a full house take a visible pause.
+- The bag index a placed piece falls back to is built once per scan instead of once per piece,
+  which was most of the pause on a big house.
+- `/ishare scan clear` (or `scan reset`) removes every share filed as `Placed (<house>)` for the
+  house you are standing in, so a house scanned by mistake, or one that is no longer the storage
+  house, can be taken back out of the file in one go. Other houses and bag rows are left alone.
+- The house messages no longer say "nothing was scanned" when the command was a clear, and the
+  documentation covers `/ishare scan` and `/ishare scan clear` together: one house kept as an
+  item dump, scanned to offer what is in it, cleared when it should not be offered any more.
 
 ### 1.11.17
 - Bound state is read again. `GetItemLinkBoundStatus` is not in the client's API, so the
