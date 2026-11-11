@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.22"
+local ADDON_VERSION = "1.11.23"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2327,16 +2327,62 @@ local function IsDeconstructionShown()
     return false
 end
 
-local function GetBagAndSlotFromSlotActions(slotActions)
-    local slot = slotActions and (slotActions.m_inventorySlot or slotActions.inventorySlot)
-    if slot and ZO_InventorySlot_GetBagAndIndex then
-        local bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(slot)
+-- The client reads a bag and slot out of a control with ZO_Inventory_GetBagAndIndex: it
+-- returns the bagId and slotIndex the inventory bound onto the control. The ...Slot... form
+-- these guards used to ask for is not in the client at all, so every lookup answered nil,
+-- both guards decided there was nothing in front of them to protect, and a shared copy went
+-- to the merchant anyway.
+--
+-- A control can also arrive before it has been resolved into its components, which is how
+-- ZO_InventorySlot_DoPrimaryAction starts, so that shape is read as well.
+local function GetBagAndSlotFromInventorySlot(inventorySlot)
+    local slotType = type(inventorySlot)
+    if slotType ~= "table" and slotType ~= "userdata" then
+        return nil, nil
+    end
+
+    if type(ZO_Inventory_GetBagAndIndex) == "function" then
+        local bagId, slotIndex = ZO_Inventory_GetBagAndIndex(inventorySlot)
         if bagId ~= nil and slotIndex ~= nil then
             return bagId, slotIndex
         end
     end
 
-    local data = slotActions and (slotActions.dataEntry and slotActions.dataEntry.data or slotActions.slotData)
+    local data = inventorySlot.dataEntry and inventorySlot.dataEntry.data
+    if type(data) == "table" and data.bagId ~= nil and data.slotIndex ~= nil then
+        return data.bagId, data.slotIndex
+    end
+
+    if inventorySlot.bagId ~= nil and inventorySlot.slotIndex ~= nil then
+        return inventorySlot.bagId, inventorySlot.slotIndex
+    end
+
+    if type(ZO_InventorySlot_GetInventorySlotComponents) == "function" then
+        local components = ZO_InventorySlot_GetInventorySlotComponents(inventorySlot)
+        if components ~= nil and components ~= inventorySlot
+            and type(components) == "table"
+            and components.bagId ~= nil and components.slotIndex ~= nil then
+            return components.bagId, components.slotIndex
+        end
+    end
+
+    return nil, nil
+end
+
+local function GetBagAndSlotFromSlotActions(slotActions)
+    if type(slotActions) ~= "table" then
+        return nil, nil
+    end
+
+    local slot = slotActions.m_inventorySlot or slotActions.inventorySlot
+    if slot ~= nil then
+        local bagId, slotIndex = GetBagAndSlotFromInventorySlot(slot)
+        if bagId ~= nil and slotIndex ~= nil then
+            return bagId, slotIndex
+        end
+    end
+
+    local data = slotActions.dataEntry and slotActions.dataEntry.data or slotActions.slotData
     if type(data) == "table" then
         return data.bagId, data.slotIndex
     end
@@ -2357,22 +2403,30 @@ local function InstallShareProtection()
 
     if ZO_InventorySlot_DoPrimaryAction then
         ZO_PreHook("ZO_InventorySlot_DoPrimaryAction", function(inventorySlot)
-            if not IsDeconstructionShown() then
+            local bagId, slotIndex = GetBagAndSlotFromInventorySlot(inventorySlot)
+
+            if IsDeconstructionShown() then
+                local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+                if entry then
+                    NotifyShareProtected(entry, "deconstructed")
+                    return true
+                end
+
                 return false
             end
 
-            local bagId, slotIndex = nil, nil
-            if ZO_InventorySlot_GetBagAndIndex then
-                bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(inventorySlot)
+            -- At a merchant the primary action on a bag slot is the sale itself, and the
+            -- client decides that inside a local function no addon can hook. Refusing the
+            -- click here is what makes the guard hold even if a sell entry is in the list.
+            if type(ZO_Store_IsShopping) == "function" and ZO_Store_IsShopping() then
+                local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+                if entry then
+                    NotifyShareProtected(entry, "sold")
+                    return true
+                end
             end
 
-            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
-            if not entry then
-                return false
-            end
-
-            NotifyShareProtected(entry, "deconstructed")
-            return true
+            return false
         end)
     end
 
@@ -2460,8 +2514,10 @@ local function GetBagAndSlotFromSlotData(control, slotData)
             or (slotData.rawSlotData and slotData.rawSlotData.slotIndex)
     end
 
-    if (bagId == nil or slotIndex == nil) and ZO_InventorySlot_GetBagAndIndex then
-        bagId, slotIndex = ZO_InventorySlot_GetBagAndIndex(control)
+    if (bagId == nil or slotIndex == nil) and control ~= nil then
+        local controlBagId, controlSlotIndex = GetBagAndSlotFromInventorySlot(control)
+        bagId = bagId or controlBagId
+        slotIndex = slotIndex or controlSlotIndex
     end
 
     return bagId, slotIndex
