@@ -10,6 +10,16 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.28
+- The share badge now appears at the ragpicker's sell and launder tabs, and in any other window
+  that draws your own items. The badge used to be created by a list's row-setup callback, and the
+  fence paints its rows through a repaint path that callback did not reach, so a shared item went
+  unmarked in the window where it was about to be sold.
+- Rows are now marked from `ZO_Inventory_BindSlot`, the client call that binds every item control
+  to its bag item - its own comment lists "trade, mail, store, backpack, bank, crafting" - so the
+  badge follows the item rather than a list, and a window the addon has never heard of needs no
+  new hook.
+
 ### 1.11.27
 - The line printed when a shared copy refuses an action no longer ends by sending you to
   `/ishare list` to right-click a row. It names the item and the place, says mailing or trading is
