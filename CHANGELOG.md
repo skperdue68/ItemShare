@@ -10,6 +10,16 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.13
+- Every message goes through one function that posts a coloured `[ItemShare]` system
+  message, the way GuildSync does. The old sink was gated on `/ishare debug` and called a
+  `d()` helper this file no longer defines, so command output was being dropped instead of
+  shown - a command that printed nothing really had printed nothing.
+- The scan report uses the same function now, so a scan, a sync, a reserve change and the
+  command list all appear in chat without any setting to find first.
+- `/ishare debug` says messages are always shown instead of toggling a flag that no longer
+  gates anything, and it is gone from the command list.
+
 ### 1.11.12
 - `/ishare scan` now says why it did nothing: outside a house it reports that it only
   reads the house you are standing in, and in someone else's house it names the owner and
