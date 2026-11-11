@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.31"
+local ADDON_VERSION = "1.11.32"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2827,8 +2827,34 @@ local function EnsureReserveMarker(control)
     return marker
 end
 
+-- Nothing shared, nothing offered and nothing reserved means every row looks the same, and this
+-- runs for every item control the game binds - every row of a bank you open. Answering "nothing
+-- to draw" with one table lookup keeps that opening cost off players who have nothing on their
+-- list, and off everyone before the first share of the session.
+local function HasAnyMarkerState()
+    local savedVars = ItemShare.savedVars
+    if not savedVars then
+        return false
+    end
+
+    return next(savedVars.sharedItems or {}) ~= nil
+        or next(savedVars.alwaysShare or {}) ~= nil
+        or next(savedVars.reserves or {}) ~= nil
+        or next(savedVars.locationReserves or {}) ~= nil
+end
+
 local function UpdateSharedRowMarker(control, slotData)
     if not control then
+        return
+    end
+
+    if not HasAnyMarkerState() then
+        if control.ItemShareMarker and control.ItemShareMarker.SetHidden then
+            control.ItemShareMarker:SetHidden(true)
+        end
+        if control.ItemShareReserveMarker and control.ItemShareReserveMarker.SetHidden then
+            control.ItemShareReserveMarker:SetHidden(true)
+        end
         return
     end
 
@@ -4246,6 +4272,160 @@ end
 -- own place has run out is asking this question, and the answer has to be single: three
 -- swords split across two bags and the bank is not an item that moved, and guessing would
 -- put a lock on a copy nobody shared.
+-- The bag walk itself is cheap; what costs is the per-item work behind it - item link, trait,
+-- furniture data, icon, stack count - a handful of getters per slot, over every tracked bag. On a
+-- full bank that is thousands of calls, and it all used to happen in one frame, which is the
+-- pause you feel when the bank opens or when a stack is picked up. The same work is now done in
+-- slices with a pause between them: the client gets its frames back and the pass finishes a
+-- moment later instead of hitching for a moment now.
+local SCAN_SLOTS_PER_SLICE = 40
+local SCAN_PAUSE_MS = 40
+
+local StartInventoryScan
+local scanJob = nil
+
+-- A slice is a count of slots rather than milliseconds because a slot costs about the same
+-- everywhere; the pause is what keeps the client responsive. A 240-slot bank is six slices and
+-- roughly a fifth of a second of pauses.
+local function BuildScanUnits()
+    local units = {}
+    local index = {
+        observableLocationKeys = {},
+        countsByEntryKey = {},
+        countsByLink = {},
+        locationsByLink = {},
+    }
+
+    for _, bagId in ipairs(GetTrackedBagIds()) do
+        local locationKey, locationLabel = GetBagLocationInfo(bagId)
+        local bagSize = GetBagSize(bagId) or 0
+        if bagSize > 0 then
+            -- Only a bag that can be read right now is allowed to judge an entry missing.
+            index.observableLocationKeys[locationKey] = true
+            units[#units + 1] = {
+                bagId = bagId,
+                locationKey = locationKey,
+                locationLabel = locationLabel,
+                bagSize = bagSize,
+            }
+        end
+    end
+
+    return units, index
+end
+
+-- One slot of the pass, doing exactly what BuildActualInventoryIndex does per slot so the two
+-- produce the same index - the synchronous version is kept for the explicit commands.
+local function ScanOneSlot(index, unit, slotIndex)
+    local bagId = unit.bagId
+    local slotItemName = GetItemName(bagId, slotIndex)
+    if not slotItemName or slotItemName == "" then
+        return
+    end
+
+    if not IsItemEligibleForShare(bagId, slotIndex) then
+        return
+    end
+
+    local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
+    if not itemData or not itemData.itemLink then
+        return
+    end
+
+    local stackCount = GetItemShareCount(bagId, slotIndex)
+    local entryKey = BuildSharedItemKey(itemData.itemLink, unit.locationKey)
+    local existing = index.countsByEntryKey[entryKey]
+
+    index.countsByEntryKey[entryKey] = {
+        count = (existing and existing.count or 0) + stackCount,
+        sharedFrom = unit.locationLabel,
+        locationKey = unit.locationKey,
+        trait = tostring(itemData.trait or ""),
+        furnitureDataId = tonumber(itemData.furnitureDataId) or 0,
+        bagId = bagId,
+        slotIndex = slotIndex,
+        itemData = itemData,
+    }
+    index.countsByLink[itemData.itemLink] = (index.countsByLink[itemData.itemLink] or 0) + stackCount
+    if not index.locationsByLink[itemData.itemLink] then
+        index.locationsByLink[itemData.itemLink] = {
+            sharedFrom = unit.locationLabel,
+            locationKey = unit.locationKey,
+            bagId = bagId,
+            slotIndex = slotIndex,
+            itemData = itemData,
+        }
+    end
+end
+
+local function FinishScan(job)
+    scanJob = nil
+
+    local onDone = job.onDone
+    if onDone then
+        onDone(job.index)
+    end
+
+    -- A request that arrived mid-scan is honoured now rather than dropped: one more pass, not
+    -- one pass per event that landed while the first was running.
+    if job.again then
+        StartInventoryScan(job.again)
+    end
+end
+
+local function RunScanSlice(job)
+    local units = job.units
+    local budget = SCAN_SLOTS_PER_SLICE
+
+    while budget > 0 and job.unitIndex <= #units do
+        local unit = units[job.unitIndex]
+        ScanOneSlot(job.index, unit, job.slotIndex)
+
+        job.slotIndex = job.slotIndex + 1
+        budget = budget - 1
+
+        if job.slotIndex >= unit.bagSize then
+            job.unitIndex = job.unitIndex + 1
+            job.slotIndex = 0
+        end
+    end
+
+    if job.unitIndex > #units then
+        FinishScan(job)
+        return
+    end
+
+    zo_callLater(function()
+        if scanJob == job then
+            RunScanSlice(job)
+        end
+    end, SCAN_PAUSE_MS)
+end
+
+StartInventoryScan = function(onDone)
+    if scanJob then
+        scanJob.again = scanJob.again or onDone
+        return
+    end
+
+    local units, index = BuildScanUnits()
+    local job = {
+        units = units,
+        index = index,
+        unitIndex = 1,
+        slotIndex = 0,
+        onDone = onDone,
+    }
+    scanJob = job
+
+    if #units == 0 or not zo_callLater then
+        FinishScan(job)
+        return
+    end
+
+    RunScanSlice(job)
+end
+
 local function FindSolePlaceHoldingLink(inventoryIndex, itemLink, excludeLocationKey)
     local link = tostring(itemLink or "")
     if link == "" or not inventoryIndex then
@@ -4434,9 +4614,9 @@ RefreshAlwaysShareHeldCounts = function(inventoryIndex)
     return changed
 end
 
-SyncSharedItemsWithInventory = function(quiet)
+SyncSharedItemsWithInventory = function(quiet, prebuiltIndex)
     local sharedItems = ItemShare.savedVars.sharedItems
-    local inventoryIndex = BuildActualInventoryIndex()
+    local inventoryIndex = prebuiltIndex or BuildActualInventoryIndex()
     local removedCount, updatedCount, unchangedCount = 0, 0, 0
 
     local snapshot = {}
@@ -4517,9 +4697,9 @@ SyncSharedItemsWithInventory = function(quiet)
     RefreshShareListWindowIfVisible()
 end
 
-RebuildSharedItemsWithInventory = function(quiet)
+RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
     local sharedItems = ItemShare.savedVars.sharedItems
-    local inventoryIndex = BuildActualInventoryIndex()
+    local inventoryIndex = prebuiltIndex or BuildActualInventoryIndex()
     -- Dropped here as well as at login: whatever wrote the file, a row from the
     -- removed placed-furniture idea must not be carried forward into the next save.
     local removedCount, updatedCount, unchangedCount = PruneLegacyPlacedFurnitureShares(), 0, 0
@@ -4648,9 +4828,34 @@ local function ShouldReconcileForInventoryChange(bagId)
 end
 
 local autoReconcilePending = false
+local autoReconcileDeferred = false
+local lastAutoReconcileAt = nil
+-- Ten seconds is enough for counts that only have to be roughly right while you play, and it is
+-- the difference between a busy bag costing one pass and costing one per pickup.
+local AUTO_RECONCILE_MIN_INTERVAL_SECONDS = 10
 
 local function ScheduleAutoReconcile(reason)
-    if autoReconcilePending or not ItemShare.savedVars or not zo_callLater then
+    if not ItemShare.savedVars or not zo_callLater then
+        return
+    end
+
+    if autoReconcilePending then
+        return
+    end
+
+    local now = (GetTimeStamp and GetTimeStamp()) or 0
+
+    if lastAutoReconcileAt and (now - lastAutoReconcileAt) < AUTO_RECONCILE_MIN_INTERVAL_SECONDS then
+        -- Deferred, not dropped: a copy that moved still has to be noticed, but a burst of slot
+        -- updates must not each pay for a scan. One timer covers the whole burst.
+        if not autoReconcileDeferred then
+            autoReconcileDeferred = true
+            local waitSeconds = AUTO_RECONCILE_MIN_INTERVAL_SECONDS - (now - lastAutoReconcileAt)
+            zo_callLater(function()
+                autoReconcileDeferred = false
+                ScheduleAutoReconcile(reason)
+            end, math.max(500, math.floor(waitSeconds * 1000)))
+        end
         return
     end
 
@@ -4661,11 +4866,13 @@ local function ScheduleAutoReconcile(reason)
             return
         end
 
+        lastAutoReconcileAt = (GetTimeStamp and GetTimeStamp()) or 0
         RefreshGuildSnapshot()
-        RebuildSharedItemsWithInventory(true)
-        -- This pass runs on login, on every bank visit and after most bag changes, so the
-        -- line was noise. Kept, commented out, for whenever it is wanted again.
-        -- PrintMessage(string.format("Shared items refreshed after %s.", tostring(reason or "login")))
+
+        -- The pass is the same work as before, spread over slices instead of one frame.
+        StartInventoryScan(function(index)
+            RebuildSharedItemsWithInventory(true, index)
+        end)
     end, 4000)
 end
 

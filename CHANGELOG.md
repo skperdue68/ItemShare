@@ -10,6 +10,22 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.32
+- The inventory pass no longer runs in one frame. It reads the bags forty slots at a time with a
+  forty-millisecond pause between slices, so a full bank is a handful of slices instead of one long
+  hitch, and the counts land a fraction of a second later rather than stalling the client while
+  the bank opens or a stack is picked up. Nothing about what it collects has changed: the sliced
+  pass builds exactly the index the whole-bag pass did.
+- An automatic pass now runs at most once every ten seconds. Events that arrive inside that window
+  are not dropped - one timer re-schedules the pass when the window ends - so a move is still
+  noticed, but a loot run or a trade can no longer cost a scan per item.
+- Rows cost nothing to skip when there is nothing to draw: with no shares, offers or reserves, the
+  marker code answers with one table lookup instead of building and anchoring a badge per item
+  control the game binds - which is every row of every list you open.
+- The explicit commands still scan in one go: `/ishare sync`, `/ishare rebuild` and `/ishare save`
+  are things you asked for and then wait on, and `/ishare save` reloads the UI straight after, so
+  its pass has to be finished before the prompt appears.
+
 ### 1.11.31
 - A shared copy can no longer be posted to the guild store by dragging it. Posting was refused
   from the item's menu and from a click, but the listing is filed from a drop, and a drop never
