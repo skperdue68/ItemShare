@@ -10,6 +10,18 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.23
+- A share actually refuses to be sold now. The guard asked the game for
+  `ZO_InventorySlot_GetBagAndIndex`, which is not a client function - the helper is
+  `ZO_Inventory_GetBagAndIndex` - so every lookup came back empty, the guard decided nothing in
+  front of it was shared, and a copy shared from your bags went to the merchant.
+- Selling is refused at the click as well as at the menu. With a store open the primary action
+  on a bag slot is the sale itself, decided inside a local function no addon can hook, so that
+  action is stopped for a protected copy instead of relying only on the sell entry never being
+  added.
+- Deconstruction went through the same missing function, so its guard was passing everything
+  through as well; it now reads the slot the way the client does.
+
 ### 1.11.22
 - The in-game command list is printed from one function instead of two identical copies, so a
   command can no longer work but be missing from the help. `guildbank` was exactly that: it has
