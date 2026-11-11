@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.8"
+local ADDON_VERSION = "1.11.9"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -355,75 +355,48 @@ local function GetShareListEntries()
         end
 
         local alwaysIndex = #waiting > 0 and GetListInventoryIndex() or nil
-        if alwaysIndex then
-            for _, alwaysEntry in ipairs(waiting) do
-                local link = tostring(alwaysEntry.itemLink or "")
-                if link ~= "" then
-                    -- A standing offer is about the item, but the number beside it
-                    -- still belongs to one place: a promise held in the bags and in
-                    -- the bank is one row each, each counting only its own stacks,
-                    -- so no row ever adds two storages together.
-                    local places = {}
-                    for entryKey, actualEntry in pairs(alwaysIndex.countsByEntryKey or {}) do
-                        local entryLink, entryLocationKey = string.match(entryKey, "^(.*)||([^|]*)$")
-                        if tostring(entryLink or "") == link and type(actualEntry) == "table" then
-                            places[#places + 1] = {
-                                locationKey = tostring(entryLocationKey or ""),
-                                actual = actualEntry,
-                            }
-                        end
+        for _, alwaysEntry in ipairs(waiting) do
+            local link = tostring(alwaysEntry.itemLink or "")
+            if link ~= "" then
+                -- The place it was marked in, not wherever a copy happens to be now.
+                -- A standing offer's number is what that one place holds: hand the
+                -- last one over and the row reads 0 offered, pick one up again and it
+                -- reads 1, without the row moving to another bag in between.
+                local locationKey = tostring(alwaysEntry.locationKey or "")
+                local sharedFrom = tostring(alwaysEntry.sharedFrom or "")
+                local held = GetEntryHeldCount(alwaysEntry)
+                local itemData = nil
+
+                if alwaysIndex and locationKey ~= "" then
+                    local place = alwaysIndex.countsByEntryKey
+                        and alwaysIndex.countsByEntryKey[BuildSharedItemKey(link, locationKey)]
+                    if type(place) == "table" then
+                        held = math.max(0, tonumber(place.count or 0) or 0)
+                        sharedFrom = tostring(place.sharedFrom or sharedFrom)
+                        itemData = place.itemData
                     end
-
-                    table.sort(places, function(left, right)
-                        return tostring(left.locationKey or "") < tostring(right.locationKey or "")
-                    end)
-
-                    if #places == 0 then
-                        -- A standing offer is a promise, so it stays in the window
-                        -- even when there is nothing in a bag to hand over at this
-                        -- moment: the row says it is not in a bag and the badge says
-                        -- the offer still stands.
-                        entries[#entries + 1] = {
-                            itemKey = link,
-                            itemLink = link,
-                            itemName = tostring(alwaysEntry.itemName or link),
-                            itemType = alwaysEntry.itemType,
-                            itemTypeName = alwaysEntry.itemTypeName,
-                            quality = alwaysEntry.quality,
-                            trait = alwaysEntry.trait,
-                            heldCount = 0,
-                            reserve = GetShareReserve(link),
-                            count = 0,
-                            sharedFrom = "Not in a bag",
-                            locationKey = "",
-                            alwaysOnly = true,
-                        }
-                    else
-                        for _, place in ipairs(places) do
-                            local held = math.max(0, tonumber(place.actual.count or 0) or 0)
-                            entries[#entries + 1] = {
-                                itemKey = link,
-                                itemLink = link,
-                                itemName = tostring(alwaysEntry.itemName or link),
-                                itemType = alwaysEntry.itemType,
-                                itemTypeName = alwaysEntry.itemTypeName,
-                                quality = alwaysEntry.quality,
-                                trait = alwaysEntry.trait,
-                                heldCount = held,
-                                reserve = GetShareReserve(link, place.locationKey),
-                                count = ShareableCount(link, held, place.locationKey),
-                                sharedFrom = tostring(place.actual.sharedFrom or place.locationKey or "Not in a bag"),
-                                locationKey = place.locationKey,
-                                bagId = place.actual.bagId,
-                                slotIndex = place.actual.slotIndex,
-                                alwaysOnly = true,
-                            }
-                            placesListed[link .. "||" .. place.locationKey] = true
-                        end
-                    end
-
-                    linksListed[link] = true
                 end
+
+                entries[#entries + 1] = {
+                    itemKey = link,
+                    itemLink = link,
+                    itemName = tostring((itemData and itemData.itemName) or alwaysEntry.itemName or link),
+                    itemType = (itemData and itemData.itemType) or alwaysEntry.itemType,
+                    itemTypeName = (itemData and itemData.itemTypeName) or alwaysEntry.itemTypeName,
+                    quality = (itemData and itemData.quality) or alwaysEntry.quality,
+                    trait = (itemData and itemData.trait) or alwaysEntry.trait,
+                    heldCount = held,
+                    reserve = GetShareReserve(link, locationKey),
+                    count = ShareableCount(link, held, locationKey),
+                    sharedFrom = sharedFrom ~= "" and sharedFrom or "Not in a bag",
+                    locationKey = locationKey,
+                    bagId = (itemData and itemData.bagId) or alwaysEntry.bagId,
+                    slotIndex = (itemData and itemData.slotIndex) or alwaysEntry.slotIndex,
+                    alwaysOnly = true,
+                }
+
+                placesListed[link .. "||" .. locationKey] = true
+                linksListed[link] = true
             end
         end
     end
@@ -885,7 +858,7 @@ local function GetOrCreateShareListRow(index)
             -- Sharing -> always sharing. The share goes in the same step, because an
             -- item is offered one way at a time.
             local currentEntry = row.entryKey and ItemShare.savedVars.sharedItems[row.entryKey] or row.entryData
-            local alwaysEntry = SaveAlwaysShareEntry(currentEntry)
+            local alwaysEntry = SaveAlwaysShareEntry(currentEntry, GetEntryHeldCount(currentEntry))
 
             if not alwaysEntry then
                 dmsg(string.format(
@@ -3005,6 +2978,14 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
     entry.flavorText = itemData.flavorText or ""
     entry.esoDetails = itemData.esoDetails or {}
+    -- Where it was marked, and how many were there. A standing offer's number is the
+    -- count in that one place, so the offer remembers the place instead of following
+    -- the item to whichever bag it turns up in next.
+    entry.locationKey = tostring(itemData.locationKey or entry.locationKey or "")
+    entry.sharedFrom = tostring(itemData.sharedFrom or entry.sharedFrom or "")
+    entry.bagId = itemData.bagId or entry.bagId
+    entry.slotIndex = itemData.slotIndex or entry.slotIndex
+    entry.heldCount = math.max(0, math.floor(tonumber(heldCount) or tonumber(itemData.heldCount) or 0))
     entry.bagId = itemData.bagId
     entry.slotIndex = itemData.slotIndex
     entry.locationKey = itemData.locationKey
@@ -3293,7 +3274,7 @@ GetAlwaysShareKey = function(itemLink)
     return tostring(itemLink or "")
 end
 
-SaveAlwaysShareEntry = function(itemData)
+SaveAlwaysShareEntry = function(itemData, heldCount)
     if not itemData or not itemData.itemLink or itemData.itemLink == "" then
         return nil
     end
@@ -3393,7 +3374,13 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
     end
 
     local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
-    SaveAlwaysShareEntry(itemData)
+    -- The offer starts at what this place holds of it right now, so marking the last
+    -- copy is an offer of one and handing it over later leaves the row at 0.
+    local markedCount = GetLocationShareCount(bagId, itemData.itemLink)
+    if markedCount <= 0 then
+        markedCount = GetItemShareCount(bagId, slotIndex)
+    end
+    SaveAlwaysShareEntry(itemData, markedCount)
 
     -- The standing offer replaces any share of the same item, in whichever bag it was
     -- filed from. Doing it before the refresh means the window redraws once, already
@@ -3755,6 +3742,61 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
     dmsg(summary)
 end
 
+-- A standing offer is a promise about one place: the number beside it is what that
+-- place holds of the item, and sync, rebuild and the login pass all come through here
+-- to keep it true. A place that cannot be read this session keeps the number it had,
+-- because a shut bank proves nothing about what is inside it - the same rule shares use.
+RefreshAlwaysShareHeldCounts = function(inventoryIndex)
+    local alwaysShare = ItemShare.savedVars and ItemShare.savedVars.alwaysShare
+    if type(alwaysShare) ~= "table" or not inventoryIndex then
+        return 0
+    end
+
+    local changed = 0
+    for _, entry in pairs(alwaysShare) do
+        if type(entry) == "table" then
+            local link = tostring(entry.itemLink or "")
+            local locationKey = tostring(entry.locationKey or "")
+
+            if link ~= "" then
+                local held = nil
+
+                if locationKey ~= "" then
+                    local place = inventoryIndex.countsByEntryKey
+                        and inventoryIndex.countsByEntryKey[BuildSharedItemKey(link, locationKey)]
+                    if type(place) == "table" then
+                        held = math.max(0, tonumber(place.count or 0) or 0)
+                        entry.sharedFrom = tostring(place.sharedFrom or entry.sharedFrom or "")
+                    elseif inventoryIndex.observableLocationKeys
+                        and inventoryIndex.observableLocationKeys[locationKey] == true then
+                        held = 0
+                    end
+                else
+                    -- An offer saved before the place was recorded adopts the place the
+                    -- item is in now, once, so it has somewhere to count from.
+                    for entryKey, place in pairs(inventoryIndex.countsByEntryKey or {}) do
+                        local placeLink, placeLocationKey = string.match(tostring(entryKey), "^(.*)||([^|]*)$")
+                        if tostring(placeLink or "") == link and type(place) == "table" then
+                            entry.locationKey = tostring(placeLocationKey or "")
+                            entry.sharedFrom = tostring(place.sharedFrom or "")
+                            held = math.max(0, tonumber(place.count or 0) or 0)
+                            break
+                        end
+                    end
+                end
+
+                if held ~= nil and held ~= GetEntryHeldCount(entry) then
+                    entry.heldCount = held
+                    entry.lastUpdatedAt = GetTimeStamp()
+                    changed = changed + 1
+                end
+            end
+        end
+    end
+
+    return changed
+end
+
 SyncSharedItemsWithInventory = function(quiet)
     local sharedItems = ItemShare.savedVars.sharedItems
     local inventoryIndex = BuildActualInventoryIndex()
@@ -3833,6 +3875,7 @@ SyncSharedItemsWithInventory = function(quiet)
         end
     end
 
+    RefreshAlwaysShareHeldCounts(inventoryIndex)
     ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
@@ -3939,6 +3982,7 @@ RebuildSharedItemsWithInventory = function(quiet)
         end
     end
 
+    RefreshAlwaysShareHeldCounts(inventoryIndex)
     ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
