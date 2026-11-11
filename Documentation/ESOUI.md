@@ -142,7 +142,6 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 [*][b]scan clear[/b] - clear every share filed as [i]Placed (<house>)[/i] for the house you are standing in
 [*][b]protect[/b] - stop (or allow) selling and deconstructing an item shared from the place you are acting in
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
-[*][b]debug[/b] - turn the addon's status messages on or off
 [*][b]guilds[/b] - list the guilds captured for the current character
 [*][b]always[/b] - list the items you always offer
 [*][b]noalways <name>[/b] - stop always sharing one item
