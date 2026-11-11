@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.28"
+local ADDON_VERSION = "1.11.29"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2327,7 +2327,7 @@ local function NotifyShareProtected(entry, source)
     end
 
     PrintMessage(string.format(
-        "%s is %s from %s, so ItemShare is holding it: mailing or trading it is all it will allow. %s",
+        "%s is %s from %s, so ItemShare is holding it: mailing, trading or storing it is all it will allow. %s",
         tostring(entry and entry.itemName or "That item"),
         heldAs,
         tostring(entry and entry.sharedFrom or "that place"),
@@ -2441,13 +2441,22 @@ AllowShareProtectedAction(SI_ITEM_ACTION_UNMARK_AS_LOCKED)
 AllowShareProtectedAction(SI_ITEM_ACTION_REPORT_ITEM)
 -- Splitting keeps the share: both halves carry the same item link, so both stay protected.
 AllowShareProtectedAction(SI_ITEM_ACTION_SPLIT_STACK)
+-- Storage keeps the copy: putting a shared piece in the bank, a house chest or the
+-- furnishing vault and taking it back out again is where it lives between sessions, and
+-- refusing those made the vaults unusable for exactly the items the list is about. Both
+-- directions, because it is the same item on whichever side of the vault it sits.
+AllowShareProtectedAction(SI_ITEM_ACTION_BANK_DEPOSIT)
+AllowShareProtectedAction(SI_ITEM_ACTION_BANK_WITHDRAW)
+-- Placing a shared furnishing is storage with a view: it leaves the bag, stays yours, and
+-- has to be pickable again.
+AllowShareProtectedAction(SI_ITEM_ACTION_PLACE_FURNITURE)
 
 local shareProtectionInstalled = false
 
 -- A shared copy can be asked to do something in two places only: the action list a slot
 -- builds before it shows its menu, and the primary action a click or a double click runs.
 -- Refusing both is what stops the copy being sold, destroyed, deconstructed, refined,
--- researched, enchanted, used, equipped, laundered, banked, or turned over to a craft bag.
+-- researched, enchanted, used, equipped, laundered, or turned over to a craft bag.
 local function InstallShareProtection()
     if shareProtectionInstalled or not ZO_PreHook then
         return
