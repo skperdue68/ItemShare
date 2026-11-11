@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.23"
+local ADDON_VERSION = "1.11.24"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2293,7 +2293,7 @@ end
 -- reason only has to be said once for it to be read.
 local lastShareProtectionNotice = 0
 
-local function NotifyShareProtected(entry, actionName)
+local function NotifyShareProtected(entry)
     local now = GetTimeStamp()
     if now == lastShareProtectionNotice then
         return
@@ -2301,30 +2301,24 @@ local function NotifyShareProtected(entry, actionName)
     lastShareProtectionNotice = now
 
     PrintMessage(string.format(
-        "%s is shared from %s, so it cannot be %s. Remove the share first - /ishare list, then right-click the row.",
+        "%s is shared from %s, so ItemShare is holding it: mailing or trading it is all it will allow. Remove the share first - /ishare list, then right-click the row.",
         tostring(entry and entry.itemName or "That item"),
-        tostring(entry and entry.sharedFrom or "that place"),
-        tostring(actionName or "taken")
+        tostring(entry and entry.sharedFrom or "that place")
     ))
 end
 
--- Only the windows where a piece would be destroyed count as deconstruction. Using,
--- equipping or moving a shared item has to keep working: sharing something is not the
--- same as refusing to touch it yourself.
-local function IsDeconstructionShown()
-    local panels = {
-        DECONSTRUCTION_BAG,
-        SMITHING and SMITHING.deconstructPanel,
-        ENCHANTING and ENCHANTING.deconstructPanel,
-    }
-
-    for _, panel in ipairs(panels) do
-        if panel and type(panel.IsHidden) == "function" and not panel:IsHidden() then
-            return true
-        end
+-- Mailing is one of the two things that has to keep working, and the attachment picker is a
+-- bag list like any other, so its clicks are let through while it is on screen.
+local function IsMailSendShowing()
+    if type(SCENE_MANAGER) ~= "table" or type(MAIL_SEND) ~= "string" then
+        return false
+    end
+    if type(SCENE_MANAGER.IsShowing) ~= "function" then
+        return false
     end
 
-    return false
+    local ok, showing = pcall(SCENE_MANAGER.IsShowing, SCENE_MANAGER, MAIL_SEND)
+    return ok and showing == true
 end
 
 -- The client reads a bag and slot out of a control with ZO_Inventory_GetBagAndIndex: it
@@ -2390,49 +2384,51 @@ local function GetBagAndSlotFromSlotActions(slotActions)
     return nil, nil
 end
 
+-- What a share still allows. Everything the client can offer for a bag slot that is not on
+-- this list is refused, so an action nobody has thought of fails closed instead of handing
+-- the copy over. Mailing and trading are the two that have to keep working.
+local shareProtectedAllowedActions = {}
+
+local function AllowShareProtectedAction(actionId)
+    if actionId ~= nil then
+        shareProtectedAllowedActions[actionId] = true
+    end
+end
+
+AllowShareProtectedAction(SI_ITEM_ACTION_MAIL_ATTACH)
+AllowShareProtectedAction(SI_ITEM_ACTION_MAIL_DETACH)
+AllowShareProtectedAction(SI_ITEM_ACTION_TRADE_ADD)
+AllowShareProtectedAction(SI_ITEM_ACTION_TRADE_REMOVE)
+-- Looking at it changes nothing: linking, previewing, the map and quest entries, the junk
+-- and lock marks, and reporting it.
+AllowShareProtectedAction(SI_ITEM_ACTION_LINK_TO_CHAT)
+AllowShareProtectedAction(SI_ITEM_ACTION_PREVIEW)
+AllowShareProtectedAction(SI_ITEM_ACTION_PREVIEW_DYE_STAMP)
+AllowShareProtectedAction(SI_ITEM_ACTION_SHOW_MAP)
+AllowShareProtectedAction(SI_ITEM_ACTION_SHOW_QUEST)
+AllowShareProtectedAction(SI_ITEM_ACTION_MARK_AS_JUNK)
+AllowShareProtectedAction(SI_ITEM_ACTION_UNMARK_AS_JUNK)
+AllowShareProtectedAction(SI_ITEM_ACTION_MARK_AS_LOCKED)
+AllowShareProtectedAction(SI_ITEM_ACTION_UNMARK_AS_LOCKED)
+AllowShareProtectedAction(SI_ITEM_ACTION_REPORT_ITEM)
+-- Splitting keeps the share: both halves carry the same item link, so both stay protected.
+AllowShareProtectedAction(SI_ITEM_ACTION_SPLIT_STACK)
+
 local shareProtectionInstalled = false
 
--- The two actions a share has to survive, hooked where the game itself runs them:
--- clicking a row in the deconstruction panel is the primary action, and selling is a
--- slot action whose entry is simply never added for a protected copy.
+-- A shared copy can be asked to do something in two places only: the action list a slot
+-- builds before it shows its menu, and the primary action a click or a double click runs.
+-- Refusing both is what stops the copy being sold, destroyed, deconstructed, refined,
+-- researched, enchanted, used, equipped, laundered, banked, or turned over to a craft bag.
 local function InstallShareProtection()
     if shareProtectionInstalled or not ZO_PreHook then
         return
     end
     shareProtectionInstalled = true
 
-    if ZO_InventorySlot_DoPrimaryAction then
-        ZO_PreHook("ZO_InventorySlot_DoPrimaryAction", function(inventorySlot)
-            local bagId, slotIndex = GetBagAndSlotFromInventorySlot(inventorySlot)
-
-            if IsDeconstructionShown() then
-                local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
-                if entry then
-                    NotifyShareProtected(entry, "deconstructed")
-                    return true
-                end
-
-                return false
-            end
-
-            -- At a merchant the primary action on a bag slot is the sale itself, and the
-            -- client decides that inside a local function no addon can hook. Refusing the
-            -- click here is what makes the guard hold even if a sell entry is in the list.
-            if type(ZO_Store_IsShopping) == "function" and ZO_Store_IsShopping() then
-                local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
-                if entry then
-                    NotifyShareProtected(entry, "sold")
-                    return true
-                end
-            end
-
-            return false
-        end)
-    end
-
     if ZO_InventorySlotActions then
         ZO_PreHook(ZO_InventorySlotActions, "AddSlotAction", function(slotActions, actionStringId, ...)
-            if actionStringId ~= SI_ITEM_ACTION_SELL then
+            if shareProtectedAllowedActions[actionStringId] then
                 return false
             end
 
@@ -2442,7 +2438,23 @@ local function InstallShareProtection()
                 return false
             end
 
-            NotifyShareProtected(entry, "sold")
+            NotifyShareProtected(entry)
+            return true
+        end)
+    end
+
+    if ZO_InventorySlot_DoPrimaryAction then
+        ZO_PreHook("ZO_InventorySlot_DoPrimaryAction", function(inventorySlot)
+            if IsMailSendShowing() then
+                return false
+            end
+
+            local entry = GetSharedEntryProtectingSlot(GetBagAndSlotFromInventorySlot(inventorySlot))
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry)
             return true
         end)
     end
@@ -4973,7 +4985,7 @@ local function PrintCommandHelp()
     PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off")
     PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
     PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
-    PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
+    PrintMessage("/itemshare protect   - Turn the lock on a shared copy on or off: mailing and trading still work")
     PrintMessage("Right-click an item - Add to Share, Always Share This Item, Share Reserve")
 end
 
@@ -5058,7 +5070,7 @@ local function OnSlashCommand(arg)
         PrintMessage(string.format(
             "Share protection %s. %s",
             wasEnabled and "off" or "on",
-            wasEnabled and "Shared copies can be sold and deconstructed again." or "A copy shared from a place will refuse to be sold or deconstructed from that place."
+            wasEnabled and "Shared copies are unlocked: they can be sold, deconstructed or used again." or "A copy shared from a place is locked: it can be mailed or traded, nothing else."
         ))
     elseif lowerArg == "expire" or string.match(lowerArg, "^expire%s") then
         SetShareExpireDays(rawArg)
