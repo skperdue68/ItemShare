@@ -10,6 +10,11 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.14
+- Removed code nothing calls: two helpers that were never used, the local character name
+  built at load, and two saved fields written on every platform capture and guild refresh
+  but never read. Saved files keep the old keys harmlessly; new files no longer create them.
+
 ### 1.11.13
 - Every message goes through one function that posts a coloured `[ItemShare]` system
   message, the way GuildSync does. The old sink was gated on `/ishare debug` and called a
