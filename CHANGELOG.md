@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.12
+- `/ishare scan` now says why it did nothing: outside a house it reports that it only
+  reads the house you are standing in, and in someone else's house it names the owner and
+  refuses, since a piece there is not yours to offer. Both checks use the house id and
+  the house owner, not the zone name.
+- The scan report no longer depends on `/ishare debug` being on. It was being written
+  through the debug-only message path, which is why a scan in a house could look like it
+  had not run at all.
+
 ### 1.11.11
 - A standing offer's number is rewritten within a few seconds of items leaving a bag.
   Selling, deconstructing, trading away, mailing or destroying the last copy now leaves

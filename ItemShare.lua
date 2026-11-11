@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.11"
+local ADDON_VERSION = "1.11.12"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3155,26 +3155,109 @@ end
 -- display is shared with the number of copies standing there, a share filed under
 -- this house that is no longer in it is taken back, and every other house is left
 -- alone because nothing here can see it.
-local function ScanPlacedFurnishings()
+-- /ishare scan is a command the player typed, so its report must not depend on debug
+-- being on: every line goes to chat either way. That silence is what made a scan look
+-- like it had not run at all.
+local function scanMsg(text)
+    d(string.format("[ItemShare] %s", tostring(text)))
+end
+
+-- The house owner and the player are both display names, but one may carry the @ the
+-- other lacks and the case is not guaranteed, so both are flattened before comparing.
+local function NormalizeHouseOwnerName(name)
+    local text = string.gsub(tostring(name or ""), "^@", "")
+    return zo_strlower(text)
+end
+
+-- Where the scan is standing, and whether that is a house this character owns. Reading
+-- placed furniture works in any home, but filing it is only honest for your own: a
+-- piece in someone else's house is not yours to offer.
+local function GetCurrentHouseScanInfo()
+    if not GetCurrentZoneHouseId then
+        return nil, "This client cannot tell whether you are in a house, so nothing was scanned."
+    end
+
+    local idOk, idValue = pcall(GetCurrentZoneHouseId)
+    local houseId = idOk and (tonumber(idValue) or 0) or 0
+    if houseId <= 0 then
+        return nil, "You are not inside a house. /ishare scan only reads the furniture placed in the house you are standing in, so nothing was scanned."
+    end
+
     local houseName = GetCurrentZoneDisplayName()
-    if houseName == "" then
-        dmsg("Stand in your storage house first: /ishare scan reads the furniture placed in the house you are in.")
+
+    local ownerName = ""
+    if GetCurrentHouseOwner then
+        local ownerOk, ownerValue = pcall(GetCurrentHouseOwner)
+        if ownerOk and type(ownerValue) == "string" then
+            ownerName = GetNormalizedText(ownerValue) or ""
+        end
+    end
+
+    -- Best effort: a client that does not name the owner cannot prove ownership, so the
+    -- scan goes ahead rather than refusing a house the player is standing in.
+    if ownerName ~= "" then
+        local ownerKey = NormalizeHouseOwnerName(ownerName)
+        local ownsHouse = false
+
+        if GetDisplayName then
+            local nameOk, nameValue = pcall(GetDisplayName)
+            if nameOk and type(nameValue) == "string" and NormalizeHouseOwnerName(nameValue) == ownerKey then
+                ownsHouse = true
+            end
+        end
+        if not ownsHouse and NormalizeHouseOwnerName(GetCurrentCharacterName()) == ownerKey then
+            ownsHouse = true
+        end
+
+        if not ownsHouse then
+            return nil, string.format(
+                "This house belongs to %s. /ishare scan only files furniture from a house you own, so nothing was scanned.",
+                ownerName
+            )
+        end
+    end
+
+    return {
+        houseId = houseId,
+        houseName = houseName,
+        ownerName = ownerName,
+    }
+end
+
+-- Reads the house once and treats that reading as the truth for it: a piece on
+-- display is shared with the number of copies standing there, a share filed under
+-- this house that is no longer in it is taken back, and every other house is left
+-- alone because nothing here can see it.
+local function ScanPlacedFurnishings()
+    local house, problem = GetCurrentHouseScanInfo()
+    if not house then
+        scanMsg(problem)
         return
     end
 
     local pieces = GetPlacedFurniturePieces()
     if not pieces then
-        dmsg("This client cannot list placed furniture, so nothing was scanned.")
+        scanMsg("This client cannot list placed furniture, so nothing was scanned.")
         return
     end
 
-    local placedKey, placedLabel = GetPlacedLocationInfo(houseName)
+    local houseLabel = house.houseName ~= "" and house.houseName or "this house"
+    local placedKey, placedLabel = GetPlacedLocationInfo(house.houseName)
+
+    scanMsg(string.format(
+        "Scanning %s (house id %d, owner %s): %d placed piece%s.",
+        houseLabel,
+        house.houseId,
+        house.ownerName ~= "" and house.ownerName or "unknown",
+        #pieces,
+        #pieces == 1 and "" or "s"
+    ))
 
     local copiesByLink = {}
     local dataIdByLink = {}
     local boundCount, unidentifiedCount = 0, 0
 
-    for _, piece in ipairs(pieces) do
+    for index, piece in ipairs(pieces) do
         local info = piece.info or {}
         -- The two placed-furniture getters put the data id in different positions, so
         -- both are read and the one that names a furnishing wins.
@@ -3183,16 +3266,45 @@ local function ScanPlacedFurnishings()
             furnitureDataId = tonumber(info[9])
         end
 
+        local placedId = tonumber(piece.furnitureId) or 0
         local link = GetLinkForFurnitureDataId(furnitureDataId, info)
+
         if link == "" then
             unidentifiedCount = unidentifiedCount + 1
-        elseif IsItemLinkBound(link) then
-            -- Bound is bound: a piece that can never leave the account is not an
-            -- offer, whichever house it stands in.
-            boundCount = boundCount + 1
+            -- TEMPORARY: one line per placed piece, so a scan can be watched working in
+            -- game. Remove this loop's scanMsg calls once scans are trusted again.
+            scanMsg(string.format(
+                "  %d. unidentified furnishing - placed id %d, furniture data id %d, no item link",
+                index,
+                placedId,
+                furnitureDataId
+            ))
         else
-            copiesByLink[link] = (copiesByLink[link] or 0) + 1
-            dataIdByLink[link] = dataIdByLink[link] or furnitureDataId
+            local nameOk, pieceName = pcall(GetItemLinkName, link)
+            if not nameOk or type(pieceName) ~= "string" or pieceName == "" then
+                pieceName = link
+            end
+
+            local boundOk, isBound = pcall(IsItemLinkBound, link)
+            isBound = boundOk and isBound == true
+
+            if isBound then
+                -- Bound is bound: a piece that can never leave the account is not an
+                -- offer, whichever house it stands in.
+                boundCount = boundCount + 1
+            else
+                copiesByLink[link] = (copiesByLink[link] or 0) + 1
+                dataIdByLink[link] = dataIdByLink[link] or furnitureDataId
+            end
+
+            scanMsg(string.format(
+                "  %d. %s - placed id %d, furniture data id %d, %s",
+                index,
+                pieceName,
+                placedId,
+                furnitureDataId,
+                isBound and "bound" or "not bound"
+            ))
         end
     end
 
@@ -3217,9 +3329,9 @@ local function ScanPlacedFurnishings()
 
     RefreshShareListWindowIfVisible()
 
-    dmsg(string.format(
+    scanMsg(string.format(
         "Scan of %s: %d furnishing%s shared as %s, %d bound skipped, %d no longer there, %d unidentified.",
-        houseName,
+        houseLabel,
         addedCount,
         addedCount == 1 and "" or "s",
         placedLabel,
@@ -3228,7 +3340,7 @@ local function ScanPlacedFurnishings()
         unidentifiedCount
     ))
     if addedCount > 0 or removedCount > 0 then
-        dmsg("Use /ishare save or /reloadui to write the change to the file.")
+        scanMsg("Use /ishare save or /reloadui to write the change to the file.")
     end
 end
 
@@ -4735,7 +4847,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
         dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     elseif lowerArg == "list" then
@@ -4839,7 +4951,7 @@ local function OnSlashCommand(arg)
         dmsg("/itemshare reserves  - List the items you keep a reserve on")
         dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
+        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
         dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         dmsg("Right-click an item - Share Reserve asks for a number to keep back")
     end
