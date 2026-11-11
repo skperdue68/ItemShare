@@ -2851,28 +2851,27 @@ local function UpdateSharedRowMarker(control, slotData)
     end
 end
 
--- Whatever list a row belongs to, the row itself is set up through
--- ZO_ItemSlot_SetupSlotBase: the bags, the bank, house storage, a merchant's sell pane, the
--- ragpicker, a mail attachment, a trade. The badge used to be attached per list - the addon
--- walked the bag inventories and a fixed set of crafting panels - so every list it did not
--- walk went unmarked, and the ragpicker's sell pane is a store list it never walked. Hooking
--- the row's own setup makes the badge follow the row instead.
-local function HookItemSlotBaseSetup()
-    if type(ZO_PreHook) ~= "function" or type(ZO_ItemSlot_SetupSlotBase) ~= "function" then
+-- Every item control in the game is bound to its bag item through ZO_Inventory_BindSlot, which
+-- the client's own comment describes as the call that "should be called for all item slots
+-- (trade, mail, store, backpack, bank, crafting, etc...)". Marking the control when it is bound
+-- stops the badge depending on a list, or on that list's row-setup callback still being the one
+-- the addon wrapped: a shared item used to go unmarked at the ragpicker, whose rows are painted
+-- through a repaint path the wrapped callback did not reach.
+local function HookInventorySlotBinding()
+    if type(ZO_PostHook) ~= "function" or type(ZO_Inventory_BindSlot) ~= "function" then
         return
     end
 
-    ZO_PreHook("ZO_ItemSlot_SetupSlotBase", function(slotControl)
-        if slotControl ~= nil then
-            local bagId, slotIndex = GetBagAndSlotFromInventorySlot(slotControl)
-            if bagId ~= nil and slotIndex ~= nil then
-                -- The row carries its own bag and slot by now, so the marker can be decided
-                -- without knowing which list asked for it.
-                UpdateSharedRowMarker(slotControl, nil)
-            end
+    -- After the bind, not before: the bag and slot are only on the control once it has run.
+    ZO_PostHook("ZO_Inventory_BindSlot", function(slotControl)
+        if slotControl == nil then
+            return
         end
 
-        return false
+        local bagId, slotIndex = GetBagAndSlotFromInventorySlot(slotControl)
+        if bagId ~= nil and slotIndex ~= nil then
+            UpdateSharedRowMarker(slotControl, nil)
+        end
     end)
 end
 
@@ -5366,7 +5365,7 @@ local function OnAddonLoaded(event, addonName)
     InstallHoveredShareSlotTracking()
     HookInventoryRowCallbacks()
     HookCraftingInventoryRows()
-    HookItemSlotBaseSetup()
+    HookInventorySlotBinding()
     if zo_callLater then
         zo_callLater(HookInventoryRowCallbacks, 500)
         zo_callLater(HookCraftingInventoryRows, 1000)
