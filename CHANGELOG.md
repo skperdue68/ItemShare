@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.25
+- A standing offer now holds the copy it is counted from. Marking "Always Share This Item" clears
+  any share of the same item, so it used to be the one state where an item was on your list, was
+  offered to everyone, and was protected by nothing: the offer survived the sale that the share
+  would have refused. The offer is looked up in the place it was marked in and locked the same
+  way, so only mailing and trading are left.
+- Stopping the offer releases the copy, exactly as removing a share does, and `/ishare protect`
+  still turns the whole lock off.
+- The refusal message now says which of the two is holding the item - "shared from" or "always
+  shared from" - because the two are released from the same row but not by the same click.
+
 ### 1.11.24
 - The lock on a shared copy now covers everything the game can be asked to do with it, not just
   selling and deconstruction. While the share stands, the only things left are mailing it and
