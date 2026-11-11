@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.24"
+local ADDON_VERSION = "1.11.25"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2261,49 +2261,76 @@ end
 
 -- A share reserves the copy it was made from, and only that copy: something shared
 -- from your bags is still yours to sell if it happens to be sitting in the bank, and
--- a copy in a place nothing was shared from is not protected at all. A standing offer
--- is deliberately not part of this - it promises the item, not the copy in front of
--- you - so it locks nothing.
+-- a copy in a place nothing was shared from is not protected at all.
+--
+-- A standing offer is held just as tightly, because it is marked in one place and counts
+-- that place: the copy the offer is counted from is the copy it promises. Marking an
+-- offer also clears any share of the same item - the two states are one way at a time -
+-- so this used to be the one way to be on the list and be unprotected.
+--
+-- The second return says which of the two is holding the copy, because the message has
+-- to send you to the row that will actually release it.
 local function GetSharedEntryProtectingSlot(bagId, slotIndex)
     if bagId == nil or slotIndex == nil or not ItemShare.savedVars then
-        return nil
+        return nil, nil
     end
     if ItemShare.savedVars.shareProtection == false then
-        return nil
+        return nil, nil
     end
 
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     if not itemLink or itemLink == "" then
-        return nil
+        return nil, nil
     end
 
     local locationKey = select(1, GetBagLocationInfo(bagId))
     if not locationKey then
-        return nil
+        return nil, nil
     end
 
-    if not IsItemLinkSharedInLocation(itemLink, locationKey) then
-        return nil
+    local entry = ItemShare.savedVars.sharedItems and
+        ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
+    if entry ~= nil then
+        return entry, "share"
     end
 
-    return ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
+    local alwaysShare = ItemShare.savedVars.alwaysShare
+    if type(alwaysShare) == "table" and type(GetAlwaysShareKey) == "function" then
+        local alwaysEntry = alwaysShare[GetAlwaysShareKey(itemLink, locationKey)]
+        if alwaysEntry ~= nil then
+            return alwaysEntry, "always"
+        end
+    end
+
+    return nil, nil
 end
 
 -- One line per second at most: a blocked action can be tried repeatedly, and the
 -- reason only has to be said once for it to be read.
 local lastShareProtectionNotice = 0
 
-local function NotifyShareProtected(entry)
+local function NotifyShareProtected(entry, source)
     local now = GetTimeStamp()
     if now == lastShareProtectionNotice then
         return
     end
     lastShareProtectionNotice = now
 
+    -- A standing offer is released by stopping the offer, a share by removing the share.
+    -- Naming the wrong one sends you to a row that will not do what you expect.
+    local heldAs = "shared"
+    local release = "Remove the share first - /ishare list, then right-click the row, or use the item's own menu."
+    if source == "always" then
+        heldAs = "always shared"
+        release = "Stop always sharing it first - /ishare list, then right-click the row, or use the item's own menu."
+    end
+
     PrintMessage(string.format(
-        "%s is shared from %s, so ItemShare is holding it: mailing or trading it is all it will allow. Remove the share first - /ishare list, then right-click the row.",
+        "%s is %s from %s, so ItemShare is holding it: mailing or trading it is all it will allow. %s",
         tostring(entry and entry.itemName or "That item"),
-        tostring(entry and entry.sharedFrom or "that place")
+        heldAs,
+        tostring(entry and entry.sharedFrom or "that place"),
+        release
     ))
 end
 
@@ -2433,12 +2460,12 @@ local function InstallShareProtection()
             end
 
             local bagId, slotIndex = GetBagAndSlotFromSlotActions(slotActions)
-            local entry = GetSharedEntryProtectingSlot(bagId, slotIndex)
+            local entry, source = GetSharedEntryProtectingSlot(bagId, slotIndex)
             if not entry then
                 return false
             end
 
-            NotifyShareProtected(entry)
+            NotifyShareProtected(entry, source)
             return true
         end)
     end
@@ -2449,12 +2476,12 @@ local function InstallShareProtection()
                 return false
             end
 
-            local entry = GetSharedEntryProtectingSlot(GetBagAndSlotFromInventorySlot(inventorySlot))
+            local entry, source = GetSharedEntryProtectingSlot(GetBagAndSlotFromInventorySlot(inventorySlot))
             if not entry then
                 return false
             end
 
-            NotifyShareProtected(entry)
+            NotifyShareProtected(entry, source)
             return true
         end)
     end
