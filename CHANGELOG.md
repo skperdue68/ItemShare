@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.26
+- Two keybinds, in the game's own list under Controls - Keybinds - **ItemShare**: **Toggle share**
+  and **Toggle always share**. Both act on the item you hovered last, since a keybind has no row
+  to click, and pressing the same key again turns the state back off.
+- Turning one on turns the other off, which is what the menus already do: sharing a copy replaces
+  a standing offer of the same item, and making an offer replaces the share.
+- The addon now ships `Bindings.xml`. Without that file - named exactly that - the client does not
+  load addon keybinds at all, however the Lua is written.
+
 ### 1.11.25
 - A standing offer now holds the copy it is counted from. Marking "Always Share This Item" clears
   any share of the same item, so it used to be the one state where an item was on your list, was

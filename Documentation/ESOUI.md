@@ -75,6 +75,10 @@ ItemShare keeps track of the tradeable items you are willing to hand out, so you
 [*]The window reads the counts saved with your shares rather than measuring the bags again, which is why the bank's row is still there while the bank is shut.
 [/list]
 
+[b][size=4][color=#D4AF37]Keybinds[/color][/size][/b]
+
+Two keybinds do the same two things as the menu, on the item you hovered last: [b]Toggle share[/b] and [b]Toggle always share[/b]. Both are listed under ESC - Controls - Keybinds, in the [b]ItemShare[/b] category. Hover an item and press the key to share it or make it a standing offer; press the same key again to take that back off. Turning one on turns the other off, exactly as the menu does.
+
 [b][size=4][color=#D4AF37]Standing offers[/color][/size][/b]
 
 [color=#E3B341][b]Always Share This Item[/b][/color] on an item's menu makes it a standing offer. It stays offered even when you hold no copy, and [b]/ishare sync[/b] never removes it. The number beside it is the count in the place you marked it: mark a Companion's Cuirass in your bags, hand the last one over and run [b]/ishare sync[/b], and its row reads 0 offered - the site offers no Request button for it - until one is back in that bag and you sync again, when the row reads 1. The count keeps up on its own: trade away or mail the last copy - selling and deconstructing it are refused while the offer stands - and it is rewritten a few seconds later, with no reload and no sync. A standing offer belongs to the place it was marked in: mark a stack of lockpicks in your bags and the stack in your bank stays unmarked, and each place offers and counts only what it holds. That place is the one it locks too, so an offer is not a way to hand something over by accident. A normally shared item is different: it is offered only while it is in a bag the addon can read, and it disappears from the list once it is gone.
@@ -166,7 +170,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.25, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.26, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]
