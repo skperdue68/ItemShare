@@ -5052,7 +5052,7 @@ local function OnAddonLoaded(event, addonName)
     ItemShare.savedVars = ZO_SavedVars:NewAccountWide(
         "ItemShareSavedVars",
         SAVED_VARS_VERSION,
-        nil,
+        GetWorldName(),
         defaults
     )
 
