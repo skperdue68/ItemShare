@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.21"
+local ADDON_VERSION = "1.11.22"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -4896,6 +4896,31 @@ local function SetShareExpireDays(rawArg)
     end
 end
 
+-- One list, printed from one place. The bare command and the unknown-command fallback
+-- each carried their own copy of it, which is how a command that works - guildbank - ends
+-- up missing from the help, and how a line that made no sense survived in both copies.
+local function PrintCommandHelp()
+    PrintMessage("Commands:")
+    PrintMessage("/itemshare list      - Open the shared items window")
+    PrintMessage("/itemshare reset     - Clear all shared entries")
+    PrintMessage("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+    PrintMessage("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
+    PrintMessage("/itemshare save      - Reload the UI")
+    PrintMessage("/itemshare guilds    - Show the guilds this character's shares are matched against")
+    PrintMessage("/itemshare always    - List the items you always offer, in or out of your bags")
+    PrintMessage("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+    PrintMessage("/itemshare reserve N <name> - Share only what you hold above N of that item")
+    PrintMessage("/itemshare noreserve <name> - Share everything you hold of that item again")
+    PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
+    PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
+    PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
+    PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off")
+    PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
+    PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
+    PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
+    PrintMessage("Right-click an item - Add to Share, Always Share This Item, Share Reserve")
+end
+
 local function OnSlashCommand(arg)
     if not ItemShare.savedVars then
         PrintMessage("The addon has not finished loading, so there is nothing to run yet. If this never changes, check the addon folder is named ItemShare.")
@@ -4906,24 +4931,7 @@ local function OnSlashCommand(arg)
     local lowerArg = zo_strlower(rawArg)
 
     if lowerArg == "" then
-        PrintMessage("Commands:")
-        PrintMessage("/itemshare list      - Open the shared items window")
-        PrintMessage("/itemshare reset     - Clear all shared entries")
-        PrintMessage("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
-        PrintMessage("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
-        PrintMessage("/itemshare save      - Reload the UI")
-        PrintMessage("/itemshare guilds    - Show the guilds this character's shares are matched against")
-        PrintMessage("/itemshare always    - List the items you always offer, in or out of your bags")
-        PrintMessage("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
-        PrintMessage("/itemshare reserve N <name> - Share only what you hold above N of that item")
-        PrintMessage("/itemshare noreserve <name> - Share everything you hold of that item again")
-        PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
-        PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
-        PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
-        PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
-        PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
-        PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
+        PrintCommandHelp()
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
         if window and not window:IsHidden() then
@@ -5010,24 +5018,7 @@ local function OnSlashCommand(arg)
         ))
         RefreshShareListWindowIfVisible()
     else
-        PrintMessage("Commands:")
-        PrintMessage("/itemshare list      - Open the shared items window")
-        PrintMessage("/itemshare reset     - Clear all shared entries")
-        PrintMessage("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
-        PrintMessage("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
-        PrintMessage("/itemshare save      - Reload the UI")
-        PrintMessage("/itemshare guilds    - Show the guilds this character's shares are matched against")
-        PrintMessage("/itemshare always    - List the items you always offer, in or out of your bags")
-        PrintMessage("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
-        PrintMessage("/itemshare reserve N <name> - Share only what you hold above N of that item")
-        PrintMessage("/itemshare noreserve <name> - Share everything you hold of that item again")
-        PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
-        PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
-        PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
-        PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
-        PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
-        PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
+        PrintCommandHelp()
     end
 end
 
