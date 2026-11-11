@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.29"
+local ADDON_VERSION = "1.11.30"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -4204,6 +4204,48 @@ BuildActualInventoryIndex = function()
     }
 end
 
+-- The one place a readable index holds this link, if there is exactly one. A share whose
+-- own place has run out is asking this question, and the answer has to be single: three
+-- swords split across two bags and the bank is not an item that moved, and guessing would
+-- put a lock on a copy nobody shared.
+local function FindSolePlaceHoldingLink(inventoryIndex, itemLink, excludeLocationKey)
+    local link = tostring(itemLink or "")
+    if link == "" or not inventoryIndex then
+        return nil
+    end
+
+    local found = nil
+    for entryKey, place in pairs(inventoryIndex.countsByEntryKey or {}) do
+        if type(place) == "table" then
+            local placeLink, placeLocationKey = string.match(tostring(entryKey), "^(.*)||([^|]*)$")
+            placeLink = tostring(placeLink or "")
+            placeLocationKey = tostring(placeLocationKey or "")
+
+            if placeLink == link
+                and placeLocationKey ~= ""
+                and placeLocationKey ~= tostring(excludeLocationKey or "")
+                and (tonumber(place.count or 0) or 0) > 0 then
+                if found ~= nil then
+                    return nil
+                end
+
+                found = {
+                    locationKey = placeLocationKey,
+                    sharedFrom = tostring(place.sharedFrom or ""),
+                    count = math.max(0, tonumber(place.count or 0) or 0),
+                }
+            end
+        end
+    end
+
+    return found
+end
+
+-- A share is filed against the place it was made from, so it has to be re-filed when the
+-- copy moves: something shared from your bags and then banked used to drop off the list at
+-- the next pass, because the place it named held nothing and the addon could not tell that
+-- apart from sold. It can tell, as long as the item is plainly in one other place - and when
+-- it is not, the row is left exactly where it was rather than moved on a guess.
 local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     if not entry or not inventoryIndex then
         return nil
@@ -4217,6 +4259,8 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
     local entryTrait = tostring(entry.trait or "")
     local entryLocationKey = tostring(entry.locationKey or BuildLocationKeyFromSharedFrom(entry.sharedFrom) or "")
 
+    local found = nil
+
     for entryKey, actualEntry in pairs(inventoryIndex.countsByEntryKey or {}) do
         if entryKey ~= "" and entryKey ~= BuildSharedItemKey(entry.itemLink, entry.locationKey) and type(actualEntry) == "table" then
             local actualItemLink, actualLocationKey = string.match(entryKey, "^(.*)||([^|]*)$")
@@ -4228,7 +4272,12 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
                 local traitMatches = (entryTrait == "" and actualTrait == "") or (entryTrait ~= "" and actualTrait == entryTrait)
 
                 if traitMatches then
-                    return {
+                    if found ~= nil and found.locationKey ~= actualLocationKey then
+                        -- Two places hold it, so this is not a move and nothing follows.
+                        return nil
+                    end
+
+                    found = {
                         itemKey = entryKey,
                         locationKey = actualLocationKey,
                         sharedFrom = tostring(actualEntry.sharedFrom or entry.sharedFrom or "-"),
@@ -4242,7 +4291,7 @@ local function FindAlternateSharedEntryMatch(entry, inventoryIndex)
         end
     end
 
-    return nil
+    return found
 end
 
 local function ShowSyncSummary(actionName, updatedCount, removedCount, unchangedCount, quiet)
@@ -4291,7 +4340,18 @@ RefreshAlwaysShareHeldCounts = function(inventoryIndex)
                         entry.sharedFrom = tostring(place.sharedFrom or entry.sharedFrom or "")
                     elseif inventoryIndex.observableLocationKeys
                         and inventoryIndex.observableLocationKeys[locationKey] == true then
-                        held = 0
+                        -- That place is readable and holds none of it, so the copy has
+                        -- moved or gone. If exactly one other place holds the item, the
+                        -- offer goes with it: an offer is about the item, and dropping to
+                        -- zero in a place you emptied read as the offer having stopped.
+                        local movedTo = FindSolePlaceHoldingLink(inventoryIndex, link, locationKey)
+                        if movedTo then
+                            entry.locationKey = tostring(movedTo.locationKey or "")
+                            entry.sharedFrom = tostring(movedTo.sharedFrom or "")
+                            held = movedTo.count
+                        else
+                            held = 0
+                        end
                     end
                 else
                     -- An offer saved before the place was recorded adopts the place the
