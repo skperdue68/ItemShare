@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.30
+- A share now follows its copy into another place. Bank something that was shared from your bags,
+  move a piece from a chest to the furnishing vault, and the row re-files itself where the item
+  went instead of dropping off the list at the next pass because its old place held nothing.
+  Standing offers do the same, and carry the count of the place the item moved to rather than
+  falling to zero.
+- The move only happens when exactly one place holds the item. Three swords split across two bags
+  and the bank is not an item that moved, and guessing there would put a lock on a copy nobody
+  shared, so the row stays where it was until you say otherwise. A place that cannot be read this
+  session still proves nothing, so nothing moves out of a shut bank.
+
 ### 1.11.29
 - A shared copy can now be banked and taken back out, put into a house storage chest or the
   furnishing vault and retrieved again, and placed as furniture and picked up. Every one of those
