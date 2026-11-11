@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.22
+- The in-game command list is printed from one function instead of two identical copies, so a
+  command can no longer work but be missing from the help. `guildbank` was exactly that: it has
+  always toggled guild bank sharing, and it was in the README and the ESOUI description but not
+  in the help.
+- The last line of the help was `Right-click an item - Share Reserve asks for a number to keep
+  back`, which reads as nonsense on its own. It now names the menu items as they appear:
+  `Add to Share`, `Always Share This Item`, `Share Reserve`.
+
 ### 1.11.21
 - The `Rebuild complete. Updated: N, Removed: N, Unchanged: N` line is no longer printed, for
   either a rebuild or a sync, and neither is the duplicate copy of it that followed the save
