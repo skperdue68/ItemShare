@@ -3,12 +3,11 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.13"
+local ADDON_VERSION = "1.11.14"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
 local SAVED_VARS_VERSION = 4
-local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
 ItemShare.savedVars = nil
@@ -30,7 +29,6 @@ local RESERVE_ONLY_TEXTURE_PATH = "ItemShare/media/itemshare_reserve_only.dds"
 -- instead of the share glyph: same corner, same size, so nothing on the slot moves and
 -- an item that has quietly become clutter reads as clutter at a glance.
 local EXPIRED_TEXTURE_PATH = "ItemShare/media/itemshare_expired.dds"
-local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
     sharedItems = {},
@@ -47,7 +45,6 @@ local defaults = {
     platformRaw = 0,
     world = "",
     worldName = "",
-    serverCapturedAt = 0,
     -- A share refuses to be sold or deconstructed from the place it was made from,
     -- so an offer cannot be destroyed by accident while it is on the list.
     shareProtection = true,
@@ -61,7 +58,6 @@ local defaults = {
     -- character's membership and every shared item used to carry its own list.
     guilds = {},
     characterGuilds = {},
-    guildsUpdatedAt = 0,
     listWindowState = {
         left = nil,
         top = nil,
@@ -1173,11 +1169,6 @@ local function GetCurrentCharacterName()
     return GetNormalizedText(GetUnitName("player")) or "Unknown"
 end
 
-local function GetCurrentDisplayName()
-    return CURRENT_DISPLAY_NAME
-end
-
-
 -- The platform arrives as one of the UI_PLATFORM_* numbers. The constants are read
 -- rather than hardcoded, so a client that renumbers them still records the right name;
 -- a number with no name of its own is recorded as "unknown" instead of guessed at.
@@ -1255,7 +1246,6 @@ CaptureServerEnvironment = function()
     saved.platformRaw = rawPlatform
     saved.world = GetWorldToken(worldName)
     saved.worldName = worldName
-    saved.serverCapturedAt = GetTimeStamp()
 
     return saved.platform, saved.world
 end
@@ -1394,7 +1384,6 @@ local function RefreshGuildSnapshot()
         guildIds = guildIds,
         updatedAt = now,
     }
-    ItemShare.savedVars.guildsUpdatedAt = now
 
     return guilds
 end
@@ -1553,11 +1542,6 @@ CanModifyGuildBankShare = function(bagId, slotIndex, guildId)
     end
 
     return false
-end
-
-
-local function GetDisplaySharedItemName(itemName)
-    return string.format("%s %s", SHARE_LIST_ICON, tostring(itemName or ""))
 end
 
 -- The ten home storage chests are separate bags, so they are worth naming one
