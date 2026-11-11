@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.21
+- The `Rebuild complete. Updated: N, Removed: N, Unchanged: N` line is no longer printed, for
+  either a rebuild or a sync, and neither is the duplicate copy of it that followed the save
+  reminder. The automatic pass on login, bank access, bag changes and trades no longer
+  announces `Shared items refreshed after <reason>` either.
+- Both lines are kept in the source, commented out, so they can be turned back on without
+  being rewritten. The `Use /ishare save or /reloadui` reminder after an explicit
+  `/ishare rebuild` still prints.
+
 ### 1.11.20
 - `/ishare scan` says "Scanning, one moment..." before it reads the house, so the pause on a
   full house is not a silent one, and finishes with "Scan complete: N unbound items found in

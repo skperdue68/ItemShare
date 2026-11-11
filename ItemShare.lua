@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.20"
+local ADDON_VERSION = "1.11.21"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -4032,11 +4032,13 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
         unchangedCount
     )
 
-    PrintMessage(summary)
+    -- Left silent on purpose: a sync or rebuild is usually an automatic pass the player
+    -- never asked for, so the counts line read as spam. Kept here, commented out, so it
+    -- can be switched back on without being rewritten.
+    -- PrintMessage(summary)
     if not quiet then
         PrintMessage("Use /ishare save or /reloadui to persist changes.")
     end
-    PrintMessage(summary)
 end
 
 -- A standing offer is a promise about one place: the number beside it is what that
@@ -4341,7 +4343,9 @@ local function ScheduleAutoReconcile(reason)
 
         RefreshGuildSnapshot()
         RebuildSharedItemsWithInventory(true)
-        PrintMessage(string.format("Shared items refreshed after %s.", tostring(reason or "login")))
+        -- This pass runs on login, on every bank visit and after most bag changes, so the
+        -- line was noise. Kept, commented out, for whenever it is wanted again.
+        -- PrintMessage(string.format("Shared items refreshed after %s.", tostring(reason or "login")))
     end, 4000)
 end
 
