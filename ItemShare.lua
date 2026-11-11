@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.30"
+local ADDON_VERSION = "1.11.31"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2349,6 +2349,28 @@ local function IsMailSendShowing()
     return ok and showing == true
 end
 
+-- The guild store's sell tab is the one place a drag can file something: drop a row on the
+-- pending listing and the client takes it, with no menu involved. Posting is not something a
+-- share allows, so while that tab is up a locked copy cannot be picked up at all - there is
+-- nothing else to drop it on in that window - and a drag anywhere else stays available for
+-- mail and trade.
+local function IsGuildStoreSellMode()
+    if type(TRADING_HOUSE) ~= "table" or type(TRADING_HOUSE.IsInSellMode) ~= "function" then
+        return false
+    end
+
+    local ok, inSellMode = pcall(TRADING_HOUSE.IsInSellMode, TRADING_HOUSE)
+    return ok and inSellMode == true
+end
+
+local function ShouldRefuseSharedDrag(inventorySlot)
+    if not IsGuildStoreSellMode() then
+        return nil, nil
+    end
+
+    return GetSharedEntryProtectingSlot(GetBagAndSlotFromInventorySlot(inventorySlot))
+end
+
 -- The client reads a bag and slot out of a control with ZO_Inventory_GetBagAndIndex: it
 -- returns the bagId and slotIndex the inventory bound onto the control. The ...Slot... form
 -- these guards used to ask for is not in the client at all, so every lookup answered nil,
@@ -2487,6 +2509,22 @@ local function InstallShareProtection()
             end
 
             local entry, source = GetSharedEntryProtectingSlot(GetBagAndSlotFromInventorySlot(inventorySlot))
+            if not entry then
+                return false
+            end
+
+            NotifyShareProtected(entry, source)
+            return true
+        end)
+    end
+
+    -- Dragging is the third way to ask a slot to do something, and the one that never touches
+    -- the slot menu: the client starts a pickup on the row's OnDragStart and whatever control
+    -- is under the cursor takes it from there. That is how a shared piece reached the guild
+    -- store's listing slot while every click and menu entry on it was being refused.
+    if ZO_InventorySlot_OnDragStart then
+        ZO_PreHook("ZO_InventorySlot_OnDragStart", function(inventorySlot)
+            local entry, source = ShouldRefuseSharedDrag(inventorySlot)
             if not entry then
                 return false
             end
