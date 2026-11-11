@@ -5099,7 +5099,6 @@ local function OnAddonLoaded(event, addonName)
         end, 3000)
     end
 
-    if EVENT_GUILD_SELF_LEFT_GUILD then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_GUILD_SELF_LEFT_GUILD, function()
             -- The guild list is not always updated in the same frame as the event, so the
             -- snapshot is taken again shortly afterwards rather than immediately.
@@ -5110,30 +5109,22 @@ local function OnAddonLoaded(event, addonName)
                 end, 2000)
             end
         end)
-    end
 
-    if EVENT_PLAYER_ACTIVATED then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_ACTIVATED, function()
             ScheduleAutoReconcile("login")
         end)
-    end
-    if EVENT_OPEN_BANK then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
             ScheduleAutoReconcile("the bank opening")
         end)
-    end
-    if EVENT_CLOSE_BANK then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
             ScheduleAutoReconcile("the bank closing")
         end)
-    end
 
     -- A count goes stale the moment something leaves a bag, and selling, deconstructing,
     -- trading, mailing or destroying never opens the bank, so nothing used to notice and
     -- the number kept whatever the last sync or reload left behind. A slot update covers
     -- every one of those, and ScheduleAutoReconcile collapses a burst into one pass, so a
     -- loot run or a stack split costs a single rebuild rather than one per item.
-    if EVENT_INVENTORY_SINGLE_SLOT_UPDATE then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_INVENTORY_SINGLE_SLOT_UPDATE, function(_, bagId)
             if not ShouldReconcileForInventoryChange(bagId) then
                 return
@@ -5141,11 +5132,9 @@ local function OnAddonLoaded(event, addonName)
 
             ScheduleAutoReconcile("a change in your bags")
         end)
-    end
 
     -- A completed trade can move a whole stack without a slot update for the copy that
     -- left, so the window closing is the second chance to notice it.
-    if EVENT_CLOSE_TRADE_WINDOW then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_TRADE_WINDOW, function()
             if not HasEntriesToRefresh() then
                 return
@@ -5153,7 +5142,6 @@ local function OnAddonLoaded(event, addonName)
 
             ScheduleAutoReconcile("a trade")
         end)
-    end
 
     RegisterContextMenus()
     InstallShareProtection()
