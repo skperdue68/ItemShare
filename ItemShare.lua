@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.27"
+local ADDON_VERSION = "1.11.28"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2851,6 +2851,31 @@ local function UpdateSharedRowMarker(control, slotData)
     end
 end
 
+-- Whatever list a row belongs to, the row itself is set up through
+-- ZO_ItemSlot_SetupSlotBase: the bags, the bank, house storage, a merchant's sell pane, the
+-- ragpicker, a mail attachment, a trade. The badge used to be attached per list - the addon
+-- walked the bag inventories and a fixed set of crafting panels - so every list it did not
+-- walk went unmarked, and the ragpicker's sell pane is a store list it never walked. Hooking
+-- the row's own setup makes the badge follow the row instead.
+local function HookItemSlotBaseSetup()
+    if type(ZO_PreHook) ~= "function" or type(ZO_ItemSlot_SetupSlotBase) ~= "function" then
+        return
+    end
+
+    ZO_PreHook("ZO_ItemSlot_SetupSlotBase", function(slotControl)
+        if slotControl ~= nil then
+            local bagId, slotIndex = GetBagAndSlotFromInventorySlot(slotControl)
+            if bagId ~= nil and slotIndex ~= nil then
+                -- The row carries its own bag and slot by now, so the marker can be decided
+                -- without knowing which list asked for it.
+                UpdateSharedRowMarker(slotControl, nil)
+            end
+        end
+
+        return false
+    end)
+end
+
 -- Every item row in the game is drawn by a scroll list data type, whether it belongs
 -- to the bags or to a crafting panel. Hooking only PLAYER_INVENTORY left the
 -- deconstruction, refinement and ragpicker lists unmarked: those are separate
@@ -5341,6 +5366,7 @@ local function OnAddonLoaded(event, addonName)
     InstallHoveredShareSlotTracking()
     HookInventoryRowCallbacks()
     HookCraftingInventoryRows()
+    HookItemSlotBaseSetup()
     if zo_callLater then
         zo_callLater(HookInventoryRowCallbacks, 500)
         zo_callLater(HookCraftingInventoryRows, 1000)

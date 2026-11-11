@@ -103,7 +103,7 @@ The same thing is on the item's right-click menu as [b]Share Reserve[/b], which 
 [*]The same gift in [color=#D4AF37][b]gold[/b][/color], with a closed ring, means it is always shared, and the badge stays on the item even when you hold none.
 [*]A small [color=#E3B341][b]amber padlock[/b][/color] tag is added to either badge when the item has a share reserve. An item with a reserve that is not shared at all shows the padlock on its own, so a reserve left behind can be seen and cleared instead of forgotten.
 [*]A [color=#D9534F][b]red-ringed stopwatch[/b][/color] takes the gift's place when a share has been on offer longer than the limit set with [b]/ishare expire[/b], so an offer that has quietly become clutter is obvious at a glance.
-[*]The same badges are drawn in the deconstruction and refinement panels and at the ragpicker, so a shared piece is marked in the window where it would otherwise be destroyed.
+[*]The badge is drawn on the row itself, so it appears wherever an item is listed: your bags, the bank, house storage, the furnishing vault, the deconstruction and refinement panels, a merchant's sell list, the ragpicker, a mail attachment and a trade. Rows in windows the addon does not know about are marked too, because the row asks for its own badge rather than the list handing it out.
 [*]Hovering a badge says which state the item is in and, with a reserve, how much is being kept back.
 [/list]
 
@@ -170,7 +170,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.27, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.28, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]

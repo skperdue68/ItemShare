@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.28
+- The share badge now appears at the ragpicker, and in any other window that lists your items.
+  The badge used to be attached per list: the addon wrapped the bag, bank, house storage,
+  furnishing vault and crafting-panel lists, and a list it did not wrap showed nothing. The
+  ragpicker's sell pane is a store list, so a shared item went unmarked there.
+- Rows are now marked from `ZO_ItemSlot_SetupSlotBase`, the function every item row in the game
+  is set up through, so the badge follows the row rather than the list and a window the addon has
+  never heard of gets badges without being added to a list of windows first.
+
 ### 1.11.27
 - The line printed when a shared copy refuses an action no longer ends by sending you to
   `/ishare list` to right-click a row. It names the item and the place, says mailing or trading is
