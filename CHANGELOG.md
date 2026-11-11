@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.18
+- `/ishare scan` now says "Scanning, one moment..." before it reads the house, so the pause
+  is not a silent one, and ends with "Scan complete: N unbound items found in <house>",
+  naming what was skipped when anything was.
+- The one-line-per-piece output is gone, and with it the per-piece placed id and bound state.
+  Bound, collectible and unreadable pieces are counted, not narrated.
+- The bag index a placed piece falls back to is built once per scan instead of once per
+  piece, which is what made a full house take a visible pause.
+
 ### 1.11.17
 - Bound state is read again. `GetItemLinkBoundStatus` is not in the client's API, so the
   link check answered "not bound" for every link and bound furnishings were offered as if

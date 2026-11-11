@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.17"
+local ADDON_VERSION = "1.11.18"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3102,13 +3102,7 @@ local function GetPlacedFurniturePieces()
             if linkOk then
                 piece.link = type(itemLink) == "string" and itemLink or ""
                 piece.collectibleLink = type(collectibleLink) == "string" and collectibleLink or ""
-                piece.linkResult = piece.link ~= "" and "ok" or "empty"
-            else
-                -- pcall's second value is the error the call raised.
-                piece.linkResult = "error: " .. tostring(itemLink)
             end
-        else
-            piece.linkResult = "no GetPlacedFurnitureLink"
         end
 
         if GetPlacedHousingFurnitureQuality then
@@ -3125,23 +3119,10 @@ local function GetPlacedFurniturePieces()
     return pieces
 end
 
--- A housing furniture id is a 64-bit number, which prints as 2147483648 in chat unless it
--- goes through Id64ToString. The id itself is passed to the getters untouched.
-local function FormatFurnitureId(furnitureId)
-    if Id64ToString then
-        local ok, text = pcall(Id64ToString, furnitureId)
-        if ok and type(text) == "string" and text ~= "" then
-            return text
-        end
-    end
-
-    return tostring(furnitureId)
-end
-
 -- A placed piece is described by its furniture data id, not by a bag slot, so the
 -- item link has to be made from that id. Each step is a getter the client may or may
 -- not have: a piece nothing can name is counted and reported rather than guessed at.
-local function GetLinkForFurnitureDataId(furnitureDataId, info)
+local function GetLinkForFurnitureDataId(furnitureDataId, info, inventoryIndex)
     local dataId = tonumber(furnitureDataId) or 0
     if dataId <= 0 then
         return ""
@@ -3162,7 +3143,7 @@ local function GetLinkForFurnitureDataId(furnitureDataId, info)
 
     -- Last resort: the same furnishing sitting in a readable bag carries the link,
     -- and matching on the data id is what the addon already trusts.
-    local index = BuildActualInventoryIndex()
+    local index = inventoryIndex or BuildActualInventoryIndex()
     for _, place in pairs(index.locationsByLink or {}) do
         local itemData = place and place.itemData
         if itemData and tonumber(itemData.furnitureDataId) == dataId and tostring(itemData.itemLink or "") ~= "" then
@@ -3265,6 +3246,10 @@ end
 -- this house that is no longer in it is taken back, and every other house is left
 -- alone because nothing here can see it.
 local function ScanPlacedFurnishings()
+    -- Said before anything is read: finding the house and listing its furniture both
+    -- take a moment, and a silent pause reads as a hung client.
+    PrintMessage("Scanning, one moment...")
+
     local house, problem = GetCurrentHouseScanInfo()
     if not house then
         PrintMessage(problem)
@@ -3280,95 +3265,55 @@ local function ScanPlacedFurnishings()
     local houseLabel = house.houseName ~= "" and house.houseName or "this house"
     local placedKey, placedLabel = GetPlacedLocationInfo(house.houseName)
 
-    PrintMessage(string.format(
-        "Scanning %s (house id %d, owner %s): %d placed piece%s.",
-        houseLabel,
-        house.houseId,
-        house.ownerName ~= "" and house.ownerName or "unknown",
-        #pieces,
-        #pieces == 1 and "" or "s"
-    ))
-
     local copiesByLink = {}
     local dataIdByLink = {}
-    local boundCount, unidentifiedCount, collectibleCount = 0, 0, 0
+    local boundCount, collectibleCount, unreadableCount, unboundCount = 0, 0, 0, 0
+    -- Built once, and only if a piece needs it: rebuilding the bag index for every
+    -- unlinked piece is most of what made a full house feel like a pause.
+    local bagIndex = nil
 
-    for index, piece in ipairs(pieces) do
+    for _, piece in ipairs(pieces) do
         local furnitureDataId = tonumber(piece.furnitureDataId) or 0
-        local placedId = piece.furnitureId
-        local placedLabel = FormatFurnitureId(placedId)
-
         local collectibleLink = tostring(piece.collectibleLink or "")
 
         local link = tostring(piece.link or "")
         if link == "" then
             -- Older clients may have no GetPlacedFurnitureLink; the data id is the only
             -- other route to a link, and it stays 0 when even the info call failed.
-            link = GetLinkForFurnitureDataId(furnitureDataId, { piece.name, piece.icon })
+            if not bagIndex then
+                bagIndex = BuildActualInventoryIndex()
+            end
+            link = GetLinkForFurnitureDataId(furnitureDataId, { piece.name, piece.icon }, bagIndex)
         end
 
         if link == "" then
-            -- TEMPORARY: one line per placed piece, so a scan can be watched working in
-            -- game. Remove this loop's PrintMessage calls once scans are trusted again.
             if collectibleLink ~= "" then
                 -- A collectible furnishing is not an item: it has no link to offer and
                 -- cannot be given away, so it is counted apart from a failure.
                 collectibleCount = collectibleCount + 1
-                PrintMessage(string.format(
-                    "  %d. collectible furnishing (cannot be shared) - placed id %s, furniture data id %d, name '%s'",
-                    index,
-                    placedLabel,
-                    furnitureDataId,
-                    tostring(piece.name or "")
-                ))
             else
-                unidentifiedCount = unidentifiedCount + 1
-                PrintMessage(string.format(
-                    "  %d. no item link - placed id %s, furniture data id %d, name '%s', link call: %s",
-                    index,
-                    placedLabel,
-                    furnitureDataId,
-                    tostring(piece.name or ""),
-                    tostring(piece.linkResult or "not called")
-                ))
+                unreadableCount = unreadableCount + 1
             end
         else
-            local pieceName = tostring(piece.name or "")
-            if pieceName == "" then
-                local nameOk, linkName = pcall(GetItemLinkName, link)
-                if nameOk and type(linkName) == "string" then
-                    pieceName = linkName
-                end
-            end
-            if pieceName == "" then
-                pieceName = link ~= "" and link or "unnamed furnishing"
-            end
-
             local boundOk, isBound = pcall(IsItemLinkBound, link)
-            isBound = boundOk and isBound == true
 
-            if isBound then
+            if not boundOk then
+                -- A bound state nothing could answer is not a licence to offer it.
+                unreadableCount = unreadableCount + 1
+            elseif isBound == true then
                 -- Bound is bound: a piece that can never leave the account is not an
                 -- offer, whichever house it stands in.
                 boundCount = boundCount + 1
             else
                 copiesByLink[link] = (copiesByLink[link] or 0) + 1
                 dataIdByLink[link] = dataIdByLink[link] or furnitureDataId
+                unboundCount = unboundCount + 1
             end
-
-            PrintMessage(string.format(
-                "  %d. %s - placed id %s, furniture data id %d, %s",
-                index,
-                pieceName,
-                placedLabel,
-                furnitureDataId,
-                isBound and "bound" or "not bound"
-            ))
         end
     end
 
     local sharedItems = ItemShare.savedVars.sharedItems
-    local addedCount, removedCount = 0, 0
+    local removedCount = 0
 
     for itemKey, entry in pairs(sharedItems) do
         local entryKey = tostring(entry and entry.locationKey or "")
@@ -3381,25 +3326,46 @@ local function ScanPlacedFurnishings()
     for link, copies in pairs(copiesByLink) do
         local existing = sharedItems[BuildSharedItemKey(link, placedKey)]
         local itemData = BuildPlacedItemData(link, dataIdByLink[link], placedLabel, placedKey)
-        if SaveSharedEntry(itemData, copies, existing and existing.firstDumpedAt or GetTimeStamp(), false) then
-            addedCount = addedCount + 1
-        end
+        SaveSharedEntry(itemData, copies, existing and existing.firstDumpedAt or GetTimeStamp(), false)
     end
 
     RefreshShareListWindowIfVisible()
 
+    local skippedParts = {}
+    if boundCount > 0 then
+        skippedParts[#skippedParts + 1] = string.format("%d bound", boundCount)
+    end
+    if collectibleCount > 0 then
+        skippedParts[#skippedParts + 1] = string.format("%d collectible", collectibleCount)
+    end
+    if unreadableCount > 0 then
+        skippedParts[#skippedParts + 1] = string.format("%d unreadable", unreadableCount)
+    end
+    local skippedText = ""
+    if #skippedParts > 0 then
+        skippedText = string.format(" (%s skipped)", table.concat(skippedParts, ", "))
+    end
+
     PrintMessage(string.format(
-        "Scan of %s: %d furnishing%s shared as %s, %d bound skipped, %d no longer there, %d collectible, %d unidentified.",
+        "Scan complete: %d unbound item%s found in %s%s.",
+        unboundCount,
+        unboundCount == 1 and "" or "s",
         houseLabel,
-        addedCount,
-        addedCount == 1 and "" or "s",
-        placedLabel,
-        boundCount,
-        removedCount,
-        collectibleCount,
-        unidentifiedCount
+        skippedText
     ))
-    if addedCount > 0 or removedCount > 0 then
+
+    if removedCount > 0 then
+        PrintMessage(string.format(
+            "%d share%s filed under %s %s no longer in the house and %s removed.",
+            removedCount,
+            removedCount == 1 and "" or "s",
+            placedLabel,
+            removedCount == 1 and "was" or "were",
+            removedCount == 1 and "was" or "were"
+        ))
+    end
+
+    if unboundCount > 0 or removedCount > 0 then
         PrintMessage("Use /ishare save or /reloadui to write the change to the file.")
     end
 end
