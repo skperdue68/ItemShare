@@ -10,6 +10,19 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.9
+- A standing offer now counts one place: the place it was marked in. Mark a
+  Companion's Cuirass in your bags and it offers what that bag holds; hand the last one
+  over and the next sync leaves the row at 0 offered instead of keeping the old number,
+  and pick one up again and a sync brings it back to 1.
+- The row stays at the place it was marked rather than following the item to whichever
+  bag it turns up in, and a place that cannot be read keeps the number it had, so a shut
+  bank never zeroes an offer.
+- The website only shows a Request button while the marked place holds more than the
+  reserve keeps back, so an offer with nothing behind it cannot be asked for. The demo
+  seed carries both states - one offer with copies and one with none - so the difference
+  is visible without a second player.
+
 ### 1.11.8
 - Share badges now appear in the deconstruction and refinement panels and at the
   ragpicker, not only in the bags and the bank. Those lists belong to the crafting UI
