@@ -10,6 +10,30 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.21
+- The `Rebuild complete. Updated: N, Removed: N, Unchanged: N` line is no longer printed, for
+  either a rebuild or a sync, and neither is the duplicate copy of it that followed the save
+  reminder. The automatic pass on login, bank access, bag changes and trades no longer
+  announces `Shared items refreshed after <reason>` either.
+- Both lines are kept in the source, commented out, so they can be turned back on without
+  being rewritten. The `Use /ishare save or /reloadui` reminder after an explicit
+  `/ishare rebuild` still prints.
+
+### 1.11.20
+- `/ishare scan` says "Scanning, one moment..." before it reads the house, so the pause on a
+  full house is not a silent one, and finishes with "Scan complete: N unbound items found in
+  <house>", naming bound, collectible and unreadable pieces on the same line when there are any.
+- The one-line-per-piece output is gone, and with it the per-piece placed id and bound state.
+  Bound, collectible and unreadable pieces are counted, not narrated.
+- The bag index a placed piece falls back to is built once per scan instead of once per piece,
+  which was most of the pause on a big house.
+- `/ishare scan clear` (or `scan reset`) removes every share filed as `Placed (<house>)` for the
+  house you are standing in, so a house scanned by mistake, or one that is no longer the storage
+  house, can be taken back out of the file in one go. Other houses and bag rows are left alone.
+- The house messages no longer say "nothing was scanned" when the command was a clear, and the
+  documentation covers `/ishare scan` and `/ishare scan clear` together: one house kept as an
+  item dump, scanned to offer what is in it, cleared when it should not be offered any more.
+
 ### 1.11.17
 - Bound state is read again. `GetItemLinkBoundStatus` is not in the client's API, so the
   link check answered "not bound" for every link and bound furnishings were offered as if
