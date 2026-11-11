@@ -11,6 +11,9 @@ in the addon's status messages.
 ## Addon
 
 ### 1.11.9
+- Marking an item for always share writes down the place it was marked in and how many
+  that place holds at that moment, so the very first upload carries a number instead of
+  waiting for the next sync to work one out.
 - A standing offer now counts one place: the place it was marked in. Mark a
   Companion's Cuirass in your bags and it offers what that bag holds; hand the last one
   over and the next sync leaves the row at 0 offered instead of keeping the old number,

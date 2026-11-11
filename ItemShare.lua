@@ -2978,14 +2978,6 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
     entry.flavorText = itemData.flavorText or ""
     entry.esoDetails = itemData.esoDetails or {}
-    -- Where it was marked, and how many were there. A standing offer's number is the
-    -- count in that one place, so the offer remembers the place instead of following
-    -- the item to whichever bag it turns up in next.
-    entry.locationKey = tostring(itemData.locationKey or entry.locationKey or "")
-    entry.sharedFrom = tostring(itemData.sharedFrom or entry.sharedFrom or "")
-    entry.bagId = itemData.bagId or entry.bagId
-    entry.slotIndex = itemData.slotIndex or entry.slotIndex
-    entry.heldCount = math.max(0, math.floor(tonumber(heldCount) or tonumber(itemData.heldCount) or 0))
     entry.bagId = itemData.bagId
     entry.slotIndex = itemData.slotIndex
     entry.locationKey = itemData.locationKey
@@ -3316,6 +3308,23 @@ SaveAlwaysShareEntry = function(itemData, heldCount)
     entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
     entry.flavorText = itemData.flavorText or ""
     entry.esoDetails = itemData.esoDetails or {}
+    -- Where it was marked, and how many were there. A standing offer's number is the count
+    -- in that one place, so the offer has to remember the place as well as the number: the
+    -- site can only show what is held when it is told, and a reserve belongs to a place.
+    -- A caller that knows neither leaves what was recorded alone rather than wiping it.
+    entry.locationKey = tostring(itemData.locationKey or entry.locationKey or "")
+    entry.sharedFrom = tostring(itemData.sharedFrom or entry.sharedFrom or "")
+
+    local knownHeld = tonumber(heldCount)
+
+    if knownHeld == nil then
+        knownHeld = tonumber(itemData.heldCount)
+    end
+
+    if knownHeld ~= nil then
+        entry.heldCount = math.max(0, math.floor(knownHeld))
+    end
+
     entry.firstAddedAt = entry.firstAddedAt or now
     entry.lastUpdatedAt = now
     alwaysShare[key] = entry
