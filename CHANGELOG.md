@@ -10,6 +10,15 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.31
+- A shared copy can no longer be posted to the guild store by dragging it. Posting was refused
+  from the item's menu and from a click, but the listing is filed from a drop, and a drop never
+  goes through the slot menu the lock watches - so dragging the row onto the sell tab got it
+  through. The pickup itself is now refused while that tab is open, which stops it before
+  anything is filed.
+- Only the guild store's sell tab is affected, and only for an item nobody shared is dragged
+  freely. Mail and trade drags are untouched, and so is every other window.
+
 ### 1.11.30
 - A share now follows its copy into another place. Bank something that was shared from your bags,
   move a piece from a chest to the furnishing vault, and the row re-files itself where the item
