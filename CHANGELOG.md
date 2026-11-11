@@ -10,6 +10,19 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.19
+- `/ishare scan clear` (or `/ishare scan reset`) removes every share filed as
+  `Placed (<house>)` for the house you are standing in, so a house scanned by mistake, or
+  one that is no longer the storage house, can be taken back out of the file in one go. It
+  touches only that house's rows; bags and other houses are left alone.
+- A completed trade that carries an item filed as `Placed (<house>)` now shows a reminder
+  to run `/ishare scan` in that house again, because the count on the row only changes
+  when the house is read. The addon reads what a trade carries while the window is open,
+  so it can tell a furniture trade from an unrelated one.
+- The house messages no longer say "nothing was scanned" when the command was a clear,
+  and the help and documentation describe both scan and scan clear as the pair they are:
+  fill a dump house, scan it, clear it when it should not be offered any more.
+
 ### 1.11.18
 - `/ishare scan` now says "Scanning, one moment..." before it reads the house, so the pause
   is not a silent one, and ends with "Scan complete: N unbound items found in <house>",

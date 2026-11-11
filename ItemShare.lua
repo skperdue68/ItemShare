@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.18"
+local ADDON_VERSION = "1.11.19"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3191,13 +3191,13 @@ end
 -- piece in someone else's house is not yours to offer.
 local function GetCurrentHouseScanInfo()
     if not GetCurrentZoneHouseId then
-        return nil, "This client cannot tell whether you are in a house, so nothing was scanned."
+        return nil, "This client cannot tell whether you are in a house, so there is nothing to scan or clear."
     end
 
     local idOk, idValue = pcall(GetCurrentZoneHouseId)
     local houseId = idOk and (tonumber(idValue) or 0) or 0
     if houseId <= 0 then
-        return nil, "You are not inside a house. /ishare scan only reads the furniture placed in the house you are standing in, so nothing was scanned."
+        return nil, "You are not inside a house, so there is nothing to scan or clear. Stand in the house first."
     end
 
     local houseName = GetCurrentZoneDisplayName()
@@ -3228,7 +3228,7 @@ local function GetCurrentHouseScanInfo()
 
         if not ownsHouse then
             return nil, string.format(
-                "This house belongs to %s. /ishare scan only files furniture from a house you own, so nothing was scanned.",
+                "This house belongs to %s. Furniture is only scanned or cleared for a house you own, so nothing was done.",
                 ownerName
             )
         end
@@ -3368,6 +3368,88 @@ local function ScanPlacedFurnishings()
     if unboundCount > 0 or removedCount > 0 then
         PrintMessage("Use /ishare save or /reloadui to write the change to the file.")
     end
+end
+
+-- /ishare scan clear: the way out of a house that was scanned by mistake, or one that
+-- has stopped being the storage house. Only the house the player is standing in is
+-- touched, and only rows keyed to it - the house name is the whole key, so a row filed
+-- under another house or under a bag cannot be caught by this.
+local function ClearPlacedFurnishingsForCurrentHouse()
+    local house, problem = GetCurrentHouseScanInfo()
+    if not house then
+        PrintMessage(problem)
+        return
+    end
+
+    local placedKey, placedLabel = GetPlacedLocationInfo(house.houseName)
+    local sharedItems = ItemShare.savedVars.sharedItems
+    local cleared = 0
+
+    for itemKey, entry in pairs(sharedItems) do
+        if tostring(entry and entry.locationKey or "") == placedKey then
+            sharedItems[itemKey] = nil
+            cleared = cleared + 1
+        end
+    end
+
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
+
+    if cleared == 0 then
+        PrintMessage(string.format("No shares were filed under %s, so there was nothing to clear.", placedLabel))
+        return
+    end
+
+    PrintMessage(string.format(
+        "Cleared %d share%s filed under %s. Run /ishare save or /reloadui to write the change to the file.",
+        cleared,
+        cleared == 1 and "" or "s",
+        placedLabel
+    ))
+end
+
+-- A trade is the one place the addon sees a piece leave a house: a slot update cannot
+-- say whether the item was standing in one, and the row's count is a reading of the
+-- house that only another reading changes. Handing a request over is exactly that
+-- moment, so the reminder to rescan lives here.
+local function MaybeRemindToRescanHouse(tradedLinks)
+    local sharedItems = ItemShare.savedVars and ItemShare.savedVars.sharedItems
+    if not sharedItems then
+        return
+    end
+
+    local tradedPlacedShare = false
+    for _, entry in pairs(sharedItems) do
+        local locationKey = tostring(entry and entry.locationKey or "")
+        if string.sub(locationKey, 1, 7) == "placed:" and tradedLinks[tostring(entry and entry.itemLink or "")] then
+            tradedPlacedShare = true
+            break
+        end
+    end
+
+    if not tradedPlacedShare then
+        return
+    end
+
+    local dialogName = "ITEM_SHARE_RESCAN_REMINDER"
+    if not ItemShare.rescanReminderRegistered then
+        ZO_Dialogs_RegisterCustomDialog(dialogName, {
+            title = {
+                text = "ItemShare",
+            },
+            mainText = {
+                text = "Something you just handed over is offered as furniture standing in your storage house. Those counts only change when the house is read: stand in it and run /ishare scan when you are done to update the quantities.",
+            },
+            buttons = {
+                [1] = {
+                    text = SI_DIALOG_ACCEPT,
+                },
+            },
+        })
+        ItemShare.rescanReminderRegistered = true
+    end
+
+    ZO_Dialogs_ShowDialog(dialogName)
 end
 
 -- Files written before this release recorded placed furniture under a key of their
@@ -4877,7 +4959,8 @@ local function OnSlashCommand(arg)
         PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
         PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        PrintMessage("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
         PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
     elseif lowerArg == "list" then
@@ -4892,6 +4975,8 @@ local function OnSlashCommand(arg)
         ResetSharedItems()
     elseif lowerArg == "sync" or lowerArg == "cleanup" or lowerArg == "reconcile" then
         SyncSharedItemsWithInventory()
+    elseif string.match(lowerArg, "^scan%s+clear$") or string.match(lowerArg, "^scan%s+reset$") then
+        ClearPlacedFurnishingsForCurrentHouse()
     elseif lowerArg == "scan" then
         ScanPlacedFurnishings()
     elseif lowerArg == "rebuild" then
@@ -4978,7 +5063,8 @@ local function OnSlashCommand(arg)
         PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
         PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
         PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        PrintMessage("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
         PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
         PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
     end
@@ -5111,8 +5197,28 @@ local function OnAddonLoaded(event, addonName)
 
     -- A completed trade can move a whole stack without a slot update for the copy that
     -- left, so the window closing is the second chance to notice it.
+    if EVENT_TRADE_ITEM_ADDED and GetTradeItemLink then
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_TRADE_ITEM_ADDED, function(_, who, tradeIndex)
+            local ok, link = pcall(GetTradeItemLink, who, tradeIndex, LINK_STYLE_DEFAULT)
+            if not ok or type(link) ~= "string" or link == "" then
+                return
+            end
+
+            ItemShare.tradedLinks = ItemShare.tradedLinks or {}
+            ItemShare.tradedLinks[link] = true
+        end)
+    end
+
     if EVENT_CLOSE_TRADE_WINDOW then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_TRADE_WINDOW, function()
+            -- Taken before the early return below: a tradeless reconcile still handed
+            -- something over, and the reminder is about the house, not the counts.
+            local tradedLinks = ItemShare.tradedLinks
+            ItemShare.tradedLinks = nil
+            if tradedLinks and ItemShare.savedVars then
+                MaybeRemindToRescanHouse(tradedLinks)
+            end
+
             if not HasEntriesToRefresh() then
                 return
             end
