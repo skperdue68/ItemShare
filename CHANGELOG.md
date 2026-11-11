@@ -10,6 +10,12 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.27
+- The line printed when a shared copy refuses an action no longer ends by sending you to
+  `/ishare list` to right-click a row. It names the item and the place, says mailing or trading is
+  all it will allow, and stops there: "Remove the share to use it", or "Stop always sharing it to
+  use it" for a standing offer.
+
 ### 1.11.26
 - Two keybinds, in the game's own list under Controls - Keybinds - **ItemShare**: **Toggle share**
   and **Toggle always share**. Both act on the item you hovered last, since a keybind has no row

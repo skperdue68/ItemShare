@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.26"
+local ADDON_VERSION = "1.11.27"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2316,13 +2316,14 @@ local function NotifyShareProtected(entry, source)
     end
     lastShareProtectionNotice = now
 
-    -- A standing offer is released by stopping the offer, a share by removing the share.
-    -- Naming the wrong one sends you to a row that will not do what you expect.
+    -- A standing offer is released by stopping the offer, a share by removing the share, so
+    -- the message has to name the right one - and nothing else: the item's own menu is where
+    -- you would already be, and directions to the window read as noise mid-action.
     local heldAs = "shared"
-    local release = "Remove the share first - /ishare list, then right-click the row, or use the item's own menu."
+    local release = "Remove the share to use it."
     if source == "always" then
         heldAs = "always shared"
-        release = "Stop always sharing it first - /ishare list, then right-click the row, or use the item's own menu."
+        release = "Stop always sharing it to use it."
     end
 
     PrintMessage(string.format(
