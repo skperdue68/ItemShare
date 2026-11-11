@@ -55,7 +55,7 @@ ItemShare keeps track of the tradeable items you are willing to hand out, so you
 
 [b]House storage by name.[/b] ESO lets you rename each of the ten storage chests, so a row reads [i]Materials[/i] instead of [i]House Storage 8[/i]. The chest's own name is used when you have not renamed it, and the slot number only when neither is available. Rename a chest and the next rebuild relabels its shares, and two chests given the same name stay separate rows.
 
-[b]Furnishings for sharing live in your storage house.[/b] Stand in that house and run [b]/ishare scan[/b]: every furnishing placed in it is collected, and each piece that is not bound to you is offered as [i]Placed (Mournoth Keep)[/i], one row per furnishing with the number of copies standing there. Running it again is the record for that house - a piece you picked up is taken back, and one carried in is added. Only the house you are standing in can be read, so no other house is ever changed, and furnishings in the vault or in a bag are shared the usual way. Bound furnishings are counted and skipped.
+[b]Furnishings for sharing live in your storage house.[/b] Stand in that house - one you own - and run [b]/ishare scan[/b]: every furnishing placed in it is collected, and each piece that is not bound to you is offered as [i]Placed (Mournoth Keep)[/i], one row per furnishing with the number of copies standing there. Running it again is the record for that house - a piece you picked up is taken back, and one carried in is added. Only the house you are standing in can be read, so no other house is ever changed, and furnishings in the vault or in a bag are shared the usual way. Bound furnishings are counted and skipped.
 
 [b]Bound items are refused[/b], and so are items the game only lets you hand to your group for a short while (bind on pickup, still tradeable). The addon says so instead of adding them, and checks again when an item is re-added from the shared window, because an item can become bound after it was filed.
 
@@ -134,7 +134,7 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 [*][b]reset[/b] (or clear) - clear every share and every standing offer
 [*][b]sync[/b] (cleanup, reconcile) - recount shares against the bags readable now and drop the ones you no longer have. Standing offers are left alone.
 [*][b]rebuild[/b] - rewrite every share from your current bags. Also runs on login and when a bank opens or closes.
-[*][b]scan[/b] - share every non-bound furnishing placed in the house you are standing in, and take back the ones no longer there
+[*][b]scan[/b] - share every non-bound furnishing placed in the house you own and are standing in, and take back the ones no longer there
 [*][b]protect[/b] - stop (or allow) selling and deconstructing an item shared from the place you are acting in
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
 [*][b]debug[/b] - turn the addon's status messages on or off
@@ -162,7 +162,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.11, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.14, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]

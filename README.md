@@ -26,10 +26,9 @@ You can use commands
 /ishare reset (or clear) - clears every share and every standing offer.
 /ishare sync (or cleanup, reconcile) - recounts your shares against the bags that are readable now and drops the ones you no longer have. Standing offers are left alone, because an offer is meant to outlive the copy. Shares filed by `/ishare scan` are left alone too: they stand in a house, and no bag can confirm or deny them.
 /ishare rebuild - rewrites every share from your current bags; it also runs on login and when a bank opens or closes.
-/ishare scan - in your storage house, shares every non-bound furnishing placed there as `Placed (<house>)` and takes back the ones no longer standing there.
+/ishare scan - in a house you own, shares every non-bound furnishing placed there as `Placed (<house>)` and takes back the ones no longer standing there.
 /ishare protect - turns off (or back on) refusing to sell or deconstruct a copy shared from the place you are acting in.
 /ishare save - rebuilds and then offers to reload the UI, which is what writes the file to disk.
-/ishare debug - turns the addon's own status messages on or off.
 /ishare guilds - lists the guilds captured for the current character.
 /ishare always - lists the items you always offer, whether or not a copy is in your bags.
 /ishare noalways <part of the name> - stops always sharing one item.
@@ -51,7 +50,7 @@ You may add items to the shared list from Inventory, House Storage, Your Bank, o
 
 Home storage is recorded under the name of the chest, not its number: ESO lets you rename each of the ten storage chests, and the addon reads that name, falling back to the chest's own collectible name and then to `House Storage N`. A row therefore says `Materials` or `Gear I might keep` instead of `House Storage 8`, and the name is saved with the share, so it still reads that way while you are away from home. Rename a chest and the next rebuild relabels its shares; two chests given the same name stay separate rows, because the slot is recorded as well.
 
-Furnishings you set aside for sharing live in a house, not in a bag, so they are filed by hand rather than inferred. Stand in your storage house and run `/ishare scan`: every furnishing placed in that house is collected, every piece that is not bound to you is put up for sharing as `Placed (<house>)`, and the row carries the number of copies standing there. Running the scan again is the record for that house - a piece you picked up is taken back, and one carried in from another house is added. Only the house you are standing in can be read, so a scan never touches another house, and furnishings in the vault or in a bag are shared the usual way, with no scan needed. Bound furnishings are counted and skipped: a piece that can never leave the account is not an offer.
+Furnishings you set aside for sharing live in a house, not in a bag, so they are filed by hand rather than inferred. Stand in your storage house - it has to be one you own - and run `/ishare scan`: every furnishing placed in that house is collected, every piece that is not bound to you is put up for sharing as `Placed (<house>)`, and the row carries the number of copies standing there. Running the scan again is the record for that house - a piece you picked up is taken back, and one carried in from another house is added. Only the house you are standing in can be read, so a scan never touches another house, and furnishings in the vault or in a bag are shared the usual way, with no scan needed. Bound furnishings are counted and skipped: a piece that can never leave the account is not an offer.
 
 Rows an older version saved under its own placed-furniture label are discarded, at login and again whenever the addon rewrites the file, so nothing stale is written back out.
 

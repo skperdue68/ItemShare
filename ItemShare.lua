@@ -3,12 +3,11 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.11"
+local ADDON_VERSION = "1.11.14"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
 local SAVED_VARS_VERSION = 4
-local CURRENT_CHARACTER_NAME = zo_strformat("<<t:1>>", GetUnitName("player")) or "Unknown"
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
 ItemShare.savedVars = nil
@@ -30,7 +29,6 @@ local RESERVE_ONLY_TEXTURE_PATH = "ItemShare/media/itemshare_reserve_only.dds"
 -- instead of the share glyph: same corner, same size, so nothing on the slot moves and
 -- an item that has quietly become clutter reads as clutter at a glance.
 local EXPIRED_TEXTURE_PATH = "ItemShare/media/itemshare_expired.dds"
-local SHARE_LIST_ICON = string.format("|t16:16:%s|t", SHARE_TEXTURE_PATH)
 
 local defaults = {
     sharedItems = {},
@@ -47,11 +45,9 @@ local defaults = {
     platformRaw = 0,
     world = "",
     worldName = "",
-    serverCapturedAt = 0,
     -- A share refuses to be sold or deconstructed from the place it was made from,
     -- so an offer cannot be destroyed by accident while it is on the list.
     shareProtection = true,
-    debugEnabled = false,
     guildBankSharingEnabled = false,
     -- How long a share may stay on offer, in days, before its badge becomes the
     -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
@@ -62,7 +58,6 @@ local defaults = {
     -- character's membership and every shared item used to carry its own list.
     guilds = {},
     characterGuilds = {},
-    guildsUpdatedAt = 0,
     listWindowState = {
         left = nil,
         top = nil,
@@ -70,7 +65,7 @@ local defaults = {
     }
 }
 
-local dmsg
+local PrintMessage
 local RemoveItemFromShareByKey
 -- Sharing and always sharing are one choice per item, so the code that turns one on
 -- has to be able to clear the other from here onwards in the file.
@@ -854,7 +849,7 @@ local function GetOrCreateShareListRow(index)
 
             TryRefreshInventoryVisuals()
             RefreshShareListWindowIfVisible()
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "Stopped always sharing %s. It is not offered at all now.",
                 tostring(removed.itemName or link)
             ))
@@ -868,7 +863,7 @@ local function GetOrCreateShareListRow(index)
             local alwaysEntry = SaveAlwaysShareEntry(currentEntry, GetEntryHeldCount(currentEntry))
 
             if not alwaysEntry then
-                dmsg(string.format(
+                PrintMessage(string.format(
                     "Could not always share %s. It is still shared from %s.",
                     tostring(currentEntry and currentEntry.itemName or link),
                     tostring(currentEntry and currentEntry.sharedFrom or "-")
@@ -879,7 +874,7 @@ local function GetOrCreateShareListRow(index)
             RemoveSharesForItemLink(link)
             TryRefreshInventoryVisuals()
             RefreshShareListWindowIfVisible()
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "Always sharing %s now. It stays offered even when you do not have one.",
                 tostring(alwaysEntry.itemName or link)
             ))
@@ -897,7 +892,7 @@ local function GetOrCreateShareListRow(index)
         -- until a copy turns up.
         if row.isReserveOnly
             and (tonumber(row.entryData.bagId) == nil or tonumber(row.entryData.slotIndex) == nil) then
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "Cannot share %s yet: no copy of it is in a bag right now.",
                 tostring(row.entryData.itemName or link or "that item")
             ))
@@ -906,20 +901,20 @@ local function GetOrCreateShareListRow(index)
 
         local isEligible, reason = IsSavedEntryEligibleForShare(row.entryData)
         if not isEligible then
-            dmsg(string.format("Cannot add that item to share: %s", tostring(reason)))
+            PrintMessage(string.format("Cannot add that item to share: %s", tostring(reason)))
             return
         end
 
         local savedEntry = SaveSharedEntryFromSavedEntry(row.entryData, false)
         if not savedEntry then
-            dmsg("Could not re-add item from shared list window.")
+            PrintMessage("Could not re-add item from shared list window.")
             return
         end
 
         RemoveAlwaysShareForItemLink(savedEntry.itemLink, savedEntry.locationKey)
         TryRefreshInventoryVisuals()
         RefreshShareListWindowIfVisible()
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Sharing %s from %s (%d offered). Right-click again to always share it.",
             tostring(savedEntry.itemName or link),
             tostring(savedEntry.sharedFrom or "-"),
@@ -1114,11 +1109,11 @@ RefreshShareListWindowIfVisible = function()
     end
 end
 
-dmsg = function(text)
-    if not ItemShare.savedVars or not ItemShare.savedVars.debugEnabled then
-        return
-    end
-    d(string.format("[ItemShare] %s", tostring(text)))
+-- Every message this addon prints goes through here. It is a system message, so a
+-- command's answer reaches chat whether or not anything else is on, and a slash command
+-- that reports nothing is a bug rather than a setting.
+PrintMessage = function(message)
+    CHAT_ROUTER:AddSystemMessage("|cD8A24F[ItemShare]|r " .. tostring(message))
 end
 
 local function ConfirmReloadUI()
@@ -1136,7 +1131,7 @@ local function ConfirmReloadUI()
                 [1] = {
                     text = SI_DIALOG_ACCEPT,
                     callback = function()
-                        dmsg("Reloading UI.")
+                        PrintMessage("Reloading UI.")
                         ReloadUI()
                     end,
                 },
@@ -1173,11 +1168,6 @@ end
 local function GetCurrentCharacterName()
     return GetNormalizedText(GetUnitName("player")) or "Unknown"
 end
-
-local function GetCurrentDisplayName()
-    return CURRENT_DISPLAY_NAME
-end
-
 
 -- The platform arrives as one of the UI_PLATFORM_* numbers. The constants are read
 -- rather than hardcoded, so a client that renumbers them still records the right name;
@@ -1256,7 +1246,6 @@ CaptureServerEnvironment = function()
     saved.platformRaw = rawPlatform
     saved.world = GetWorldToken(worldName)
     saved.worldName = worldName
-    saved.serverCapturedAt = GetTimeStamp()
 
     return saved.platform, saved.world
 end
@@ -1265,7 +1254,7 @@ local function PrintServerEnvironment()
     local platform, world = CaptureServerEnvironment()
     local saved = ItemShare.savedVars or {}
 
-    dmsg(string.format(
+    PrintMessage(string.format(
         "This file is recorded for %s on %s.",
         string.upper(tostring(platform ~= "" and platform or "unknown")),
         string.upper(tostring(world ~= "" and world or "unknown"))
@@ -1273,14 +1262,14 @@ local function PrintServerEnvironment()
 
     local worldName = tostring(saved.worldName or "")
     if worldName ~= "" then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "The game reports the megaserver as \"%s\" and the platform as %d.",
             worldName,
             tonumber(saved.platformRaw or 0) or 0
         ))
     end
 
-    dmsg("Every share in this file is offered on that platform and megaserver only.")
+    PrintMessage("Every share in this file is offered on that platform and megaserver only.")
 end
 
 local function GetCharacterGuilds()
@@ -1395,7 +1384,6 @@ local function RefreshGuildSnapshot()
         guildIds = guildIds,
         updatedAt = now,
     }
-    ItemShare.savedVars.guildsUpdatedAt = now
 
     return guilds
 end
@@ -1495,7 +1483,7 @@ PruneDepartedGuilds = function(quiet)
     end
 
     if (removedShares > 0 or removedReserves > 0) and not quiet then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Removed %d share%s and %d reserve%s filed against guilds you are no longer in.",
             removedShares,
             removedShares == 1 and "" or "s",
@@ -1554,11 +1542,6 @@ CanModifyGuildBankShare = function(bagId, slotIndex, guildId)
     end
 
     return false
-end
-
-
-local function GetDisplaySharedItemName(itemName)
-    return string.format("%s %s", SHARE_LIST_ICON, tostring(itemName or ""))
 end
 
 -- The ten home storage chests are separate bags, so they are worth naming one
@@ -2300,7 +2283,7 @@ local function NotifyShareProtected(entry, actionName)
     end
     lastShareProtectionNotice = now
 
-    dmsg(string.format(
+    PrintMessage(string.format(
         "%s is shared from %s, so it cannot be %s. Remove the share first - /ishare list, then right-click the row.",
         tostring(entry and entry.itemName or "That item"),
         tostring(entry and entry.sharedFrom or "that place"),
@@ -2869,13 +2852,13 @@ end
 local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
     if not isEligible then
-        dmsg(string.format("Cannot add item to share: %s", tostring(reason)))
+        PrintMessage(string.format("Cannot add item to share: %s", tostring(reason)))
         return
     end
 
     local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
     if not itemData then
-        dmsg("Could not determine item data.")
+        PrintMessage("Could not determine item data.")
         return
     end
 
@@ -2889,7 +2872,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
 
     if not savedEntry then
-        dmsg(string.format("Could not add %s to the shared list.", tostring(itemData.itemName or "that item")))
+        PrintMessage(string.format("Could not add %s to the shared list.", tostring(itemData.itemName or "that item")))
         return
     end
 
@@ -2905,7 +2888,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     local reserve = tonumber(GetShareReserve(savedEntry.itemLink, savedEntry.locationKey)) or 0
 
     if reserve > 0 then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "%s %s: keeping %d back, so %d of %d held are shared.",
             existing and "Updated" or "Added",
             itemData.itemName,
@@ -2914,7 +2897,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
             stackCount
         ))
     else
-        dmsg(string.format(
+        PrintMessage(string.format(
             "%s shared item %s from %s (stack size: %d)",
             existing and "Updated" or "Added",
             itemData.itemName,
@@ -2924,7 +2907,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     end
 
     if removedAlways then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Stopped always sharing %s: an item is offered one way at a time.",
             itemData.itemName
         ))
@@ -2938,7 +2921,7 @@ RemoveItemFromShareByKey = function(itemKey, entry, refreshListWindow)
 
     local itemName = entry and entry.itemName or itemKey
     ItemShare.savedVars.sharedItems[itemKey] = nil
-    dmsg(string.format("Removed %s from shared list.", tostring(itemName)))
+    PrintMessage(string.format("Removed %s from shared list.", tostring(itemName)))
     TryRefreshInventoryVisuals()
     if refreshListWindow ~= false then
         RefreshShareListWindowIfVisible()
@@ -3155,26 +3138,102 @@ end
 -- display is shared with the number of copies standing there, a share filed under
 -- this house that is no longer in it is taken back, and every other house is left
 -- alone because nothing here can see it.
-local function ScanPlacedFurnishings()
+-- The house owner and the player are both display names, but one may carry the @ the
+-- other lacks and the case is not guaranteed, so both are flattened before comparing.
+local function NormalizeHouseOwnerName(name)
+    local text = string.gsub(tostring(name or ""), "^@", "")
+    return zo_strlower(text)
+end
+
+-- Where the scan is standing, and whether that is a house this character owns. Reading
+-- placed furniture works in any home, but filing it is only honest for your own: a
+-- piece in someone else's house is not yours to offer.
+local function GetCurrentHouseScanInfo()
+    if not GetCurrentZoneHouseId then
+        return nil, "This client cannot tell whether you are in a house, so nothing was scanned."
+    end
+
+    local idOk, idValue = pcall(GetCurrentZoneHouseId)
+    local houseId = idOk and (tonumber(idValue) or 0) or 0
+    if houseId <= 0 then
+        return nil, "You are not inside a house. /ishare scan only reads the furniture placed in the house you are standing in, so nothing was scanned."
+    end
+
     local houseName = GetCurrentZoneDisplayName()
-    if houseName == "" then
-        dmsg("Stand in your storage house first: /ishare scan reads the furniture placed in the house you are in.")
+
+    local ownerName = ""
+    if GetCurrentHouseOwner then
+        local ownerOk, ownerValue = pcall(GetCurrentHouseOwner)
+        if ownerOk and type(ownerValue) == "string" then
+            ownerName = GetNormalizedText(ownerValue) or ""
+        end
+    end
+
+    -- Best effort: a client that does not name the owner cannot prove ownership, so the
+    -- scan goes ahead rather than refusing a house the player is standing in.
+    if ownerName ~= "" then
+        local ownerKey = NormalizeHouseOwnerName(ownerName)
+        local ownsHouse = false
+
+        if GetDisplayName then
+            local nameOk, nameValue = pcall(GetDisplayName)
+            if nameOk and type(nameValue) == "string" and NormalizeHouseOwnerName(nameValue) == ownerKey then
+                ownsHouse = true
+            end
+        end
+        if not ownsHouse and NormalizeHouseOwnerName(GetCurrentCharacterName()) == ownerKey then
+            ownsHouse = true
+        end
+
+        if not ownsHouse then
+            return nil, string.format(
+                "This house belongs to %s. /ishare scan only files furniture from a house you own, so nothing was scanned.",
+                ownerName
+            )
+        end
+    end
+
+    return {
+        houseId = houseId,
+        houseName = houseName,
+        ownerName = ownerName,
+    }
+end
+
+-- Reads the house once and treats that reading as the truth for it: a piece on
+-- display is shared with the number of copies standing there, a share filed under
+-- this house that is no longer in it is taken back, and every other house is left
+-- alone because nothing here can see it.
+local function ScanPlacedFurnishings()
+    local house, problem = GetCurrentHouseScanInfo()
+    if not house then
+        PrintMessage(problem)
         return
     end
 
     local pieces = GetPlacedFurniturePieces()
     if not pieces then
-        dmsg("This client cannot list placed furniture, so nothing was scanned.")
+        PrintMessage("This client cannot list placed furniture, so nothing was scanned.")
         return
     end
 
-    local placedKey, placedLabel = GetPlacedLocationInfo(houseName)
+    local houseLabel = house.houseName ~= "" and house.houseName or "this house"
+    local placedKey, placedLabel = GetPlacedLocationInfo(house.houseName)
+
+    PrintMessage(string.format(
+        "Scanning %s (house id %d, owner %s): %d placed piece%s.",
+        houseLabel,
+        house.houseId,
+        house.ownerName ~= "" and house.ownerName or "unknown",
+        #pieces,
+        #pieces == 1 and "" or "s"
+    ))
 
     local copiesByLink = {}
     local dataIdByLink = {}
     local boundCount, unidentifiedCount = 0, 0
 
-    for _, piece in ipairs(pieces) do
+    for index, piece in ipairs(pieces) do
         local info = piece.info or {}
         -- The two placed-furniture getters put the data id in different positions, so
         -- both are read and the one that names a furnishing wins.
@@ -3183,16 +3242,45 @@ local function ScanPlacedFurnishings()
             furnitureDataId = tonumber(info[9])
         end
 
+        local placedId = tonumber(piece.furnitureId) or 0
         local link = GetLinkForFurnitureDataId(furnitureDataId, info)
+
         if link == "" then
             unidentifiedCount = unidentifiedCount + 1
-        elseif IsItemLinkBound(link) then
-            -- Bound is bound: a piece that can never leave the account is not an
-            -- offer, whichever house it stands in.
-            boundCount = boundCount + 1
+            -- TEMPORARY: one line per placed piece, so a scan can be watched working in
+            -- game. Remove this loop's PrintMessage calls once scans are trusted again.
+            PrintMessage(string.format(
+                "  %d. unidentified furnishing - placed id %d, furniture data id %d, no item link",
+                index,
+                placedId,
+                furnitureDataId
+            ))
         else
-            copiesByLink[link] = (copiesByLink[link] or 0) + 1
-            dataIdByLink[link] = dataIdByLink[link] or furnitureDataId
+            local nameOk, pieceName = pcall(GetItemLinkName, link)
+            if not nameOk or type(pieceName) ~= "string" or pieceName == "" then
+                pieceName = link
+            end
+
+            local boundOk, isBound = pcall(IsItemLinkBound, link)
+            isBound = boundOk and isBound == true
+
+            if isBound then
+                -- Bound is bound: a piece that can never leave the account is not an
+                -- offer, whichever house it stands in.
+                boundCount = boundCount + 1
+            else
+                copiesByLink[link] = (copiesByLink[link] or 0) + 1
+                dataIdByLink[link] = dataIdByLink[link] or furnitureDataId
+            end
+
+            PrintMessage(string.format(
+                "  %d. %s - placed id %d, furniture data id %d, %s",
+                index,
+                pieceName,
+                placedId,
+                furnitureDataId,
+                isBound and "bound" or "not bound"
+            ))
         end
     end
 
@@ -3217,9 +3305,9 @@ local function ScanPlacedFurnishings()
 
     RefreshShareListWindowIfVisible()
 
-    dmsg(string.format(
+    PrintMessage(string.format(
         "Scan of %s: %d furnishing%s shared as %s, %d bound skipped, %d no longer there, %d unidentified.",
-        houseName,
+        houseLabel,
         addedCount,
         addedCount == 1 and "" or "s",
         placedLabel,
@@ -3228,7 +3316,7 @@ local function ScanPlacedFurnishings()
         unidentifiedCount
     ))
     if addedCount > 0 or removedCount > 0 then
-        dmsg("Use /ishare save or /reloadui to write the change to the file.")
+        PrintMessage("Use /ishare save or /reloadui to write the change to the file.")
     end
 end
 
@@ -3434,13 +3522,13 @@ end
 local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
     local isEligible, reason = IsItemEligibleForShare(bagId, slotIndex)
     if not isEligible then
-        dmsg(string.format("Cannot always share that item: %s", tostring(reason)))
+        PrintMessage(string.format("Cannot always share that item: %s", tostring(reason)))
         return
     end
 
     local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
     if not itemData then
-        dmsg("Could not determine item data.")
+        PrintMessage("Could not determine item data.")
         return
     end
 
@@ -3460,13 +3548,13 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
 
     TryRefreshInventoryVisuals()
     RefreshShareListWindowIfVisible()
-    dmsg(string.format(
+    PrintMessage(string.format(
         "%s always shared item %s. It stays offered even when you do not have one.",
         existing and "Updated" or "Added",
         itemData.itemName
     ))
     if removedShares > 0 then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Removed %s from the shared list: an item is offered one way at a time.",
             itemData.itemName
         ))
@@ -3484,7 +3572,7 @@ local function PrintAlwaysShareItems()
     end
 
     if #entries == 0 then
-        dmsg("Nothing is always shared yet. Right-click an item and choose \"Always Share This Item\".")
+        PrintMessage("Nothing is always shared yet. Right-click an item and choose \"Always Share This Item\".")
         return
     end
 
@@ -3498,23 +3586,23 @@ local function PrintAlwaysShareItems()
             < zo_strlower(tostring(right.sharedFrom or right.locationKey or ""))
     end)
 
-    dmsg(string.format("Always shared (%d):", #entries))
+    PrintMessage(string.format("Always shared (%d):", #entries))
     for index, entry in ipairs(entries) do
         local place = tostring(entry.sharedFrom or entry.locationKey or "")
-        dmsg(string.format(
+        PrintMessage(string.format(
             "  %d. %s%s",
             index,
             tostring(entry.itemName or entry.itemLink or "Unknown item"),
             place ~= "" and string.format(" - %s", place) or ""
         ))
     end
-    dmsg("Remove one with /itemshare noalways <part of the name>.")
+    PrintMessage("Remove one with /itemshare noalways <part of the name>.")
 end
 
 local function RemoveAlwaysShareByName(searchText)
     local needle = zo_strlower(zo_strtrim(tostring(searchText or "")))
     if needle == "" then
-        dmsg("Usage: /itemshare noalways <part of the item name>")
+        PrintMessage("Usage: /itemshare noalways <part of the item name>")
         return
     end
 
@@ -3531,7 +3619,7 @@ local function RemoveAlwaysShareByName(searchText)
     end
 
     if #matches == 0 then
-        dmsg(string.format("No always-shared item matches \"%s\".", tostring(searchText)))
+        PrintMessage(string.format("No always-shared item matches \"%s\".", tostring(searchText)))
         return
     end
 
@@ -3556,7 +3644,7 @@ local function RemoveAlwaysShareByName(searchText)
     RefreshShareListWindowIfVisible()
 
     if #matches == 1 then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Stopped always sharing %s - %s.",
             tostring(matches[1].entry.itemName or matches[1].key),
             places[1]
@@ -3564,7 +3652,7 @@ local function RemoveAlwaysShareByName(searchText)
         return
     end
 
-    dmsg(string.format(
+    PrintMessage(string.format(
         "Stopped always sharing %s in %d places: %s.",
         tostring(matches[1].entry.itemName or "that item"),
         #matches,
@@ -3575,7 +3663,7 @@ end
 local function RemoveItemFromShareFromBagSlot(bagId, slotIndex)
     local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
     if not itemData or not itemData.itemLink or not itemData.itemName then
-        dmsg("Could not determine item data.")
+        PrintMessage("Could not determine item data.")
         return
     end
 
@@ -3583,7 +3671,7 @@ local function RemoveItemFromShareFromBagSlot(bagId, slotIndex)
     if existing then
         RemoveItemFromShareByKey(itemData.itemKey, existing, true)
     else
-        dmsg(string.format("Item was not found in shared list: %s", itemData.itemName))
+        PrintMessage(string.format("Item was not found in shared list: %s", itemData.itemName))
     end
 end
 
@@ -3631,7 +3719,7 @@ local function AddInventoryContextMenu(slot)
             -- until the UI was reloaded, so the removal looked like it had failed.
             TryRefreshInventoryVisuals()
             RefreshShareListWindowIfVisible()
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "Stopped always sharing %s.",
                 tostring(entry and entry.itemName or itemName)
             ))
@@ -3660,7 +3748,7 @@ local function AddInventoryContextMenu(slot)
         AddCustomMenuItem("Clear Share Reserve", function()
             if ApplyShareReserve then
                 ApplyShareReserve(itemLink, 0, reserveLocationKey)
-                d(string.format("[ItemShare] Share reserve cleared for %s.", tostring(itemName)))
+                PrintMessage(string.format("Share reserve cleared for %s.", tostring(itemName)))
             end
         end, MENU_ADD_OPTION_LABEL)
     elseif isEligible then
@@ -3674,7 +3762,7 @@ end
 
 local function RegisterContextMenus()
     if not LibCustomMenu then
-        dmsg("LibCustomMenu not found.")
+        PrintMessage("LibCustomMenu not found.")
         return
     end
 
@@ -3685,7 +3773,7 @@ end
 
 local function ResetSharedItems()
     ItemShare.savedVars.sharedItems = {}
-    dmsg("Saved variables reset. No shared items remain.")
+    PrintMessage("Saved variables reset. No shared items remain.")
     TryRefreshInventoryVisuals()
     RefreshShareListWindowIfVisible()
 end
@@ -3855,11 +3943,11 @@ local function ShowSyncSummary(actionName, updatedCount, removedCount, unchanged
         unchangedCount
     )
 
-    d("[ItemShare] " .. summary)
+    PrintMessage(summary)
     if not quiet then
-        d("[ItemShare] Use /ishare save or /reloadui to persist changes.")
+        PrintMessage("Use /ishare save or /reloadui to persist changes.")
     end
-    dmsg(summary)
+    PrintMessage(summary)
 end
 
 -- A standing offer is a promise about one place: the number beside it is what that
@@ -3977,7 +4065,7 @@ SyncSharedItemsWithInventory = function(quiet)
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
                 if not quiet then
-                    dmsg(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                    PrintMessage(string.format("Removed missing shared item: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
                 end
             end
         else
@@ -4005,7 +4093,7 @@ SyncSharedItemsWithInventory = function(quiet)
                 or previousLocationKey ~= currentLocationKey then
                 updatedCount = updatedCount + 1
                 if not quiet then
-                    dmsg(string.format("Updated shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), currentLocation))
+                    PrintMessage(string.format("Updated shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), currentLocation))
                 end
             else
                 unchangedCount = unchangedCount + 1
@@ -4063,7 +4151,7 @@ RebuildSharedItemsWithInventory = function(quiet)
                 sharedItems[itemKey] = nil
                 removedCount = removedCount + 1
                 if not quiet then
-                    dmsg(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
+                    PrintMessage(string.format("Removed missing shared item during rebuild: %s [%s]", itemName, tostring(entry.sharedFrom or "-")))
                 end
             end
         else
@@ -4112,7 +4200,7 @@ RebuildSharedItemsWithInventory = function(quiet)
                 or previousWeaponType ~= tostring(entry.weaponType or "") then
                 updatedCount = updatedCount + 1
                 if not quiet then
-                    dmsg(string.format("Rebuilt shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), tostring(entry.sharedFrom or "-")))
+                    PrintMessage(string.format("Rebuilt shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), tostring(entry.sharedFrom or "-")))
                 end
             else
                 unchangedCount = unchangedCount + 1
@@ -4164,7 +4252,7 @@ local function ScheduleAutoReconcile(reason)
 
         RefreshGuildSnapshot()
         RebuildSharedItemsWithInventory(true)
-        d(string.format("[ItemShare] Shared items refreshed after %s.", tostring(reason or "login")))
+        PrintMessage(string.format("Shared items refreshed after %s.", tostring(reason or "login")))
     end, 4000)
 end
 
@@ -4189,7 +4277,7 @@ local function SetShareReserveByName(searchText, amount)
     local matches = SharedEntriesMatching(searchText)
 
     if #matches == 0 then
-        dmsg(string.format("No shared item matches \"%s\".", tostring(searchText)))
+        PrintMessage(string.format("No shared item matches \"%s\".", tostring(searchText)))
         return
     end
     if #matches > 1 then
@@ -4211,7 +4299,7 @@ local function SetShareReserveByName(searchText, amount)
         end
 
         if sameItem then
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "%s is shared from more than one place (%s); set its reserve from the item's right-click menu in the bag you mean.",
                 tostring(matches[1].itemName or "that item"),
                 JoinSortedLocations(places)
@@ -4219,7 +4307,7 @@ local function SetShareReserveByName(searchText, amount)
             return
         end
 
-        dmsg(string.format(
+        PrintMessage(string.format(
             "%d shared items match \"%s\"; use more of the name.",
             #matches,
             tostring(searchText)
@@ -4243,7 +4331,7 @@ local function SetShareReserveByName(searchText, amount)
     RefreshShareListWindowIfVisible()
 
     if reserve > 0 then
-        dmsg(string.format(
+        PrintMessage(string.format(
             "%s: keeping %d back, sharing %d of %d held.",
             tostring(entry.itemName or "that item"),
             reserve,
@@ -4251,7 +4339,7 @@ local function SetShareReserveByName(searchText, amount)
             held
         ))
     else
-        dmsg(string.format(
+        PrintMessage(string.format(
             "%s: sharing everything held (%d).",
             tostring(entry.itemName or "that item"),
             offered
@@ -4448,16 +4536,16 @@ local function BuildReserveDialog()
         local offered = GetEntryOfferedCount(entry)
 
         if held > 0 then
-            d(string.format(
-                "[ItemShare] %s: keeping %d back, so %d of %d held are shared.",
+            PrintMessage(string.format(
+                "%s: keeping %d back, so %d of %d held are shared.",
                 tostring(pending.itemName),
                 amount,
                 offered,
                 held
             ))
         else
-            d(string.format(
-                "[ItemShare] %s: keeping %d back. Nothing is offered until you hold more.",
+            PrintMessage(string.format(
+                "%s: keeping %d back. Nothing is offered until you hold more.",
                 tostring(pending.itemName),
                 amount
             ))
@@ -4474,8 +4562,8 @@ local function BuildReserveDialog()
 
         local entry = ApplyShareReserve(pending.itemLink, 0, pending.locationKey)
         local held = GetEntryHeldCount(entry)
-        d(string.format(
-            "[ItemShare] %s: reserve cleared, so everything held is shared (%d).",
+        PrintMessage(string.format(
+            "%s: reserve cleared, so everything held is shared (%d).",
             tostring(pending.itemName),
             held
         ))
@@ -4506,8 +4594,8 @@ OpenShareReserveDialog = function(bagId, slotIndex)
     local dialog = BuildReserveDialog()
 
     if not dialog then
-        d(string.format(
-            "[ItemShare] The reserve box is unavailable in this client. Use /itemshare reserve <amount> %s.",
+        PrintMessage(string.format(
+            "The reserve box is unavailable in this client. Use /itemshare reserve <amount> %s.",
             tostring(itemName)
         ))
         return
@@ -4612,7 +4700,7 @@ local function PrintShareReserves()
     end
 
     if #rows == 0 then
-        dmsg("No item has a share reserve. Set one with /itemshare reserve <amount> <part of the name>.")
+        PrintMessage("No item has a share reserve. Set one with /itemshare reserve <amount> <part of the name>.")
         return
     end
 
@@ -4647,10 +4735,10 @@ local function PrintShareReserves()
         return PlaceOf(a) < PlaceOf(b)
     end)
 
-    dmsg(string.format("Share reserves (%d):", #rows))
+    PrintMessage(string.format("Share reserves (%d):", #rows))
     for _, row in ipairs(rows) do
         if row.entry then
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "  %s [%s]: keep %d, sharing %d of %d held",
                 NameOf(row),
                 PlaceOf(row),
@@ -4659,7 +4747,7 @@ local function PrintShareReserves()
                 GetEntryHeldCount(row.entry)
             ))
         else
-            dmsg(string.format(
+            PrintMessage(string.format(
                 "  %s [%s]: keep %d, not shared",
                 NameOf(row),
                 PlaceOf(row),
@@ -4667,7 +4755,7 @@ local function PrintShareReserves()
             ))
         end
     end
-    dmsg("Clear one with /itemshare noreserve <part of the name>, or from the item's right-click menu.")
+    PrintMessage("Clear one with /itemshare noreserve <part of the name>, or from the item's right-click menu.")
 end
 
 -- /itemshare expire <days> is a statement about the list, not about one item, so it
@@ -4681,21 +4769,21 @@ local function SetShareExpireDays(rawArg)
 
     if value == "" then
         if current > 0 then
-            d(string.format(
-                "[ItemShare] Shares older than %d days show the stopwatch: %d of %d are past it.",
+            PrintMessage(string.format(
+                "Shares older than %d days show the stopwatch: %d of %d are past it.",
                 current,
                 expired,
                 total
             ))
         else
-            d("[ItemShare] No expire limit is set, so no share shows the stopwatch.")
+            PrintMessage("No expire limit is set, so no share shows the stopwatch.")
         end
-        d("Use /itemshare expire <days> to mark shares older than that many days, or /itemshare expire 0 to stop marking them.")
+        PrintMessage("Use /itemshare expire <days> to mark shares older than that many days, or /itemshare expire 0 to stop marking them.")
         return
     end
 
     if not days or days < 0 or days ~= math.floor(days) then
-        d("Usage: /itemshare expire <days>   (0 turns the stopwatch off)")
+        PrintMessage("Usage: /itemshare expire <days>   (0 turns the stopwatch off)")
         return
     end
 
@@ -4704,10 +4792,10 @@ local function SetShareExpireDays(rawArg)
     RefreshShareListWindowIfVisible()
 
     if days <= 0 then
-        d("[ItemShare] Expire limit cleared: no share shows the stopwatch.")
+        PrintMessage("Expire limit cleared: no share shows the stopwatch.")
     else
-        d(string.format(
-            "[ItemShare] Shares older than %d days now show the stopwatch: %d of %d are past it.",
+        PrintMessage(string.format(
+            "Shares older than %d days now show the stopwatch: %d of %d are past it.",
             days,
             expired,
             total
@@ -4720,24 +4808,23 @@ local function OnSlashCommand(arg)
     local lowerArg = zo_strlower(rawArg)
 
     if lowerArg == "" then
-        dmsg("Commands:")
-        dmsg("/itemshare list      - Open the shared items window")
-        dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
-        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
-        dmsg("/itemshare save      - Reload the UI")
-        dmsg("/itemshare debug     - Toggle debug messages on or off")
-        dmsg("/itemshare guilds    - Show the guilds this character's shares are matched against")
-        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
-        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
-        dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
-        dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
-        dmsg("/itemshare reserves  - List the items you keep a reserve on")
-        dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
-        dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
-        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
-        dmsg("Right-click an item - Share Reserve asks for a number to keep back")
+        PrintMessage("Commands:")
+        PrintMessage("/itemshare list      - Open the shared items window")
+        PrintMessage("/itemshare reset     - Clear all shared entries")
+        PrintMessage("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        PrintMessage("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
+        PrintMessage("/itemshare save      - Reload the UI")
+        PrintMessage("/itemshare guilds    - Show the guilds this character's shares are matched against")
+        PrintMessage("/itemshare always    - List the items you always offer, in or out of your bags")
+        PrintMessage("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        PrintMessage("/itemshare reserve N <name> - Share only what you hold above N of that item")
+        PrintMessage("/itemshare noreserve <name> - Share everything you hold of that item again")
+        PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
+        PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
+        PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
+        PrintMessage("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
+        PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
     elseif lowerArg == "list" then
         local window = ItemShare.ui and ItemShare.ui.listWindow
         if window and not window:IsHidden() then
@@ -4757,13 +4844,10 @@ local function OnSlashCommand(arg)
     elseif lowerArg == "save" then
         RebuildSharedItemsWithInventory()
         ConfirmReloadUI()
-    elseif lowerArg == "debug" then
-        ItemShare.savedVars.debugEnabled = not ItemShare.savedVars.debugEnabled
-        d(string.format("[ItemShare] Debug %s.", ItemShare.savedVars.debugEnabled and "enabled" or "disabled"))
     elseif lowerArg == "guilds" then
         local guilds = RefreshGuildSnapshot()
         if #guilds == 0 then
-            dmsg("No guilds detected for this character yet. Try again once the guild list has loaded.")
+            PrintMessage("No guilds detected for this character yet. Try again once the guild list has loaded.")
         else
             PruneDepartedGuilds()
             RefreshShareListWindowIfVisible()
@@ -4772,19 +4856,19 @@ local function OnSlashCommand(arg)
             local snapshot = snapshots[GetCurrentCharacterName()]
             local slots = type(snapshot) == "table" and snapshot.guildIds or nil
 
-            dmsg(string.format("Guild slots for %s:", GetCurrentCharacterName()))
+            PrintMessage(string.format("Guild slots for %s:", GetCurrentCharacterName()))
             for slot = 1, MAX_GUILD_SLOTS do
                 local guildId = type(slots) == "table" and (tonumber(slots[slot]) or 0) or 0
                 if guildId > 0 then
                     local guildName = GetGuildNameById(guildId)
-                    dmsg(string.format(
+                    PrintMessage(string.format(
                         "  %d: %s (id: %d)",
                         slot,
                         guildName ~= "" and guildName or "Unknown guild",
                         guildId
                     ))
                 else
-                    dmsg(string.format("  %d: no guild", slot))
+                    PrintMessage(string.format("  %d: no guild", slot))
                 end
             end
         end
@@ -4799,14 +4883,14 @@ local function OnSlashCommand(arg)
     elseif string.match(lowerArg, "^reserve%s+") then
         local amount, needle = rawArg:match("^%s*[Rr]eserve%s+(%d+)%s+(.+)$")
         if not amount then
-            dmsg("Usage: /itemshare reserve <amount to keep> <part of the item name>")
+            PrintMessage("Usage: /itemshare reserve <amount to keep> <part of the item name>")
         else
             SetShareReserveByName(zo_strtrim(needle), tonumber(amount) or 0)
         end
     elseif lowerArg == "protect" then
         local wasEnabled = ItemShare.savedVars.shareProtection ~= false
         ItemShare.savedVars.shareProtection = not wasEnabled
-        dmsg(string.format(
+        PrintMessage(string.format(
             "Share protection %s. %s",
             wasEnabled and "off" or "on",
             wasEnabled and "Shared copies can be sold and deconstructed again." or "A copy shared from a place will refuse to be sold or deconstructed from that place."
@@ -4819,29 +4903,29 @@ local function OnSlashCommand(arg)
         local current = ItemShare.savedVars.guildBankSharingEnabled == true
         ItemShare.savedVars.guildBankSharingEnabled = not current
 
-        d(string.format(
-            "[ItemShare] Guild bank sharing %s.",
+        PrintMessage(string.format(
+            "Guild bank sharing %s.",
             ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
         ))
         RefreshShareListWindowIfVisible()
     else
-        dmsg("Commands:")
-        dmsg("/itemshare list      - Open the shared items window")
-        dmsg("/itemshare reset     - Clear all shared entries")
-        dmsg("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
-        dmsg("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
-        dmsg("/itemshare save      - Reload the UI")
-        dmsg("/itemshare guilds    - Show the guilds this character's shares are matched against")
-        dmsg("/itemshare always    - List the items you always offer, in or out of your bags")
-        dmsg("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
-        dmsg("/itemshare reserve N <name> - Share only what you hold above N of that item")
-        dmsg("/itemshare noreserve <name> - Share everything you hold of that item again")
-        dmsg("/itemshare reserves  - List the items you keep a reserve on")
-        dmsg("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
-        dmsg("/itemshare server    - Show the platform and megaserver this file is recorded for")
-        dmsg("/itemshare scan      - Share every non-bound furnishing placed in the house you are standing in")
-        dmsg("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
-        dmsg("Right-click an item - Share Reserve asks for a number to keep back")
+        PrintMessage("Commands:")
+        PrintMessage("/itemshare list      - Open the shared items window")
+        PrintMessage("/itemshare reset     - Clear all shared entries")
+        PrintMessage("/itemshare sync      - Recount and drop shares you no longer own, in bags that are readable now")
+        PrintMessage("/itemshare rebuild   - Rewrite every shared item from your current bags (also runs on login and when a bank opens)")
+        PrintMessage("/itemshare save      - Reload the UI")
+        PrintMessage("/itemshare guilds    - Show the guilds this character's shares are matched against")
+        PrintMessage("/itemshare always    - List the items you always offer, in or out of your bags")
+        PrintMessage("/itemshare noalways  - Stop always sharing one: /itemshare noalways <part of the name>")
+        PrintMessage("/itemshare reserve N <name> - Share only what you hold above N of that item")
+        PrintMessage("/itemshare noreserve <name> - Share everything you hold of that item again")
+        PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
+        PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
+        PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
+        PrintMessage("/itemshare scan      - Share every non-bound furnishing placed in the house you own and are standing in")
+        PrintMessage("/itemshare protect   - Turn refusing to sell or deconstruct a shared copy on or off")
+        PrintMessage("Right-click an item - Share Reserve asks for a number to keep back")
     end
 end
 
@@ -4878,8 +4962,8 @@ local function OnAddonLoaded(event, addonName)
 
     local legacyPlacedShares = PruneLegacyPlacedFurnitureShares()
     if legacyPlacedShares > 0 then
-        d(string.format(
-            "[ItemShare] Removed %d share%s that were filed as placed furniture. Run /ishare scan in your storage house to file them again.",
+        PrintMessage(string.format(
+            "Removed %d share%s that were filed as placed furniture. Run /ishare scan in your storage house to file them again.",
             legacyPlacedShares,
             legacyPlacedShares == 1 and "" or "s"
         ))
@@ -4988,7 +5072,7 @@ local function OnAddonLoaded(event, addonName)
         CreateShareListWindow()
     end
 
-    dmsg(string.format(
+    PrintMessage(string.format(
         "Loaded (version %s). Shared items refresh from your bags on login and when you open the bank.",
         ADDON_VERSION
     ))

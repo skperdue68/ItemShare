@@ -10,6 +10,30 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.14
+- Removed code nothing calls: two helpers that were never used, the local character name
+  built at load, and two saved fields written on every platform capture and guild refresh
+  but never read. Saved files keep the old keys harmlessly; new files no longer create them.
+
+### 1.11.13
+- Every message goes through one function that posts a coloured `[ItemShare]` system
+  message, the way GuildSync does. The old sink was gated on `/ishare debug` and called a
+  `d()` helper this file no longer defines, so command output was being dropped instead of
+  shown - a command that printed nothing really had printed nothing.
+- The scan report uses the same function now, so a scan, a sync, a reserve change and the
+  command list all appear in chat without any setting to find first.
+- `/ishare debug` is gone, along with the saved `debugEnabled` flag it set: messages are
+  always shown now, so the command had nothing left to control.
+
+### 1.11.12
+- `/ishare scan` now says why it did nothing: outside a house it reports that it only
+  reads the house you are standing in, and in someone else's house it names the owner and
+  refuses, since a piece there is not yours to offer. Both checks use the house id and
+  the house owner, not the zone name.
+- The scan report no longer depends on `/ishare debug` being on. It was being written
+  through the debug-only message path, which is why a scan in a house could look like it
+  had not run at all.
+
 ### 1.11.11
 - A standing offer's number is rewritten within a few seconds of items leaving a bag.
   Selling, deconstructing, trading away, mailing or destroying the last copy now leaves
