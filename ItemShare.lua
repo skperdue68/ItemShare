@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.16"
+local ADDON_VERSION = "1.11.17"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2090,27 +2090,44 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
     }
 end
 
+-- The client's own link check, captured before the helper below takes the name: it is
+-- the only bound test the housing API leaves for a placed piece, which has no bag slot.
+local EsoIsItemLinkBound = IsItemLinkBound
+
 -- The item link carries the item's own bound state, which still answers when the
 -- slot cannot: a guild bank tab that is not open, a house bank the client has not
 -- loaded, a saved row whose bag was reorganised. It is a second opinion behind
 -- IsItemBound, never a replacement for it.
+--
+-- GetItemLinkBoundStatus is not in the client's API - asking for it and giving up
+-- answered "not bound" for every link the game ever produced, which is how bound
+-- furnishings reached the share list. The client's IsItemLinkBound is the real test.
 local function IsItemLinkBound(itemLink)
     local link = tostring(itemLink or "")
-    if link == "" or type(GetItemLinkBoundStatus) ~= "function" then
+    if link == "" then
         return false
     end
 
-    local status = GetItemLinkBoundStatus(link)
-    if status == nil then
-        return false
+    if type(GetItemLinkBoundStatus) == "function" then
+        local ok, status = pcall(GetItemLinkBoundStatus, link)
+        if ok and status ~= nil then
+            -- The named constant is preferred so a client that renumbers the enum is
+            -- still read correctly; every version defines BOUND_STATUS_UNBOUND as 0.
+            if BOUND_STATUS_UNBOUND ~= nil then
+                return status ~= BOUND_STATUS_UNBOUND
+            end
+            return tonumber(status) ~= 0
+        end
     end
 
-    -- The named constant is preferred so a client that renumbers the enum is still
-    -- read correctly; every version defines BOUND_STATUS_UNBOUND as 0.
-    if BOUND_STATUS_UNBOUND ~= nil then
-        return status ~= BOUND_STATUS_UNBOUND
+    if type(EsoIsItemLinkBound) == "function" then
+        local ok, bound = pcall(EsoIsItemLinkBound, link)
+        if ok then
+            return bound == true
+        end
     end
-    return tonumber(status) ~= 0
+
+    return false
 end
 
 local function IsItemEligibleForShare(bagId, slotIndex)
@@ -3078,10 +3095,20 @@ local function GetPlacedFurniturePieces()
         end
 
         if GetPlacedFurnitureLink then
-            local linkOk, link = pcall(GetPlacedFurnitureLink, furnitureId, LINK_STYLE_DEFAULT)
-            if linkOk and type(link) == "string" then
-                piece.link = link
+            -- Two returns: the item link, and the collectible link of a collectible
+            -- furnishing, which is not an item and therefore has no item link at all.
+            -- Reading only the first made every collectible look like a failed call.
+            local linkOk, itemLink, collectibleLink = pcall(GetPlacedFurnitureLink, furnitureId, LINK_STYLE_DEFAULT)
+            if linkOk then
+                piece.link = type(itemLink) == "string" and itemLink or ""
+                piece.collectibleLink = type(collectibleLink) == "string" and collectibleLink or ""
+                piece.linkResult = piece.link ~= "" and "ok" or "empty"
+            else
+                -- pcall's second value is the error the call raised.
+                piece.linkResult = "error: " .. tostring(itemLink)
             end
+        else
+            piece.linkResult = "no GetPlacedFurnitureLink"
         end
 
         if GetPlacedHousingFurnitureQuality then
@@ -3264,12 +3291,14 @@ local function ScanPlacedFurnishings()
 
     local copiesByLink = {}
     local dataIdByLink = {}
-    local boundCount, unidentifiedCount = 0, 0
+    local boundCount, unidentifiedCount, collectibleCount = 0, 0, 0
 
     for index, piece in ipairs(pieces) do
         local furnitureDataId = tonumber(piece.furnitureDataId) or 0
         local placedId = piece.furnitureId
         local placedLabel = FormatFurnitureId(placedId)
+
+        local collectibleLink = tostring(piece.collectibleLink or "")
 
         local link = tostring(piece.link or "")
         if link == "" then
@@ -3279,16 +3308,30 @@ local function ScanPlacedFurnishings()
         end
 
         if link == "" then
-            unidentifiedCount = unidentifiedCount + 1
             -- TEMPORARY: one line per placed piece, so a scan can be watched working in
             -- game. Remove this loop's PrintMessage calls once scans are trusted again.
-            PrintMessage(string.format(
-                "  %d. no item link - placed id %s, furniture data id %d, name '%s'",
-                index,
-                placedLabel,
-                furnitureDataId,
-                tostring(piece.name or "")
-            ))
+            if collectibleLink ~= "" then
+                -- A collectible furnishing is not an item: it has no link to offer and
+                -- cannot be given away, so it is counted apart from a failure.
+                collectibleCount = collectibleCount + 1
+                PrintMessage(string.format(
+                    "  %d. collectible furnishing (cannot be shared) - placed id %s, furniture data id %d, name '%s'",
+                    index,
+                    placedLabel,
+                    furnitureDataId,
+                    tostring(piece.name or "")
+                ))
+            else
+                unidentifiedCount = unidentifiedCount + 1
+                PrintMessage(string.format(
+                    "  %d. no item link - placed id %s, furniture data id %d, name '%s', link call: %s",
+                    index,
+                    placedLabel,
+                    furnitureDataId,
+                    tostring(piece.name or ""),
+                    tostring(piece.linkResult or "not called")
+                ))
+            end
         else
             local pieceName = tostring(piece.name or "")
             if pieceName == "" then
@@ -3346,13 +3389,14 @@ local function ScanPlacedFurnishings()
     RefreshShareListWindowIfVisible()
 
     PrintMessage(string.format(
-        "Scan of %s: %d furnishing%s shared as %s, %d bound skipped, %d no longer there, %d unidentified.",
+        "Scan of %s: %d furnishing%s shared as %s, %d bound skipped, %d no longer there, %d collectible, %d unidentified.",
         houseLabel,
         addedCount,
         addedCount == 1 and "" or "s",
         placedLabel,
         boundCount,
         removedCount,
+        collectibleCount,
         unidentifiedCount
     ))
     if addedCount > 0 or removedCount > 0 then

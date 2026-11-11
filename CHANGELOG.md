@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.17
+- Bound state is read again. `GetItemLinkBoundStatus` is not in the client's API, so the
+  link check answered "not bound" for every link and bound furnishings were offered as if
+  they were free to give away. The client's own `IsItemLinkBound` is now the test.
+- `GetPlacedFurnitureLink` returns the item link *and* a collectible link. A collectible
+  furnishing has no item link at all, and reading only the first return made every one of
+  them look like a failed lookup; they are now counted as collectible, apart from pieces
+  whose link genuinely could not be read.
+- A piece with no link now says what the link call answered, so an empty result is
+  distinguishable from a call that was never made or one that raised.
+
 ### 1.11.16
 - `/ishare scan` reads placed furniture the way the housing API actually works: pieces are
   enumerated by id with `GetNextPlacedHousingFurnitureId`, and each id is asked for its own
