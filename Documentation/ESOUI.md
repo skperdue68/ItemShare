@@ -162,7 +162,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.15, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.16, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]

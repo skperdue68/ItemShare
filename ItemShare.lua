@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.15"
+local ADDON_VERSION = "1.11.16"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3045,37 +3045,70 @@ end
 -- every non-bound furnishing standing there as Placed (<house>), one row per
 -- furnishing with the number of copies, and running it again is the record of what
 -- that house still holds.
+--
+-- Placed furniture is enumerated by id, never by index: there is no
+-- GetPlacedFurnitureCount/GetPlacedFurnitureIdInfo pair in the housing API, so the old
+-- code fell through to the iterator and then read the details out of the wrong positions.
+-- Each id is asked for its own details, and the link comes from the housing API instead of
+-- being rebuilt from a data id that was never read.
 local function GetPlacedFurniturePieces()
-    local pieces = {}
+    if not GetNextPlacedHousingFurnitureId then
+        return nil
+    end
 
-    if GetPlacedFurnitureCount and GetPlacedFurnitureIdInfo then
-        local placedCount = GetPlacedFurnitureCount() or 0
-        for index = 1, placedCount do
-            local furnitureId = GetPlacedFurnitureIdInfo(index)
-            if furnitureId then
-                local info = {}
-                if GetPlacedFurnitureInfo then
-                    info = { GetPlacedFurnitureInfo(furnitureId) }
-                end
-                pieces[#pieces + 1] = { furnitureId = furnitureId, info = info }
+    local pieces = {}
+    local furnitureId = GetNextPlacedHousingFurnitureId(nil)
+    -- A guard rather than a trust: an iterator that stopped advancing would hang the
+    -- client, and 5000 placed pieces is far past any house limit.
+    local guard = 0
+
+    while furnitureId and guard < 5000 do
+        guard = guard + 1
+
+        local piece = { furnitureId = furnitureId, name = "", icon = "", furnitureDataId = 0 }
+
+        if GetPlacedHousingFurnitureInfo then
+            -- name, icon, furniture data id - in that order.
+            local infoOk, name, icon, furnitureDataId = pcall(GetPlacedHousingFurnitureInfo, furnitureId)
+            if infoOk then
+                piece.name = type(name) == "string" and name or ""
+                piece.icon = type(icon) == "string" and icon or ""
+                piece.furnitureDataId = tonumber(furnitureDataId) or 0
             end
         end
-        return pieces
-    end
 
-    if GetNextPlacedHousingFurnitureId and GetPlacedHousingFurnitureInfo then
-        local furnitureId = GetNextPlacedHousingFurnitureId()
-        while furnitureId do
-            pieces[#pieces + 1] = {
-                furnitureId = furnitureId,
-                info = { GetPlacedHousingFurnitureInfo(furnitureId) },
-            }
-            furnitureId = GetNextPlacedHousingFurnitureId(furnitureId)
+        if GetPlacedFurnitureLink then
+            local linkOk, link = pcall(GetPlacedFurnitureLink, furnitureId, LINK_STYLE_DEFAULT)
+            if linkOk and type(link) == "string" then
+                piece.link = link
+            end
         end
-        return pieces
+
+        if GetPlacedHousingFurnitureQuality then
+            local qualityOk, quality = pcall(GetPlacedHousingFurnitureQuality, furnitureId)
+            if qualityOk then
+                piece.quality = quality
+            end
+        end
+
+        pieces[#pieces + 1] = piece
+        furnitureId = GetNextPlacedHousingFurnitureId(furnitureId)
     end
 
-    return nil
+    return pieces
+end
+
+-- A housing furniture id is a 64-bit number, which prints as 2147483648 in chat unless it
+-- goes through Id64ToString. The id itself is passed to the getters untouched.
+local function FormatFurnitureId(furnitureId)
+    if Id64ToString then
+        local ok, text = pcall(Id64ToString, furnitureId)
+        if ok and type(text) == "string" and text ~= "" then
+            return text
+        end
+    end
+
+    return tostring(furnitureId)
 end
 
 -- A placed piece is described by its furniture data id, not by a bag slot, so the
@@ -3234,31 +3267,38 @@ local function ScanPlacedFurnishings()
     local boundCount, unidentifiedCount = 0, 0
 
     for index, piece in ipairs(pieces) do
-        local info = piece.info or {}
-        -- The two placed-furniture getters put the data id in different positions, so
-        -- both are read and the one that names a furnishing wins.
-        local furnitureDataId = tonumber(info[2]) or 0
-        if furnitureDataId <= 0 and (tonumber(info[9]) or 0) > 0 then
-            furnitureDataId = tonumber(info[9])
-        end
+        local furnitureDataId = tonumber(piece.furnitureDataId) or 0
+        local placedId = piece.furnitureId
+        local placedLabel = FormatFurnitureId(placedId)
 
-        local placedId = tonumber(piece.furnitureId) or 0
-        local link = GetLinkForFurnitureDataId(furnitureDataId, info)
+        local link = tostring(piece.link or "")
+        if link == "" then
+            -- Older clients may have no GetPlacedFurnitureLink; the data id is the only
+            -- other route to a link, and it stays 0 when even the info call failed.
+            link = GetLinkForFurnitureDataId(furnitureDataId, { piece.name, piece.icon })
+        end
 
         if link == "" then
             unidentifiedCount = unidentifiedCount + 1
             -- TEMPORARY: one line per placed piece, so a scan can be watched working in
             -- game. Remove this loop's PrintMessage calls once scans are trusted again.
             PrintMessage(string.format(
-                "  %d. unidentified furnishing - placed id %d, furniture data id %d, no item link",
+                "  %d. no item link - placed id %s, furniture data id %d, name '%s'",
                 index,
-                placedId,
-                furnitureDataId
+                placedLabel,
+                furnitureDataId,
+                tostring(piece.name or "")
             ))
         else
-            local nameOk, pieceName = pcall(GetItemLinkName, link)
-            if not nameOk or type(pieceName) ~= "string" or pieceName == "" then
-                pieceName = link
+            local pieceName = tostring(piece.name or "")
+            if pieceName == "" then
+                local nameOk, linkName = pcall(GetItemLinkName, link)
+                if nameOk and type(linkName) == "string" then
+                    pieceName = linkName
+                end
+            end
+            if pieceName == "" then
+                pieceName = link ~= "" and link or "unnamed furnishing"
             end
 
             local boundOk, isBound = pcall(IsItemLinkBound, link)
@@ -3274,10 +3314,10 @@ local function ScanPlacedFurnishings()
             end
 
             PrintMessage(string.format(
-                "  %d. %s - placed id %d, furniture data id %d, %s",
+                "  %d. %s - placed id %s, furniture data id %d, %s",
                 index,
                 pieceName,
-                placedId,
+                placedLabel,
                 furnitureDataId,
                 isBound and "bound" or "not bound"
             ))
