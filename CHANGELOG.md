@@ -10,6 +10,13 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.10
+- A standing offer belongs to the place it was marked in. Marking lockpicks in your bags
+  leaves the stack in the bank unmarked, each place carries its own offer, count and
+  reserve, and stopping one place leaves the others standing.
+- Offers saved by an earlier version are moved onto a place key the first time the addon
+  loads, so nothing has to be marked again.
+
 ### 1.11.9
 - Marking an item for always share writes down the place it was marked in and how many
   that place holds at that moment, so the very first upload carries a number instead of

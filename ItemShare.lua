@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.9"
+local ADDON_VERSION = "1.11.10"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -348,9 +348,16 @@ local function GetShareListEntries()
     local alwaysShare = ItemShare.savedVars.alwaysShare
     if type(alwaysShare) == "table" then
         local waiting = {}
-        for link, alwaysEntry in pairs(alwaysShare) do
-            if type(alwaysEntry) == "table" and not linksListed[tostring(link)] then
-                waiting[#waiting + 1] = alwaysEntry
+        for _, alwaysEntry in pairs(alwaysShare) do
+            if type(alwaysEntry) == "table" then
+                local entryLink = tostring(alwaysEntry.itemLink or "")
+                local entryPlace = tostring(alwaysEntry.locationKey or "")
+                -- A share in one bag says nothing about an offer in another, so the
+                -- offer is only folded away by a share in its own place.
+                if entryLink ~= ""
+                    and not placesListed[BuildSharedItemKey(entryLink, entryPlace)] then
+                    waiting[#waiting + 1] = alwaysEntry
+                end
             end
         end
 
@@ -378,7 +385,7 @@ local function GetShareListEntries()
                 end
 
                 entries[#entries + 1] = {
-                    itemKey = link,
+                    itemKey = BuildSharedItemKey(link, locationKey),
                     itemLink = link,
                     itemName = tostring((itemData and itemData.itemName) or alwaysEntry.itemName or link),
                     itemType = (itemData and itemData.itemType) or alwaysEntry.itemType,
@@ -779,7 +786,7 @@ local function GetOrCreateShareListRow(index)
     local function updateRowSharedVisuals()
         local isShared = row.entryKey and ItemShare.savedVars and ItemShare.savedVars.sharedItems and ItemShare.savedVars.sharedItems[row.entryKey] ~= nil
         local link = row.itemLink or (row.entryData and row.entryData.itemLink) or ""
-        local isAlways = link ~= "" and IsItemLinkAlwaysShared(link)
+        local isAlways = link ~= "" and IsItemLinkAlwaysShared(link, (row.entryData and row.entryData.locationKey) or row.locationKey)
 
         -- A standing offer has no share entry to find, so "shared" has to include it,
         -- and the badge has to come from the same function the rest of the addon uses:
@@ -840,7 +847,7 @@ local function GetOrCreateShareListRow(index)
 
         if row.isAlwaysOnly then
             -- Always sharing -> not sharing.
-            local removed = RemoveAlwaysShareForItemLink(link)
+            local removed = RemoveAlwaysShareForItemLink(link, (row.entryData and row.entryData.locationKey) or row.locationKey)
             if not removed then
                 return
             end
@@ -909,7 +916,7 @@ local function GetOrCreateShareListRow(index)
             return
         end
 
-        RemoveAlwaysShareForItemLink(savedEntry.itemLink)
+        RemoveAlwaysShareForItemLink(savedEntry.itemLink, savedEntry.locationKey)
         TryRefreshInventoryVisuals()
         RefreshShareListWindowIfVisible()
         dmsg(string.format(
@@ -943,7 +950,7 @@ local function GetOrCreateShareListRow(index)
             lines[#lines + 1] = "|cD8A24FShare reserve|r"
             lines[#lines + 1] = "Nothing is shared from this item, but some is kept back."
             lines[#lines + 1] = "Right-click the row to add it to the shared list."
-        elseif link and IsItemLinkAlwaysShared(link) then
+        elseif link and IsItemLinkAlwaysShared(link, (row.entryData and row.entryData.locationKey) or row.locationKey) then
             lines[#lines + 1] = "|cFFD266Always shared|r"
             lines[#lines + 1] = "You offer this whenever you have one."
         else
@@ -1079,7 +1086,7 @@ RefreshShareListWindow = function()
         row.statusIcon:SetTexture(
             (entry.reserveOnly and RESERVE_ONLY_TEXTURE_PATH)
                 or (IsShareEntryExpired(entry) and EXPIRED_TEXTURE_PATH)
-                or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink))
+                or GetShareBadgeTexture(entry.itemLink, IsItemLinkAlwaysShared(entry.itemLink, entry.locationKey), entry.locationKey)
         )
         row.statusIcon:SetHidden(false)
         if row.RefreshAppearance then
@@ -2402,14 +2409,18 @@ local function FindSharedEntryKeyForBagSlot(bagId, slotIndex)
 end
 
 -- An item can be in the share list and in the always-share list at the same time.
--- The offer is keyed by item link (not by bag and slot), so it follows the item
--- between bags and out of them entirely.
-IsItemLinkAlwaysShared = function(itemLink)
+-- The offer is keyed by item link and place, so the same stack in another bag is a
+-- different thing and stays unmarked.
+IsItemLinkAlwaysShared = function(itemLink, locationKey)
     local alwaysShare = ItemShare.savedVars and ItemShare.savedVars.alwaysShare
     if type(alwaysShare) ~= "table" then
         return false
     end
-    return alwaysShare[tostring(itemLink or "")] ~= nil
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return false
+    end
+    return alwaysShare[GetAlwaysShareKey(link, locationKey)] ~= nil
 end
 
 -- Crafting panels own their inventories and are built when a station or the
@@ -2706,7 +2717,7 @@ local function UpdateSharedRowMarker(control, slotData)
     -- A standing offer deserves its badge even when no copy is in a bag right now:
     -- that is what the offer means. It used to show nothing at all in that state,
     -- which made the gold icon look as if it did not exist.
-    local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink)
+    local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink, locationKey)
     local reserve = (itemLink and GetShareReserve(itemLink, locationKey)) or 0
 
     local isExpired = isShared and IsShareEntryExpired(sharedEntry)
@@ -2885,7 +2896,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     -- The other direction: sharing it from a bag now replaces a standing offer. Done
     -- after the save, because a save that is refused (a bound item) must not take the
     -- offer away with it.
-    local removedAlways = RemoveAlwaysShareForItemLink(savedEntry.itemLink) ~= nil
+    local removedAlways = RemoveAlwaysShareForItemLink(savedEntry.itemLink, savedEntry.locationKey) ~= nil
     if removedAlways then
         TryRefreshInventoryVisuals()
         RefreshShareListWindowIfVisible()
@@ -3260,10 +3271,45 @@ GetAlwaysShareTable = function()
     return ItemShare.savedVars.alwaysShare
 end
 
--- Keyed by item link, not by the inventory key: the offer is about the item, and
--- it has to survive the item being in a different bag or in no bag at all.
-GetAlwaysShareKey = function(itemLink)
-    return tostring(itemLink or "")
+-- Keyed by item link and place: a standing offer belongs to the place it was marked
+-- in, so marking lockpicks in your bags does not also mark the stack in the bank. The
+-- link stays in the key so the offer still names the item once that place holds none.
+GetAlwaysShareKey = function(itemLink, locationKey)
+    return BuildSharedItemKey(itemLink, locationKey)
+end
+
+-- A file written before offers were tied to a place keeps them under the item link
+-- alone. Those are moved onto a place key at load, using the place the offer recorded
+-- if it has one; one that recorded none is picked up by the next sync, which adopts the
+-- bag the item is in and re-keys it then.
+local function ReindexAlwaysShareTable()
+    local alwaysShare = GetAlwaysShareTable()
+    local moves = {}
+
+    for key, entry in pairs(alwaysShare) do
+        if type(entry) == "table" then
+            local link = tostring(entry.itemLink or "")
+            if link ~= "" then
+                local wanted = GetAlwaysShareKey(link, entry.locationKey)
+                if key ~= wanted then
+                    moves[#moves + 1] = { from = key, to = wanted, entry = entry }
+                end
+            end
+        end
+    end
+
+    local moved = 0
+    for _, move in ipairs(moves) do
+        if alwaysShare[move.from] == move.entry then
+            alwaysShare[move.from] = nil
+        end
+        if alwaysShare[move.to] == nil then
+            alwaysShare[move.to] = move.entry
+            moved = moved + 1
+        end
+    end
+
+    return moved
 end
 
 SaveAlwaysShareEntry = function(itemData, heldCount)
@@ -3276,7 +3322,7 @@ SaveAlwaysShareEntry = function(itemData, heldCount)
     end
 
     local alwaysShare = GetAlwaysShareTable()
-    local key = GetAlwaysShareKey(itemData.itemLink)
+    local key = GetAlwaysShareKey(itemData.itemLink, itemData.locationKey)
     local now = GetTimeStamp()
     local entry = alwaysShare[key] or {}
 
@@ -3355,18 +3401,34 @@ RemoveSharesForItemLink = function(itemLink)
     return #keys
 end
 
-RemoveAlwaysShareForItemLink = function(itemLink)
+RemoveAlwaysShareForItemLink = function(itemLink, locationKey)
     local link = tostring(itemLink or "")
     if link == "" then
         return nil
     end
 
     local alwaysShare = GetAlwaysShareTable()
-    local existing = alwaysShare[link]
-    if existing ~= nil then
-        alwaysShare[link] = nil
+
+    -- With a place, only that place stops being offered. Without one, every place the
+    -- item was marked in stops, which is what taking the item off the list means.
+    if locationKey ~= nil then
+        local key = GetAlwaysShareKey(link, locationKey)
+        local existing = alwaysShare[key]
+        if existing ~= nil then
+            alwaysShare[key] = nil
+        end
+        return existing
     end
-    return existing
+
+    local removed = nil
+    for key, entry in pairs(alwaysShare) do
+        if type(entry) == "table" and tostring(entry.itemLink or "") == link then
+            alwaysShare[key] = nil
+            removed = removed or entry
+        end
+    end
+
+    return removed
 end
 
 local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
@@ -3382,7 +3444,7 @@ local function AddAlwaysShareFromBagSlot(bagId, slotIndex)
         return
     end
 
-    local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink)]
+    local existing = GetAlwaysShareTable()[GetAlwaysShareKey(itemData.itemLink, itemData.locationKey)]
     -- The offer starts at what this place holds of it right now, so marking the last
     -- copy is an offer of one and handing it over later leaves the row at 0.
     local markedCount = GetLocationShareCount(bagId, itemData.itemLink)
@@ -3416,7 +3478,9 @@ local function PrintAlwaysShareItems()
     local entries = {}
 
     for _, entry in pairs(alwaysShare) do
-        entries[#entries + 1] = entry
+        if type(entry) == "table" then
+            entries[#entries + 1] = entry
+        end
     end
 
     if #entries == 0 then
@@ -3425,12 +3489,24 @@ local function PrintAlwaysShareItems()
     end
 
     table.sort(entries, function(left, right)
-        return zo_strlower(tostring(left.itemName or "")) < zo_strlower(tostring(right.itemName or ""))
+        local leftName = zo_strlower(tostring(left.itemName or ""))
+        local rightName = zo_strlower(tostring(right.itemName or ""))
+        if leftName ~= rightName then
+            return leftName < rightName
+        end
+        return zo_strlower(tostring(left.sharedFrom or left.locationKey or ""))
+            < zo_strlower(tostring(right.sharedFrom or right.locationKey or ""))
     end)
 
     dmsg(string.format("Always shared (%d):", #entries))
     for index, entry in ipairs(entries) do
-        dmsg(string.format("  %d. %s", index, tostring(entry.itemName or entry.itemLink or "Unknown item")))
+        local place = tostring(entry.sharedFrom or entry.locationKey or "")
+        dmsg(string.format(
+            "  %d. %s%s",
+            index,
+            tostring(entry.itemName or entry.itemLink or "Unknown item"),
+            place ~= "" and string.format(" - %s", place) or ""
+        ))
     end
     dmsg("Remove one with /itemshare noalways <part of the name>.")
 end
@@ -3446,9 +3522,11 @@ local function RemoveAlwaysShareByName(searchText)
     local matches = {}
 
     for key, entry in pairs(alwaysShare) do
-        local name = zo_strlower(tostring(entry.itemName or ""))
-        if name ~= "" and string.find(name, needle, 1, true) then
-            matches[#matches + 1] = key
+        if type(entry) == "table" then
+            local name = zo_strlower(tostring(entry.itemName or ""))
+            if name ~= "" and string.find(name, needle, 1, true) then
+                matches[#matches + 1] = { key = key, entry = entry }
+            end
         end
     end
 
@@ -3457,21 +3535,41 @@ local function RemoveAlwaysShareByName(searchText)
         return
     end
 
-    if #matches > 1 then
+    -- One item can now stand in several places, so a name matches each place it was
+    -- marked in. Every one of them stops being offered, and the message says where.
+    local places = {}
+
+    for _, match in ipairs(matches) do
+        alwaysShare[match.key] = nil
+        local place = tostring(match.entry.sharedFrom or "")
+        if place == "" then
+            place = tostring(match.entry.locationKey or "")
+        end
+        if place == "" then
+            place = "unknown place"
+        end
+        places[#places + 1] = place
+    end
+
+    table.sort(places)
+    TryRefreshInventoryVisuals()
+    RefreshShareListWindowIfVisible()
+
+    if #matches == 1 then
         dmsg(string.format(
-            "%d always-shared items match \"%s\"; use more of the name.",
-            #matches,
-            tostring(searchText)
+            "Stopped always sharing %s - %s.",
+            tostring(matches[1].entry.itemName or matches[1].key),
+            places[1]
         ))
         return
     end
 
-    local key = matches[1]
-    local entry = alwaysShare[key]
-    alwaysShare[key] = nil
-    TryRefreshInventoryVisuals()
-    RefreshShareListWindowIfVisible()
-    dmsg(string.format("Stopped always sharing %s.", tostring(entry and entry.itemName or key)))
+    dmsg(string.format(
+        "Stopped always sharing %s in %d places: %s.",
+        tostring(matches[1].entry.itemName or "that item"),
+        #matches,
+        table.concat(places, ", ")
+    ))
 end
 
 local function RemoveItemFromShareFromBagSlot(bagId, slotIndex)
@@ -3522,7 +3620,8 @@ local function AddInventoryContextMenu(slot)
     -- The standing offer is independent of this copy: an item can be shared right
     -- now and marked to always share at the same time, so it gets its own entry
     -- rather than replacing the one above.
-    local alwaysKey = GetAlwaysShareKey(itemLink)
+    local bagLocationKey = select(1, GetBagLocationInfo(bagId))
+    local alwaysKey = GetAlwaysShareKey(itemLink, bagLocationKey)
     if GetAlwaysShareTable()[alwaysKey] then
         AddCustomMenuItem("Stop Always Sharing", function()
             local entry = GetAlwaysShareTable()[alwaysKey]
@@ -3762,7 +3861,8 @@ RefreshAlwaysShareHeldCounts = function(inventoryIndex)
     end
 
     local changed = 0
-    for _, entry in pairs(alwaysShare) do
+    local rekeys = {}
+    for key, entry in pairs(alwaysShare) do
         if type(entry) == "table" then
             local link = tostring(entry.itemLink or "")
             local locationKey = tostring(entry.locationKey or "")
@@ -3799,7 +3899,24 @@ RefreshAlwaysShareHeldCounts = function(inventoryIndex)
                     entry.lastUpdatedAt = GetTimeStamp()
                     changed = changed + 1
                 end
+
+                -- Adopting a place changes the key the offer is filed under, so the move
+                -- is queued here and made once the table is no longer being walked.
+                local wanted = GetAlwaysShareKey(link, entry.locationKey)
+                if key ~= wanted then
+                    rekeys[#rekeys + 1] = { from = key, to = wanted, entry = entry }
+                end
             end
+        end
+    end
+
+    for _, move in ipairs(rekeys) do
+        if alwaysShare[move.from] == move.entry then
+            alwaysShare[move.from] = nil
+        end
+        if alwaysShare[move.to] == nil then
+            alwaysShare[move.to] = move.entry
+            changed = changed + 1
         end
     end
 
@@ -4139,7 +4256,8 @@ ApplyShareReserve = function(itemLink, amount, locationKey)
     local alwaysShare = ItemShare.savedVars.alwaysShare
     if type(alwaysShare) == "table" then
         for _, entry in pairs(alwaysShare) do
-            if type(entry) == "table" and tostring(entry.itemLink or "") == link then
+            if type(entry) == "table" and tostring(entry.itemLink or "") == link
+                and (placeKey == "" or tostring(entry.locationKey or "") == placeKey) then
                 updated = updated or entry
             end
         end
@@ -4727,6 +4845,7 @@ local function OnAddonLoaded(event, addonName)
     end
 
     GetAlwaysShareTable()
+    ReindexAlwaysShareTable()
 
     local legacyPlacedShares = PruneLegacyPlacedFurnitureShares()
     if legacyPlacedShares > 0 then
