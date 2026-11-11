@@ -7,7 +7,7 @@ local ADDON_VERSION = "1.11.22"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
-local SAVED_VARS_VERSION = 4
+local SAVED_VARS_VERSION = 5
 local CURRENT_DISPLAY_NAME = GetDisplayName() or "@Unknown"
 
 ItemShare.savedVars = nil
