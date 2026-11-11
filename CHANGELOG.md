@@ -10,6 +10,13 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.20
+- The rescan reminder is now a panel in the addon's own style - dark backdrop, the gold
+  ITEMSHARE label, a wrapped explanation and a plain "Got It" button - rather than the
+  client's stock dialog, which reads like an error.
+- It appears once per session, at the moment a piece filed as `Placed (<house>)` goes into
+  a trade, instead of after every trade. The trade-close reconcile is unchanged.
+
 ### 1.11.19
 - `/ishare scan clear` (or `/ishare scan reset`) removes every share filed as
   `Placed (<house>)` for the house you are standing in, so a house scanned by mistake, or

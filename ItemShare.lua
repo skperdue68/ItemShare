@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.19"
+local ADDON_VERSION = "1.11.20"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -3408,49 +3408,116 @@ local function ClearPlacedFurnishingsForCurrentHouse()
     ))
 end
 
--- A trade is the one place the addon sees a piece leave a house: a slot update cannot
--- say whether the item was standing in one, and the row's count is a reading of the
--- house that only another reading changes. Handing a request over is exactly that
--- moment, so the reminder to rescan lives here.
-local function MaybeRemindToRescanHouse(tradedLinks)
-    local sharedItems = ItemShare.savedVars and ItemShare.savedVars.sharedItems
-    if not sharedItems then
-        return
+-- A reminder worth reading. The client's own dialog is a bare text box that reads like
+-- an error, and this is an explanation, so it is built in the addon's own frame: the
+-- dark backdrop, the gold label the chat prefix uses, and a plain button.
+local function CreateRescanReminderWindow()
+    if ItemShare.ui.rescanWindow then
+        return ItemShare.ui.rescanWindow
     end
 
-    local tradedPlacedShare = false
+    local wm = WINDOW_MANAGER
+    local window = wm:CreateTopLevelWindow("ItemShareRescanReminderWindow")
+    -- Remembered at once: a half-built panel is still better than creating the same
+    -- top-level window again on the next trade, which errors and leaves none at all.
+    ItemShare.ui.rescanWindow = window
+    window:SetDimensions(460, 250)
+    window:SetAnchor(CENTER, GuiRoot, CENTER, 0, 0)
+    window:SetMouseEnabled(true)
+    window:SetClampedToScreen(true)
+    window:SetMovable(true)
+    window:SetHidden(true)
+
+    local backdrop = wm:CreateControl(nil, window, CT_BACKDROP)
+    backdrop:SetAnchorFill(window)
+    backdrop:SetCenterColor(0.05, 0.05, 0.05, 0.97)
+    backdrop:SetEdgeColor(0.7, 0.7, 0.7, 1)
+    backdrop:SetEdgeTexture(nil, 1, 1, 2, 0)
+
+    local accent = wm:CreateControl(nil, window, CT_LABEL)
+    accent:SetFont("ZoFontGameSmall")
+    accent:SetColor(0.847, 0.635, 0.31, 1)
+    accent:SetText("ITEMSHARE")
+    accent:SetAnchor(TOPLEFT, window, TOPLEFT, 20, 16)
+
+    local title = wm:CreateControl(nil, window, CT_LABEL)
+    title:SetFont("ZoFontWinH2")
+    title:SetColor(1, 1, 1, 1)
+    title:SetText("Rescan Your House")
+    title:SetAnchor(TOPLEFT, window, TOPLEFT, 20, 36)
+
+    local message = wm:CreateControl(nil, window, CT_LABEL)
+    message:SetFont("ZoFontGameSmall")
+    message:SetColor(0.85, 0.85, 0.85, 1)
+    message:SetText(
+        "You are handing over furniture that was filed by /ishare scan. "
+        .. "Its row keeps the count from the last scan of that house, so the quantities "
+        .. "on offer will be out of date until the house is read again.\n\n"
+        .. "Stand in the house and run /ishare scan when you are finished."
+    )
+    message:SetAnchor(TOPLEFT, window, TOPLEFT, 20, 70)
+    message:SetAnchor(TOPRIGHT, window, TOPRIGHT, -20, 70)
+    message:SetHeight(104)
+    message:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
+
+    local okButton = wm:CreateControl(nil, window, CT_BUTTON)
+    okButton:SetDimensions(160, 32)
+    okButton:SetAnchor(BOTTOM, window, BOTTOM, 0, -16)
+    okButton:SetFont("ZoFontGame")
+    okButton:SetText("Got It")
+    okButton:SetClickSound(SOUNDS.DIALOG_ACCEPT)
+    okButton:SetHandler("OnClicked", function()
+        window:SetHidden(true)
+    end)
+
+    return window
+end
+
+local function ShowRescanReminder()
+    local window = CreateRescanReminderWindow()
+    if window then
+        window:SetHidden(false)
+    end
+end
+
+-- A row filed by a scan says what the house held the last time it was read, so the
+-- moment one of those pieces goes into a trade is the moment the row starts going stale.
+local function HasPlacedShareForLink(itemLink)
+    local sharedItems = ItemShare.savedVars and ItemShare.savedVars.sharedItems
+    if not sharedItems then
+        return false
+    end
+
+    local wanted = tostring(itemLink or "")
+    if wanted == "" then
+        return false
+    end
+
     for _, entry in pairs(sharedItems) do
         local locationKey = tostring(entry and entry.locationKey or "")
-        if string.sub(locationKey, 1, 7) == "placed:" and tradedLinks[tostring(entry and entry.itemLink or "")] then
-            tradedPlacedShare = true
-            break
+        if string.sub(locationKey, 1, 7) == "placed:" and tostring(entry.itemLink or "") == wanted then
+            return true
         end
     end
 
-    if not tradedPlacedShare then
+    return false
+end
+
+local function MaybeRemindToRescanForTradedLink(itemLink)
+    -- Once per session: the first hand-over is when the reminder is news, and a panel
+    -- after every trade would be noise.
+    if ItemShare.rescanReminderShown then
         return
     end
 
-    local dialogName = "ITEM_SHARE_RESCAN_REMINDER"
-    if not ItemShare.rescanReminderRegistered then
-        ZO_Dialogs_RegisterCustomDialog(dialogName, {
-            title = {
-                text = "ItemShare",
-            },
-            mainText = {
-                text = "Something you just handed over is offered as furniture standing in your storage house. Those counts only change when the house is read: stand in it and run /ishare scan when you are done to update the quantities.",
-            },
-            buttons = {
-                [1] = {
-                    text = SI_DIALOG_ACCEPT,
-                },
-            },
-        })
-        ItemShare.rescanReminderRegistered = true
+    if not HasPlacedShareForLink(itemLink) then
+        return
     end
 
-    ZO_Dialogs_ShowDialog(dialogName)
+    ItemShare.rescanReminderShown = true
+    ShowRescanReminder()
 end
+
 
 -- Files written before this release recorded placed furniture under a key of their
 -- own, with no way to tell a piece that had been picked up from one that was never
@@ -5197,6 +5264,9 @@ local function OnAddonLoaded(event, addonName)
 
     -- A completed trade can move a whole stack without a slot update for the copy that
     -- left, so the window closing is the second chance to notice it.
+    -- What a trade carries is only readable while the window is open, so the piece is
+    -- checked as it goes in - which is also the moment the player starts handing a
+    -- request over, and the moment its row begins to drift.
     if EVENT_TRADE_ITEM_ADDED and GetTradeItemLink then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_TRADE_ITEM_ADDED, function(_, who, tradeIndex)
             local ok, link = pcall(GetTradeItemLink, who, tradeIndex, LINK_STYLE_DEFAULT)
@@ -5204,21 +5274,12 @@ local function OnAddonLoaded(event, addonName)
                 return
             end
 
-            ItemShare.tradedLinks = ItemShare.tradedLinks or {}
-            ItemShare.tradedLinks[link] = true
+            MaybeRemindToRescanForTradedLink(link)
         end)
     end
 
     if EVENT_CLOSE_TRADE_WINDOW then
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_TRADE_WINDOW, function()
-            -- Taken before the early return below: a tradeless reconcile still handed
-            -- something over, and the reminder is about the house, not the counts.
-            local tradedLinks = ItemShare.tradedLinks
-            ItemShare.tradedLinks = nil
-            if tradedLinks and ItemShare.savedVars then
-                MaybeRemindToRescanHouse(tradedLinks)
-            end
-
             if not HasEntriesToRefresh() then
                 return
             end
