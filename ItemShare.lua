@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.33"
+local ADDON_VERSION = "1.11.34"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -4293,15 +4293,16 @@ end
 -- pause you feel when the bank opens or when a stack is picked up. The same work is now done in
 -- slices with a pause between them: the client gets its frames back and the pass finishes a
 -- moment later instead of hitching for a moment now.
-local SCAN_SLOTS_PER_SLICE = 40
-local SCAN_PAUSE_MS = 40
+local SCAN_SLOTS_PER_SLICE = 20
+local SCAN_PAUSE_MS = 80
 
 local StartInventoryScan
 local scanJob = nil
 
 -- A slice is a count of slots rather than milliseconds because a slot costs about the same
--- everywhere; the pause is what keeps the client responsive. A 240-slot bank is six slices and
--- roughly a fifth of a second of pauses.
+-- everywhere; the pause is what keeps the client responsive. Twenty slots with eighty
+-- milliseconds between them is half the work in each frame and twice the breathing room, so
+-- a full 240-slot bank is twelve short slices rather than one long stall.
 local function BuildScanUnits()
     local units = {}
     local index = {
