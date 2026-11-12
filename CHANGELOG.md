@@ -10,6 +10,13 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.34
+- The inventory pass now reads twenty slots at a time instead of forty, and waits eighty
+  milliseconds between slices instead of forty. Each frame does half the work and gets twice
+  as long back, which is the setting for a client that still stuttered at forty: a full 240-slot
+  bank is twelve short slices, and the counts land a little later than they did - around a
+  second - in exchange for each slice fitting between the client's own drawing.
+
 ### 1.11.33
 - Hovering an item no longer writes the protection line into the chat. The client builds a
   slot's action list as soon as the pointer reaches the slot, and the guard explained its
