@@ -11,10 +11,10 @@ in the addon's status messages.
 ## Addon
 
 ### 1.11.32
-- The inventory pass no longer runs in one frame. It reads the bags forty slots at a time with a
-  forty-millisecond pause between slices, so a full bank is a handful of slices instead of one long
-  hitch, and the counts land a fraction of a second later rather than stalling the client while
-  the bank opens or a stack is picked up. Nothing about what it collects has changed: the sliced
+- The inventory pass no longer runs in one frame. It reads the bags twenty slots at a time with an
+  eighty-millisecond pause between slices, so a full bank is a dozen short slices instead of one
+  long hitch, and the counts land about a second later rather than stalling the client while the
+  bank opens or a stack is picked up. Nothing about what it collects has changed: the sliced
   pass builds exactly the index the whole-bag pass did.
 - An automatic pass now runs at most once every ten seconds. Events that arrive inside that window
   are not dropped - one timer re-schedules the pass when the window ends - so a move is still
