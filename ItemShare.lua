@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.32"
+local ADDON_VERSION = "1.11.33"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2491,13 +2491,28 @@ local function InstallShareProtection()
                 return false
             end
 
+            -- A slot builds its action list when the pointer reaches it, so everything here
+            -- runs on every hover. Nothing shared and no standing offers means no slot can
+            -- be protected: one table lookup answers that, instead of resolving an item link
+            -- and a bag for every row the pointer crosses on the way to the one you want.
+            local savedVars = ItemShare.savedVars
+            if not savedVars
+                or (next(savedVars.sharedItems or {}) == nil
+                    and next(savedVars.alwaysShare or {}) == nil) then
+                return false
+            end
+
             local bagId, slotIndex = GetBagAndSlotFromSlotActions(slotActions)
             local entry, source = GetSharedEntryProtectingSlot(bagId, slotIndex)
             if not entry then
                 return false
             end
 
-            NotifyShareProtected(entry, source)
+            -- Refused, and nothing said: what the share does not allow is simply not in the
+            -- menu, the badge on the item already says it is shared, and a chat line for every
+            -- slot the pointer passed over was noise while browsing a bag. The refusal is
+            -- explained where the player actually asks for something - a click, a double
+            -- click or a drag - by the two hooks below.
             return true
         end)
     end

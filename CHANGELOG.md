@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.33
+- Hovering an item no longer writes the protection line into the chat. The client builds a
+  slot's action list as soon as the pointer reaches the slot, and the guard explained its
+  refusal there - so sweeping the mouse across a bag printed a line for every shared item
+  passed over. The menu still leaves out what a share does not allow and the badge still
+  marks the item; the explanation now only appears when you actually ask for something, on a
+  click, a double click or a drag.
+- That guard answers a bag with nothing shared or offered with one table lookup, instead of
+  resolving an item link and a bag for every slot the pointer crosses. On a full bank that
+  is the per-hover cost of the addon gone when it has nothing to protect.
+
 ### 1.11.32
 - The inventory pass no longer runs in one frame. It reads the bags forty slots at a time with a
   forty-millisecond pause between slices, so a full bank is a handful of slices instead of one long
