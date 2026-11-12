@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.34"
+local ADDON_VERSION = "1.11.35"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -2661,8 +2661,9 @@ end
 --
 -- The size follows what it is sitting on: a fixed 14 px read as a speck next to a
 -- 36 px slot icon, so it is a little over half the icon now.
-local function AnchorShareMarker(marker, control)
-    local icon = FindItemIconControl(control)
+local function AnchorShareMarker(marker, control, icon)
+    icon = icon or FindItemIconControl(control)
+    control.ItemShareMarkerIcon = icon
 
     marker:ClearAnchors()
 
@@ -2698,8 +2699,13 @@ local function EnsureShareMarker(control)
 
     if control.ItemShareMarker and control.ItemShareMarker.SetTexture then
         -- Rows are recycled and the icon a row borrows can change, so the anchor is
-        -- re-applied rather than only set once at creation.
-        AnchorShareMarker(control.ItemShareMarker, control)
+        -- re-applied - but only when it is a different icon. Re-anchoring is the
+        -- expensive half of drawing a badge, and the common case is the same icon on a
+        -- row being repainted, not a row that changed what it holds.
+        local icon = FindItemIconControl(control)
+        if icon ~= control.ItemShareMarkerIcon then
+            AnchorShareMarker(control.ItemShareMarker, control, icon)
+        end
         return control.ItemShareMarker
     end
 
@@ -2873,68 +2879,100 @@ local function UpdateSharedRowMarker(control, slotData)
         return
     end
 
-    local marker = EnsureShareMarker(control)
-    if not marker then
-        return
-    end
-
     local bagId, slotIndex = GetBagAndSlotFromSlotData(control, slotData)
     if bagId == nil or slotIndex == nil then
-        marker:SetHidden(true)
+        if control.ItemShareMarker and control.ItemShareMarker.SetHidden then
+            control.ItemShareMarker:SetHidden(true)
+        end
+        if control.ItemShareReserveMarker and control.ItemShareReserveMarker.SetHidden then
+            control.ItemShareReserveMarker:SetHidden(true)
+        end
         return
     end
 
     local itemLink = GetNormalizedItemLink(bagId, slotIndex)
     local locationKey = select(1, GetBagLocationInfo(bagId))
-    local isSharedInList = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
-    local sharedEntry = isSharedInList
+    local sharedEntry = itemLink and locationKey and IsItemLinkSharedInLocation(itemLink, locationKey)
             and ItemShare.savedVars
             and ItemShare.savedVars.sharedItems
             and ItemShare.savedVars.sharedItems[BuildSharedItemKey(itemLink, locationKey)]
         or nil
-    -- The entry existing is what "shared" means. This used to be decided by reading
-    -- the count the entry carried, and when that count stopped being stored every
-    -- share lost its badge: the marking was there, the list showed it, and the bag
-    -- said nothing. How much is on offer belongs in the tooltip, not in whether the
-    -- badge is drawn at all.
+    -- The entry existing is what "shared" means. How much is on offer belongs in the
+    -- tooltip, not in whether the badge is drawn at all.
     local isShared = sharedEntry ~= nil
-    -- A standing offer deserves its badge even when no copy is in a bag right now:
-    -- that is what the offer means. It used to show nothing at all in that state,
-    -- which made the gold icon look as if it did not exist.
+    -- A standing offer deserves its badge even when no copy is in a bag right now: that is
+    -- what the offer means.
     local isAlways = itemLink and IsItemLinkAlwaysShared(itemLink, locationKey)
     local reserve = (itemLink and GetShareReserve(itemLink, locationKey)) or 0
+    local isExpired = isShared and IsShareEntryExpired(sharedEntry) or false
+    local ageDays = isExpired and math.floor(GetShareAgeInDays(sharedEntry) or 0) or 0
+    local held = GetEntryHeldCount(sharedEntry)
+    local offered = GetEntryOfferedCount(sharedEntry)
 
-    local isExpired = isShared and IsShareEntryExpired(sharedEntry)
+    -- Same item, same place, same answer as last time: leave the control alone.
+    --
+    -- This runs for every item control in the game every time the game binds it, and a
+    -- list rebinds every row it shows on every repaint - opening a bank, scrolling it, a
+    -- slot changing under the pointer. Working out what the badge says is a handful of
+    -- table lookups; moving it is a dozen client calls - anchoring, draw layer, draw tier,
+    -- texture. So the work is dropped early when nothing changed, and only a row whose
+    -- answer changed is redrawn.
+    local unchanged = control.ItemShareMarkerLink == itemLink
+        and control.ItemShareMarkerLocation == locationKey
+        and control.ItemShareMarkerShared == isShared
+        and control.ItemShareMarkerAlways == isAlways
+        and control.ItemShareMarkerReserve == reserve
+        and control.ItemShareMarkerExpired == isExpired
+        and control.ItemShareMarkerAgeDays == ageDays
+        and control.ItemShareMarkerHeld == held
+        and control.ItemShareMarkerOffered == offered
+
+    if unchanged then
+        return
+    end
+
+    control.ItemShareMarkerLink = itemLink
+    control.ItemShareMarkerLocation = locationKey
+    control.ItemShareMarkerShared = isShared
+    control.ItemShareMarkerAlways = isAlways
+    control.ItemShareMarkerReserve = reserve
+    control.ItemShareMarkerExpired = isExpired
+    control.ItemShareMarkerAgeDays = ageDays
+    control.ItemShareMarkerHeld = held
+    control.ItemShareMarkerOffered = offered
+
+    local marker = EnsureShareMarker(control)
+    if not marker then
+        return
+    end
+
     marker.ItemShareExpired = isExpired and true or false
-    marker.ItemShareAgeDays = isExpired and math.floor(GetShareAgeInDays(sharedEntry) or 0) or 0
+    marker.ItemShareAgeDays = ageDays
 
     if isShared or isAlways then
-        -- The plain glyph, saying only what the item offers. A reserve is a separate
-        -- fact and gets its own corner below, so a share that keeps some back shows
-        -- both instead of one badge having to mean two things. A share past the expire
-        -- limit is the one case where the age is the thing to say, so the stopwatch
-        -- takes the glyph's place rather than being added to it.
+        -- The plain glyph, saying only what the item offers. A reserve is a separate fact
+        -- and gets its own corner below. A share past the expire limit is the one case
+        -- where the age is the thing to say, so the stopwatch takes the glyph's place.
         marker:SetTexture(
             isExpired and EXPIRED_TEXTURE_PATH
                 or (isAlways and ALWAYS_SHARE_TEXTURE_PATH or SHARE_TEXTURE_PATH)
         )
         marker.ItemShareAlways = isAlways and true or false
         marker.ItemShareReserve = reserve
-        marker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
-        marker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
+        marker.ItemShareHeld = held
+        marker.ItemShareOffered = offered
     end
 
     marker:SetHidden(not (isShared or isAlways))
 
-    -- The reserve tag, bottom-left: a reserved share shows the parcel above and the
-    -- amber tag below, and a reserve on an item that is not shared at all shows only
-    -- the tag. One place for it means the reserve is never the badge that got hidden.
+    -- The reserve tag, bottom-left, so a share that keeps some back shows both facts and
+    -- an item that is only reserved shows the tag on its own.
     local reserveMarker = EnsureReserveMarker(control)
     if reserveMarker then
         reserveMarker.ItemShareReserve = reserve
         reserveMarker.ItemShareUnshared = not (isShared or isAlways)
-        reserveMarker.ItemShareHeld = GetEntryHeldCount(sharedEntry)
-        reserveMarker.ItemShareOffered = GetEntryOfferedCount(sharedEntry)
+        reserveMarker.ItemShareHeld = held
+        reserveMarker.ItemShareOffered = offered
         reserveMarker:SetHidden(reserve <= 0)
     end
 end
@@ -4820,29 +4858,6 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
     RefreshShareListWindowIfVisible()
 end
 
--- The saved file is meant to be a snapshot of what the account owns right now, so
--- the addon refreshes it without being asked: once when a character loads, and
--- again when a bank opens or closes. Every entry it can see is rewritten from live
--- data (item id, icon, guild ids, set, enchant, style, level, CP, flavour text),
--- and entries whose location was readable but no longer holds the item are
--- dropped. Locations that could not be read are left alone.
--- Nothing to refresh means nothing to scan: a player with no shares and no standing
--- offers should not pay for a rebuild every time they pick something up.
-local function HasEntriesToRefresh()
-    local savedVars = ItemShare.savedVars
-    if not savedVars then
-        return false
-    end
-
-    return next(savedVars.alwaysShare or {}) ~= nil or next(savedVars.sharedItems or {}) ~= nil
-end
-
--- A slot change is worth a pass only when it happened in a bag this addon counts and
--- there is a table that could have gone stale.
-local function ShouldReconcileForInventoryChange(bagId)
-    return IsTrackedBagId(bagId) and HasEntriesToRefresh()
-end
-
 local autoReconcilePending = false
 local autoReconcileDeferred = false
 local lastAutoReconcileAt = nil
@@ -5660,34 +5675,17 @@ local function OnAddonLoaded(event, addonName)
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_ACTIVATED, function()
             ScheduleAutoReconcile("login")
         end)
-        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
-            ScheduleAutoReconcile("the bank opening")
-        end)
-        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
-            ScheduleAutoReconcile("the bank closing")
-        end)
 
-    -- A count goes stale the moment something leaves a bag, and selling, deconstructing,
-    -- trading, mailing or destroying never opens the bank, so nothing used to notice and
-    -- the number kept whatever the last sync or reload left behind. A slot update covers
-    -- every one of those, and ScheduleAutoReconcile collapses a burst into one pass, so a
-    -- loot run or a stack split costs a single rebuild rather than one per item.
-        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_INVENTORY_SINGLE_SLOT_UPDATE, function(_, bagId)
-            if not ShouldReconcileForInventoryChange(bagId) then
-                return
-            end
-
-            ScheduleAutoReconcile("a change in your bags")
-        end)
-
-    -- A completed trade can move a whole stack without a slot update for the copy that
-    -- left, so the window closing is the second chance to notice it.
-        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_TRADE_WINDOW, function()
-            if not HasEntriesToRefresh() then
-                return
-            end
-
-            ScheduleAutoReconcile("a trade")
+    -- The bags are read here and on a zone change, and nowhere else.
+    --
+    -- Reading them is the most expensive thing this addon does: sixteen bags, the craft
+    -- bag, both banks, ten house chests, the furnishing vault and the guild bank, at about
+    -- a dozen client calls per slot. Doing it because a slot changed - which is every
+    -- pickup, sale, split and loot - kept the client busy while the player was playing. A
+    -- count can now be a zone out of date, and a share whose place emptied re-files itself
+    -- on the next read rather than the same second; /ishare sync asks for it sooner.
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ZONE_CHANGED, function()
+            ScheduleAutoReconcile("a new zone")
         end)
 
     RegisterContextMenus()
