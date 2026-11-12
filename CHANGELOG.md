@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.35
+- The addon reads your bags at login and when you change zone, and nowhere else. It used to read them
+  whenever a slot changed - every pickup, sale, stack split and loot - which meant the most expensive
+  thing it does ran while you were playing. A count can now be a zone out of date; `/ishare sync` asks
+  for it immediately.
+- The badges cost almost nothing to keep on screen. Every item control the game binds was being
+  re-drawn, re-anchored and re-textured even when nothing about it had changed, and a list rebinds
+  every row it shows on every repaint. A row whose item, place, share state, reserve and counts match
+  what it showed last time is now left alone, and a badge is only re-anchored when the icon under it
+  is actually a different control.
+
 ### 1.11.34
 - The inventory pass now reads twenty slots at a time instead of forty, and waits eighty
   milliseconds between slices instead of forty. Each frame does half the work and gets twice
