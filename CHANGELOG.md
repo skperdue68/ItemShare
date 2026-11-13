@@ -10,6 +10,23 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.36
+- Items in a bank, a house chest, the furnishing vault or the guild bank are seen again. Those
+  places only give up their items while their window is open - at login they report no slots - and
+  a pass is not allowed to judge a place it cannot read, so the only read that ever caught them was
+  the one that ran whenever a slot changed. With that gone, anything put into a storage since the
+  last session sat unseen. A pass now runs the moment a storage becomes readable - the bank, a house
+  chest, the furnishing vault and the guild bank all arrive as a scene change, so none of them needs
+  its own event - and again when the bank closes.
+- The bags are also read at logout, which is when the client writes the file: a sliced pass would be
+  cut off part way through, so this one runs to the end in one go. Places that were never opened in
+  that session keep what the file already said about them rather than losing it.
+- Every read says so in chat as it starts and as it ends, and the first line says how many bags it
+  could see - a read that can see three places is not the same read as one that can see sixteen, and
+  an unopened bank counts as none. `/ishare scanmessages` turns the lines off.
+- The guild bank is only read while guild bank sharing is on. Nothing can be filed there otherwise,
+  and it is one more bag walked on every pass.
+
 ### 1.11.35
 - The addon reads your bags at login and when you change zone, and nowhere else. It used to read them
   whenever a slot changed - every pickup, sale, stack split and loot - which meant the most expensive

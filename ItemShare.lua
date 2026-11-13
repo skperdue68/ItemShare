@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.35"
+local ADDON_VERSION = "1.11.36"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -49,6 +49,10 @@ local defaults = {
     -- so an offer cannot be destroyed by accident while it is on the list.
     shareProtection = true,
     guildBankSharingEnabled = false,
+    -- A line in chat when a pass over the bags starts and when it ends. On while the
+    -- client is misbehaving, because a stall with no message and a stall after "scanning
+    -- your bags" are different problems; /ishare scanmessages turns it off again.
+    scanMessages = true,
     -- How long a share may stay on offer, in days, before its badge becomes the
     -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
     -- share: what counts as "too long" is a decision about the list, and changing it
@@ -4242,7 +4246,9 @@ local function GetTrackedBagIds()
     if BAG_FURNITURE_VAULT then
         table.insert(bagIds, BAG_FURNITURE_VAULT)
     end
-    if BAG_GUILDBANK then
+    -- The guild bank is only worth a walk when guild bank sharing is on: nothing can be
+    -- filed there unless it is, and it is one more bag to read on every pass otherwise.
+    if BAG_GUILDBANK and ItemShare.savedVars and ItemShare.savedVars.guildBankSharingEnabled then
         table.insert(bagIds, BAG_GUILDBANK)
     end
 
@@ -4337,6 +4343,16 @@ local SCAN_PAUSE_MS = 80
 local StartInventoryScan
 local scanJob = nil
 
+-- A line at the start and the end of a pass, and nothing else: the point is to see from
+-- chat whether a stall happened during a read or with nothing running at all.
+local function AnnounceScan(message)
+    if not (ItemShare.savedVars and ItemShare.savedVars.scanMessages ~= false) then
+        return
+    end
+
+    PrintMessage(message)
+end
+
 -- A slice is a count of slots rather than milliseconds because a slot costs about the same
 -- everywhere; the pause is what keeps the client responsive. Twenty slots with eighty
 -- milliseconds between them is half the work in each frame and twice the breathing room, so
@@ -4414,6 +4430,7 @@ end
 
 local function FinishScan(job)
     scanJob = nil
+    AnnounceScan(string.format("Bag scan finished (%s).", tostring(job.reason or "unknown")))
 
     local onDone = job.onDone
     if onDone then
@@ -4423,7 +4440,7 @@ local function FinishScan(job)
     -- A request that arrived mid-scan is honoured now rather than dropped: one more pass, not
     -- one pass per event that landed while the first was running.
     if job.again then
-        StartInventoryScan(job.again)
+        StartInventoryScan(job.again, job.reason)
     end
 end
 
@@ -4456,7 +4473,7 @@ local function RunScanSlice(job)
     end, SCAN_PAUSE_MS)
 end
 
-StartInventoryScan = function(onDone)
+StartInventoryScan = function(onDone, reason)
     if scanJob then
         scanJob.again = scanJob.again or onDone
         return
@@ -4469,8 +4486,18 @@ StartInventoryScan = function(onDone)
         unitIndex = 1,
         slotIndex = 0,
         onDone = onDone,
+        reason = reason,
     }
     scanJob = job
+
+    -- The bag count is the useful half of this line: a pass that can see three places is
+    -- not the same pass as one that can see sixteen, and an unopened bank counts as none.
+    AnnounceScan(string.format(
+        "Scanning your bags (%s) - %d readable bag%s.",
+        tostring(reason or "unknown"),
+        #units,
+        #units == 1 and "" or "s"
+    ))
 
     if #units == 0 or not zo_callLater then
         FinishScan(job)
@@ -4903,8 +4930,66 @@ local function ScheduleAutoReconcile(reason)
         -- The pass is the same work as before, spread over slices instead of one frame.
         StartInventoryScan(function(index)
             RebuildSharedItemsWithInventory(true, index)
-        end)
+        end, reason)
     end, 4000)
+end
+
+-- Which of the tracked bags can be read right now. The bank, the guild bank, each house
+-- chest and the furnishing vault carry nothing until their window has loaded them, so
+-- this list is exactly the set of places a pass can see.
+local function ReadableTrackedBags()
+    local readable = {}
+
+    for _, bagId in ipairs(GetTrackedBagIds()) do
+        local size = (GetBagSize and GetBagSize(bagId)) or 0
+        if size and size > 0 then
+            readable[bagId] = size
+        end
+    end
+
+    return readable
+end
+
+local readableBagsSeen = nil
+
+-- A pass may not judge a place it could not read, so a share filed in an unopened bank
+-- survives every pass that cannot see the bank - and anything new put there is never
+-- noticed either, because no pass ever runs while the bank is readable. The moment a bag
+-- becomes readable is the only chance to see what is in it, so a storage opening asks for
+-- one pass. Only a bag that was not readable before counts: a window closing takes places
+-- away and reads nothing new.
+local function NoticeReadableBags()
+    if not ItemShare.savedVars then
+        return
+    end
+
+    local readable = ReadableTrackedBags()
+    local seen = readableBagsSeen
+    readableBagsSeen = readable
+
+    if not seen then
+        return
+    end
+
+    for bagId in pairs(readable) do
+        if not seen[bagId] then
+            ScheduleAutoReconcile("a storage opening")
+            return
+        end
+    end
+end
+
+-- The client writes the file as it shuts down and a sliced pass would be cut off part way
+-- through, so this one runs to the end in a single go. A short beat at logout is worth a
+-- file that carries the newest counts.
+local function ScanBeforeLogout()
+    if not ItemShare.savedVars then
+        return
+    end
+
+    AnnounceScan("Reading every bag before the file is saved.")
+    RebuildSharedItemsWithInventory(true, BuildActualInventoryIndex())
+    AnnounceScan("Bags read; the file is current.")
 end
 
 local function SharedEntriesMatching(searchText)
@@ -5472,7 +5557,8 @@ local function PrintCommandHelp()
     PrintMessage("/itemshare reserves  - List the items you keep a reserve on")
     PrintMessage("/itemshare expire N  - Show a stopwatch on shares older than N days (0 turns it off)")
     PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
-    PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off")
+    PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off (the bag is only read while this is on)")
+    PrintMessage("/itemshare scanmessages - Turn the chat line at the start and end of every bag read on or off")
     PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
     PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
     PrintMessage("/itemshare protect   - Turn the lock on a shared copy on or off: mailing and trading still work")
@@ -5571,10 +5657,23 @@ local function OnSlashCommand(arg)
         ItemShare.savedVars.guildBankSharingEnabled = not current
 
         PrintMessage(string.format(
-            "Guild bank sharing %s.",
-            ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled"
+            "Guild bank sharing %s. %s",
+            ItemShare.savedVars.guildBankSharingEnabled and "enabled" or "disabled",
+            ItemShare.savedVars.guildBankSharingEnabled
+                and "The guild bank is read from now on, when it is open."
+                or "The guild bank is no longer read at all."
         ))
         RefreshShareListWindowIfVisible()
+    elseif lowerArg == "scanmessages" then
+        local wasOn = ItemShare.savedVars.scanMessages ~= false
+        ItemShare.savedVars.scanMessages = not wasOn
+
+        PrintMessage(string.format(
+            "Scan messages %s. %s",
+            wasOn and "off" or "on",
+            wasOn and "Bag reads no longer say so in chat."
+                or "Every bag read says so in chat as it starts and as it ends."
+        ))
     else
         PrintCommandHelp()
     end
@@ -5599,7 +5698,7 @@ local function OnAddonLoaded(event, addonName)
     -- Said first, before any setup that could go wrong, so a silent failure cannot be
     -- mistaken for a command that did not run.
     PrintMessage(string.format(
-        "Loaded (version %s) from the folder '%s'. Shared items refresh from your bags on login and when you open the bank.",
+        "Loaded (version %s) from the folder '%s'. Shared items refresh from your bags at login, on a zone change, when you open a storage, and at logout.",
         ADDON_VERSION,
         tostring(addonName)
     ))
@@ -5673,10 +5772,14 @@ local function OnAddonLoaded(event, addonName)
         end)
 
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_ACTIVATED, function()
+            -- The baseline is taken before the first pass, so the first bank opened in a
+            -- session is still noticed as a place that was not readable a moment ago.
+            NoticeReadableBags()
             ScheduleAutoReconcile("login")
         end)
 
-    -- The bags are read here and on a zone change, and nowhere else.
+    -- The bags are read at login, on a zone change, when a storage becomes readable, when
+    -- the bank closes, and at logout.
     --
     -- Reading them is the most expensive thing this addon does: sixteen bags, the craft
     -- bag, both banks, ten house chests, the furnishing vault and the guild bank, at about
@@ -5684,9 +5787,32 @@ local function OnAddonLoaded(event, addonName)
     -- pickup, sale, split and loot - kept the client busy while the player was playing. A
     -- count can now be a zone out of date, and a share whose place emptied re-files itself
     -- on the next read rather than the same second; /ishare sync asks for it sooner.
+    --
+    -- The bank, the guild bank, each house chest and the furnishing vault only hold their
+    -- items while their window is open: an unopened one reports no slots, and a pass that
+    -- cannot see a place is not allowed to judge what is filed there. So opening one is
+    -- the only moment its contents can be read at all, which is why it asks for a pass.
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ZONE_CHANGED, function()
             ScheduleAutoReconcile("a new zone")
         end)
+
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
+            ScheduleAutoReconcile("the bank opening")
+        end)
+
+        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()
+            ScheduleAutoReconcile("the bank closing")
+        end)
+
+    -- The file is written as the client shuts down, so this is the last chance to have the
+    -- newest counts in it. Places that were never opened this session keep the counts the
+    -- file already had rather than losing them, because a pass cannot judge what it cannot
+    -- read.
+        if EVENT_PLAYER_DEACTIVATED then
+            EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_PLAYER_DEACTIVATED, function()
+                ScanBeforeLogout()
+            end)
+        end
 
     RegisterContextMenus()
     InstallShareProtection()
@@ -5703,6 +5829,11 @@ local function OnAddonLoaded(event, addonName)
     -- scene has had a frame to create the inventory it holds.
     if SCENE_MANAGER and SCENE_MANAGER.RegisterCallback then
         SCENE_MANAGER:RegisterCallback("SceneStateChanged", function()
+            -- A storage opening is a scene change, and the bank is not the only one: a
+            -- house chest, the furnishing vault and the guild bank all arrive this way, so
+            -- none of them needs its own event name to be noticed.
+            NoticeReadableBags()
+
             if zo_callLater then
                 zo_callLater(HookCraftingInventoryRows, 100)
             else
