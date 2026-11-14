@@ -10,6 +10,34 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.39
+- A storage is read when it closes, not when it opens. Opening one is a look, and a look
+  followed by a deposit would be read twice for nothing; the close is where the contents are
+  settled. The bank opening is no longer a reason to read at all.
+- Every read starts by naming the bags it can see - `Backpack, Bank, House chest 1` - rather
+  than counting them, so a pass that cannot see the bank says so by leaving it out.
+- A reload now says so. `/reloadui` runs the load handler and fires the same event a login
+  does, so the client's own uptime decides the word: a client that has just started reads as
+  `login`, one that has been up for a couple of minutes reads as `a UI reload`.
+- The date an item went on offer is no longer copied onto each share row: it lives only in the
+  link-keyed table. An old row keeps its field until the login seed moves the date across and
+  clears it, and the stopwatch badge asks the table by item.
+
+### 1.11.38
+- `/ishare scan raw` reads every bag it can see and keeps nothing: no share is written, nothing is
+  compared, no pass is scheduled. It reports which bags were readable, how long each took, how many
+  slots and items it walked, and the total, so a slow read can be told apart from slow work after it.
+  `/ishare raw` means the same thing.
+- The date an item went on offer belongs to the item, not to the place a copy was found. It is now
+  stored once, keyed by the item link, and each share only carries a copy of it for the file the
+  website reads - so sharing the same thing from a second bag, or moving a copy between the bank and
+  a house chest, no longer gives it two different ages. The date is written when the item is first
+  offered and never moved after that; it is dropped only when the item is offered nowhere at all, and
+  sharing it again after that starts a new one.
+- A file written before this carries the date on each row: at login the oldest row per item is taken
+  as the item's date and written back onto every row for it, so two rows that disagreed agree from
+  the first read on.
+
 ### 1.11.37
 - Automatic bag reads can be turned off: `/ishare autoscan` toggles them, `/ishare autoscan off`
   and `/ishare autoscan on` say which way. Off, nothing is read at login, on a zone change, when a
