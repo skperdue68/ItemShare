@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.37"
+local ADDON_VERSION = "1.11.38"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -57,6 +57,10 @@ local defaults = {
     -- storage becomes readable, and at logout. Off, nothing is read unless a command asks,
     -- which is the setting for chasing a client that locks up with this addon loaded.
     autoScan = true,
+    -- When each item first went on offer, keyed by item link. The date belongs to the item
+    -- rather than to the place a copy was found, so a share only carries a copy of it for
+    -- the file the website reads. Written once, dropped when the item stops being offered.
+    itemFirstDumped = {},
     -- How long a share may stay on offer, in days, before its badge becomes the
     -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
     -- share: what counts as "too long" is a decision about the list, and changing it
@@ -3185,6 +3189,116 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
     end
 end
 
+-- When each item first went on offer, by item link.
+--
+-- The date belongs to the item, not to the place a copy was found: the same sword in the
+-- bank and in a house chest is one thing on offer, and moving a copy from one place to
+-- another must not make it look new. So it is stored once, keyed by the link, and a share
+-- carries a copy of it only because the file the website reads has one field per row.
+-- Written when the item is first shared, never touched again until the item stops being
+-- offered - no share and no standing offer - at which point it is dropped.
+local function GetItemFirstDumpedTable()
+    if not ItemShare.savedVars then
+        return {}
+    end
+
+    local byLink = ItemShare.savedVars.itemFirstDumped
+    if type(byLink) ~= "table" then
+        byLink = {}
+        ItemShare.savedVars.itemFirstDumped = byLink
+    end
+
+    return byLink
+end
+
+local function GetItemFirstDumpedAt(itemLink)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return nil
+    end
+
+    return tonumber(GetItemFirstDumpedTable()[link])
+end
+
+local function RememberItemFirstDumpedAt(itemLink, hint)
+    local link = tostring(itemLink or "")
+    if link == "" then
+        return nil
+    end
+
+    local byLink = GetItemFirstDumpedTable()
+    local known = tonumber(byLink[link])
+    if known and known > 0 then
+        return known
+    end
+
+    local stamp = tonumber(hint) or (GetTimeStamp and GetTimeStamp()) or 0
+    byLink[link] = stamp
+
+    return stamp
+end
+
+-- A link is on record only while something is offered: a share somewhere, or a standing
+-- offer. Once neither is true the date has no meaning, and it goes with the last row.
+local function PruneItemFirstDumpedAt()
+    if not ItemShare.savedVars then
+        return
+    end
+
+    local byLink = GetItemFirstDumpedTable()
+    local live = {}
+
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        local link = tostring(entry and entry.itemLink or "")
+        if link ~= "" then
+            live[link] = true
+        end
+    end
+
+    for _, entry in pairs(ItemShare.savedVars.alwaysShare or {}) do
+        local link = tostring(entry and entry.itemLink or "")
+        if link ~= "" then
+            live[link] = true
+        end
+    end
+
+    for link in pairs(byLink) do
+        if not live[link] then
+            byLink[link] = nil
+        end
+    end
+end
+
+-- A file written before this table existed carries the date on each row, and two rows for
+-- the same item may disagree. The older one is the honest answer; taking it here, and
+-- writing it back onto every row, means the first read after an update agrees with every
+-- read after it.
+local function SeedItemFirstDumpedAt()
+    if not ItemShare.savedVars then
+        return
+    end
+
+    local byLink = GetItemFirstDumpedTable()
+
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        local link = tostring(entry and entry.itemLink or "")
+        local stamp = tonumber(entry and entry.firstDumpedAt) or 0
+        if link ~= "" and stamp > 0 then
+            local known = tonumber(byLink[link]) or 0
+            if known <= 0 or stamp < known then
+                byLink[link] = stamp
+            end
+        end
+    end
+
+    for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
+        local stamp = tonumber(byLink[tostring(entry and entry.itemLink or "")])
+        if stamp and stamp > 0 then
+            entry.firstDumpedAt = stamp
+        end
+    end
+end
+
 RemoveItemFromShareByKey = function(itemKey, entry, refreshListWindow)
     if not itemKey or itemKey == "" then
         return
@@ -3192,6 +3306,7 @@ RemoveItemFromShareByKey = function(itemKey, entry, refreshListWindow)
 
     local itemName = entry and entry.itemName or itemKey
     ItemShare.savedVars.sharedItems[itemKey] = nil
+    PruneItemFirstDumpedAt()
     PrintMessage(string.format("Removed %s from shared list.", tostring(itemName)))
     TryRefreshInventoryVisuals()
     if refreshListWindow ~= false then
@@ -3251,7 +3366,9 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     -- on the site and the number kept back can never drift apart.
     local heldCount = math.max(0, math.floor(tonumber(count) or 0))
     entry.heldCount = heldCount
-    entry.firstDumpedAt = tonumber(firstDumpedAt or entry.firstDumpedAt or now) or now
+    -- The index owns this date, so a copy shared from a second place keeps the day the
+    -- item was first offered instead of taking a new one.
+    entry.firstDumpedAt = RememberItemFirstDumpedAt(entry.itemLink, firstDumpedAt or entry.firstDumpedAt or now) or now
     entry.lastDumpedAt = now
 
     ItemShare.savedVars.sharedItems[itemData.itemKey] = entry
@@ -4778,6 +4895,7 @@ SyncSharedItemsWithInventory = function(quiet, prebuiltIndex)
     end
 
     RefreshAlwaysShareHeldCounts(inventoryIndex)
+    PruneItemFirstDumpedAt()
     ShowSyncSummary("Sync", updatedCount, removedCount, unchangedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
@@ -4885,6 +5003,7 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
     end
 
     RefreshAlwaysShareHeldCounts(inventoryIndex)
+    PruneItemFirstDumpedAt()
     ShowSyncSummary("Rebuild", updatedCount, removedCount, unchangedCount, quiet)
     RefreshShareListWindowIfVisible()
 end
@@ -4952,6 +5071,73 @@ local function ScanBagsNow(reason)
     StartInventoryScan(function(index)
         RebuildSharedItemsWithInventory(false, index)
     end, reason)
+end
+
+-- A read with nothing done with it: no index, no comparison, no saved entry, nothing kept.
+-- It exists to answer one question - is the time going on reading the bags or on what this
+-- addon does with them afterwards - so it walks the same getters the real pass does and
+-- throws the answers away.
+local function ReadBagsRaw()
+    if not ItemShare.savedVars then
+        return
+    end
+
+    local clock = GetTimeMilliseconds
+    local function nowMs()
+        return (clock and clock()) or 0
+    end
+
+    local bagIds = GetTrackedBagIds()
+    local readable = {}
+
+    for _, bagId in ipairs(bagIds) do
+        local bagSize = GetBagSize(bagId) or 0
+        if bagSize > 0 then
+            local _, locationLabel = GetBagLocationInfo(bagId)
+            readable[#readable + 1] = string.format("%s (%d slots)", tostring(locationLabel), bagSize)
+        end
+    end
+
+    local startedAt = nowMs()
+    PrintMessage(string.format(
+        "Raw read starting: %s.",
+        #readable > 0 and table.concat(readable, ", ") or "no bag can be read right now"
+    ))
+
+    local slotCount = 0
+    local itemCount = 0
+    local perBag = {}
+
+    for _, bagId in ipairs(bagIds) do
+        local bagSize = GetBagSize(bagId) or 0
+        if bagSize > 0 then
+            local bagStartedAt = nowMs()
+
+            for slotIndex = 0, bagSize - 1 do
+                slotCount = slotCount + 1
+
+                local slotItemName = GetItemName(bagId, slotIndex)
+                if slotItemName and slotItemName ~= "" and IsItemEligibleForShare(bagId, slotIndex) then
+                    local itemData = GetItemDataFromBagSlot(bagId, slotIndex)
+                    if itemData and itemData.itemLink then
+                        itemCount = itemCount + 1
+                        GetItemShareCount(bagId, slotIndex)
+                    end
+                end
+            end
+
+            local _, locationLabel = GetBagLocationInfo(bagId)
+            perBag[#perBag + 1] = string.format("%s %d ms", tostring(locationLabel), nowMs() - bagStartedAt)
+        end
+    end
+
+    PrintMessage(string.format(
+        "Raw read finished: %d slots, %d items, %d ms total (%s). Nothing was stored or compared.",
+        slotCount,
+        itemCount,
+        nowMs() - startedAt,
+        #perBag > 0 and table.concat(perBag, ", ") or "nothing to read"
+    ))
 end
 
 -- Which of the tracked bags can be read right now. The bank, the guild bank, each house
@@ -5580,6 +5766,7 @@ local function PrintCommandHelp()
     PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off (the bag is only read while this is on)")
     PrintMessage("/itemshare scanmessages - Turn the chat line at the start and end of every bag read on or off")
     PrintMessage("/itemshare scan bags - Read your bags now and rewrite every share from what is in them")
+    PrintMessage("/itemshare scan raw  - Read the bags and keep nothing: a timing test, not a scan")
     PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in (same as scan house)")
     PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
     PrintMessage("/itemshare autoscan  - Turn the reads that happen on their own on or off: /itemshare autoscan on|off")
@@ -5614,6 +5801,8 @@ local function OnSlashCommand(arg)
         ClearPlacedFurnishingsForCurrentHouse()
     elseif string.match(lowerArg, "^scan%s+bags?$") then
         ScanBagsNow("the /ishare scan bags command")
+    elseif string.match(lowerArg, "^scan%s+raw$") or lowerArg == "raw" then
+        ReadBagsRaw()
     elseif lowerArg == "scan" or lowerArg == "scan house" or lowerArg == "scan placed" then
         ScanPlacedFurnishings()
     elseif lowerArg == "rebuild" then
@@ -5777,6 +5966,10 @@ local function OnAddonLoaded(event, addonName)
 
     GetAlwaysShareTable()
     ReindexAlwaysShareTable()
+    -- The date an item went on offer belongs to the item, and a file written before that
+    -- table existed carries it on each row: taken once here, oldest first, so every row for
+    -- the same item agrees from the first read on.
+    SeedItemFirstDumpedAt()
 
     local legacyPlacedShares = PruneLegacyPlacedFurnitureShares()
     if legacyPlacedShares > 0 then

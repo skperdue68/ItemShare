@@ -10,6 +10,21 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.38
+- `/ishare scan raw` reads every bag it can see and keeps nothing: no share is written, nothing is
+  compared, no pass is scheduled. It reports which bags were readable, how long each took, how many
+  slots and items it walked, and the total, so a slow read can be told apart from slow work after it.
+  `/ishare raw` means the same thing.
+- The date an item went on offer belongs to the item, not to the place a copy was found. It is now
+  stored once, keyed by the item link, and each share only carries a copy of it for the file the
+  website reads - so sharing the same thing from a second bag, or moving a copy between the bank and
+  a house chest, no longer gives it two different ages. The date is written when the item is first
+  offered and never moved after that; it is dropped only when the item is offered nowhere at all, and
+  sharing it again after that starts a new one.
+- A file written before this carries the date on each row: at login the oldest row per item is taken
+  as the item's date and written back onto every row for it, so two rows that disagreed agree from
+  the first read on.
+
 ### 1.11.37
 - Automatic bag reads can be turned off: `/ishare autoscan` toggles them, `/ishare autoscan off`
   and `/ishare autoscan on` say which way. Off, nothing is read at login, on a zone change, when a
