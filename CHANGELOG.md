@@ -10,6 +10,21 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.40
+- An entry in `sharedItems` and `alwaysShare` now keeps only the fields that are read:
+  the ones the website has a column for, the place and count the reserve and AVAILABLE
+  columns need, and the bag and slot the share list checks when it offers a right-click.
+  Everything else is gone - most of all `esoDetails`, a packed dump of every getter the
+  client answered for an item, which was about half of each entry and which nothing has
+  ever read back. Per entry that is fourteen fields, one of them a table of a dozen more.
+- Those getters are no longer called at all when a slot is read, so a full bag read does
+  less work as well as taking less room: the type, quality and trait names, the set, the
+  enchantment and style names and the level and champion point requirements are all that
+  is asked for now.
+- An existing file is stripped at login: the dropped fields are removed from every entry
+  in `sharedItems` and `alwaysShare` in place, so what is offered, where, and how many are
+  untouched and nothing else in the file is rewritten.
+
 ### 1.11.39
 - A storage is read when it closes, not when it opens. Opening one is a look, and a look
   followed by a deposit would be read twice for nothing; the close is where the contents are
