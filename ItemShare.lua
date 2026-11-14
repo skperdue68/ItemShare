@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.39"
+local ADDON_VERSION = "1.11.40"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -514,7 +514,6 @@ local function GetShareListEntries()
                 trait = itemData and itemData.trait,
                 itemId = itemData and itemData.itemId,
                 icon = itemData and itemData.icon,
-                esoDetails = itemData and itemData.esoDetails,
                 heldCount = held,
                 reserve = GetShareReserve(link, locationKey),
                 -- Nothing is on offer from a reserved item that is not shared, so the
@@ -1937,33 +1936,6 @@ end
 -- Every probe below is pcall'd and type-checked, so a getter the client does not
 -- have, or one whose shape changed, costs that field and nothing else: adding an
 -- item to the share list must never fail because of a capture attempt.
-local ITEM_LINK_GETTERS = {
-    "GetItemLinkDisplayQuality",
-    "GetItemLinkItemType",
-    "GetItemLinkEquipType",
-    "GetItemLinkArmorType",
-    "GetItemLinkWeaponType",
-    "GetItemLinkTraitType",
-    "GetItemLinkItemId",
-    "GetItemLinkItemLevel",
-    "GetItemLinkRequiredLevel",
-    "GetItemLinkRequiredChampionPoints",
-    "GetItemLinkFlavorText",
-    "GetItemLinkEnchantInfo",
-    "GetItemLinkItemStyle",
-    "GetItemLinkMaxStackSize",
-    "GetItemLinkStolen",
-}
-
-local ITEM_SLOT_GETTERS = {
-    "GetItemRequiredLevel",
-    "GetItemRequiredChampionPoints",
-    "GetItemArmorRating",
-    "GetItemWeaponDamage",
-    "GetItemMaxStack",
-    "GetItemStolen",
-}
-
 local function PackItemScalars(...)
     local packed = {}
     for index = 1, select("#", ...) do
@@ -1977,9 +1949,9 @@ local function PackItemScalars(...)
 end
 
 -- Runs one getter if the running client has it and keeps whatever scalar values
--- it returned. The packed results are stored verbatim with the item as well, so
--- detail this version of the addon does not display yet survives an upload and
--- can be used by the website later without a new game capture.
+-- it returned. Only the fields the addon and the website actually use are asked for
+-- now: a full dump of every getter used to ride along in each entry, at about half
+-- an entry's size, and nothing ever read it.
 local function ProbeItemApi(raw, name, ...)
     local getter = _G[name]
     if type(getter) ~= "function" then
@@ -2017,42 +1989,32 @@ local function FirstItemNumber(values)
     return 0
 end
 
+-- Five fields, and each one has a reader: four are columns on the website, and the
+-- level and champion point requirements are what the share tooltip shows. Everything
+-- else the client can be asked about an item is not kept, because nothing asks for it
+-- back - which also means those getters are no longer called for every slot read.
 local function CaptureItemDetails(itemLink, bagId, slotIndex)
-    local raw = {}
-    local details = { esoDetails = raw }
+    local details = {}
 
     if itemLink and itemLink ~= "" then
-        for _, getterName in ipairs(ITEM_LINK_GETTERS) do
-            ProbeItemApi(raw, getterName, itemLink)
-        end
-
         -- The set name is picked out by type rather than by position: its result
         -- is mostly numbers, and the order has changed between API versions, so
         -- reading position one as the name could store a bonus count instead.
-        local setInfo = ProbeItemApi(raw, "GetItemLinkSetInfo", itemLink, false)
+        local setInfo = ProbeItemApi(details, "GetItemLinkSetInfo", itemLink, false)
         details.setName = FirstItemString(setInfo)
-        details.enchantName = FirstItemString(raw.GetItemLinkEnchantInfo)
-        details.styleName = FirstItemString(raw.GetItemLinkItemStyle)
-        details.flavorText = FirstItemString(raw.GetItemLinkFlavorText)
-        -- Kept once, on the entry: the raw dump would otherwise store the same
-        -- paragraph again for every item that has one.
-        raw.GetItemLinkFlavorText = nil
+        details.enchantName = FirstItemString(ProbeItemApi(details, "GetItemLinkEnchantInfo", itemLink))
+        details.styleName = FirstItemString(ProbeItemApi(details, "GetItemLinkItemStyle", itemLink))
+        details.requiredLevel = FirstItemNumber(ProbeItemApi(details, "GetItemLinkRequiredLevel", itemLink))
+        details.requiredCp = FirstItemNumber(ProbeItemApi(details, "GetItemLinkRequiredChampionPoints", itemLink))
     end
 
     if bagId ~= nil and slotIndex ~= nil then
-        for _, getterName in ipairs(ITEM_SLOT_GETTERS) do
-            ProbeItemApi(raw, getterName, bagId, slotIndex)
+        if details.requiredLevel == 0 then
+            details.requiredLevel = FirstItemNumber(ProbeItemApi(details, "GetItemRequiredLevel", bagId, slotIndex))
         end
-    end
-
-    details.requiredLevel = FirstItemNumber(raw.GetItemLinkRequiredLevel)
-    if details.requiredLevel == 0 then
-        details.requiredLevel = FirstItemNumber(raw.GetItemRequiredLevel)
-    end
-
-    details.requiredCp = FirstItemNumber(raw.GetItemLinkRequiredChampionPoints)
-    if details.requiredCp == 0 then
-        details.requiredCp = FirstItemNumber(raw.GetItemRequiredChampionPoints)
+        if details.requiredCp == 0 then
+            details.requiredCp = FirstItemNumber(ProbeItemApi(details, "GetItemRequiredChampionPoints", bagId, slotIndex))
+        end
     end
 
     return details
@@ -2065,11 +2027,13 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         return nil
     end
 
-    local itemType, itemTypeName = GetItemTypeInfo(bagId, slotIndex)
-    local quality, qualityName = GetItemQualityInfo(bagId, slotIndex)
-    local traitName, traitType = GetItemTraitInfo(bagId, slotIndex)
-    local apparelSlot, equipType, apparelWeight, armorType = GetApparelInfo(bagId, slotIndex)
-    local weaponTypeName, weaponType, weaponHandedness = GetItemWeaponTypeInfo(bagId, slotIndex)
+    -- The type name, the quality and the trait are kept because the website has a column
+    -- for each; the numeric type, the apparel and weapon classifications and the quality and
+    -- trait names are not kept - except the furniture data id, which is how a piece placed in
+    -- a house is matched to the same furnishing sitting in a bag.
+    local _, itemTypeName = GetItemTypeInfo(bagId, slotIndex)
+    local quality = GetItemQualityInfo(bagId, slotIndex)
+    local traitName = GetItemTraitInfo(bagId, slotIndex)
     local furnitureDataId = GetItemFurnitureDataIdSafe(bagId, slotIndex)
     local locationKey, sharedFrom = GetBagLocationInfo(bagId)
     local details = CaptureItemDetails(itemLink, bagId, slotIndex)
@@ -2080,27 +2044,15 @@ local function GetItemDataFromBagSlot(bagId, slotIndex)
         itemLink = itemLink,
         itemId = GetItemIdFromLink(itemLink),
         icon = GetItemIconPathSafe(bagId, slotIndex, itemLink),
-        itemType = itemType,
         itemTypeName = itemTypeName,
         quality = quality,
-        qualityName = qualityName,
         trait = traitName,
-        traitType = traitType,
-        apparelSlot = apparelSlot,
-        equipType = equipType,
-        apparelWeight = apparelWeight,
-        armorType = armorType,
-        weaponType = weaponTypeName,
-        weaponHandedness = weaponHandedness,
-        weaponTypeId = weaponType,
         furnitureDataId = furnitureDataId,
         setName = details.setName or "",
         enchantName = details.enchantName or "",
         styleName = details.styleName or "",
         requiredLevel = details.requiredLevel or 0,
         requiredCp = details.requiredCp or 0,
-        flavorText = details.flavorText or "",
-        esoDetails = details.esoDetails or {},
         bagId = bagId,
         slotIndex = slotIndex,
         locationKey = locationKey,
@@ -3304,6 +3256,56 @@ local function SeedItemFirstDumpedAt()
     end
 end
 
+-- Fields an entry no longer keeps, and a file written by an older version still carries.
+-- The biggest of them was a packed dump of every getter the client answered, about half the
+-- size of an entry, which the website has never read.
+local DROPPED_ENTRY_FIELDS = {
+    "esoDetails",
+    "flavorText",
+    "traitType",
+    "apparelWeight",
+    "weaponHandedness",
+    "weaponType",
+    "armorType",
+    "equipType",
+    "apparelSlot",
+    "furnitureDataId",
+    "qualityName",
+    "itemType",
+    "weaponTypeId",
+    "lastDumpedAt",
+}
+
+-- Drops them from the entries already in the file. The tables are edited in place, so the
+-- offers themselves are untouched: none of these fields is read back anywhere, and the ones
+-- that are still wanted - the name, the link, the icon, the place, the count - are not
+-- named here.
+local function ScrubSavedEntryFields()
+    if not ItemShare.savedVars then
+        return 0
+    end
+
+    local dropped = 0
+    local tables = { ItemShare.savedVars.sharedItems, ItemShare.savedVars.alwaysShare }
+
+    for _, table in ipairs(tables) do
+        if type(table) == "table" then
+            for _, entry in pairs(table) do
+                if type(entry) == "table" then
+                    for _, field in ipairs(DROPPED_ENTRY_FIELDS) do
+                        if entry[field] ~= nil then
+                            entry[field] = nil
+                            dropped = dropped + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return dropped
+end
+
 RemoveItemFromShareByKey = function(itemKey, entry, refreshListWindow)
     if not itemKey or itemKey == "" then
         return
@@ -3342,27 +3344,14 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     -- A getter that answers nothing must not erase an icon captured earlier: the
     -- path is what the site caches the image from, and it does not change.
     entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
-    entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
-    entry.qualityName = itemData.qualityName
     entry.trait = itemData.trait
-    entry.traitType = itemData.traitType
-    entry.apparelSlot = itemData.apparelSlot
-    entry.equipType = itemData.equipType
-    entry.apparelWeight = itemData.apparelWeight
-    entry.armorType = itemData.armorType
-    entry.weaponType = itemData.weaponType
-    entry.weaponHandedness = itemData.weaponHandedness
-    entry.weaponTypeId = itemData.weaponTypeId
-    entry.furnitureDataId = itemData.furnitureDataId
     entry.setName = itemData.setName or ""
     entry.enchantName = itemData.enchantName or ""
     entry.styleName = itemData.styleName or ""
     entry.requiredLevel = tonumber(itemData.requiredLevel or 0) or 0
     entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
-    entry.flavorText = itemData.flavorText or ""
-    entry.esoDetails = itemData.esoDetails or {}
     entry.bagId = itemData.bagId
     entry.slotIndex = itemData.slotIndex
     entry.locationKey = itemData.locationKey
@@ -3375,7 +3364,6 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     -- from a second place keeps the day the item was first offered, and nothing is written
     -- into the file twice for the website to read back.
     RememberItemFirstDumpedAt(entry.itemLink, firstDumpedAt or now)
-    entry.lastDumpedAt = now
 
     ItemShare.savedVars.sharedItems[itemData.itemKey] = entry
     TryRefreshInventoryVisuals()
@@ -3401,27 +3389,14 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         itemLink = entry.itemLink,
         itemId = entry.itemId,
         icon = entry.icon,
-        itemType = entry.itemType,
         itemTypeName = entry.itemTypeName,
         quality = entry.quality,
-        qualityName = entry.qualityName,
         trait = entry.trait,
-        traitType = entry.traitType,
-        apparelSlot = entry.apparelSlot,
-        equipType = entry.equipType,
-        apparelWeight = entry.apparelWeight,
-        armorType = entry.armorType,
-        weaponType = entry.weaponType,
-        weaponHandedness = entry.weaponHandedness,
-        weaponTypeId = entry.weaponTypeId,
-        furnitureDataId = entry.furnitureDataId,
         setName = entry.setName,
         enchantName = entry.enchantName,
         styleName = entry.styleName,
         requiredLevel = entry.requiredLevel,
         requiredCp = entry.requiredCp,
-        flavorText = entry.flavorText,
-        esoDetails = entry.esoDetails,
         bagId = entry.bagId,
         slotIndex = entry.slotIndex,
         locationKey = locationKey,
@@ -3887,27 +3862,14 @@ SaveAlwaysShareEntry = function(itemData, heldCount)
     -- A getter that answers nothing must not erase an icon captured earlier: the
     -- path is what the site caches the image from, and it does not change.
     entry.icon = (tostring(itemData.icon or "") ~= "" and tostring(itemData.icon)) or entry.icon or ""
-    entry.itemType = itemData.itemType
     entry.itemTypeName = itemData.itemTypeName
     entry.quality = itemData.quality
-    entry.qualityName = itemData.qualityName
     entry.trait = itemData.trait
-    entry.traitType = itemData.traitType
-    entry.apparelSlot = itemData.apparelSlot
-    entry.equipType = itemData.equipType
-    entry.apparelWeight = itemData.apparelWeight
-    entry.armorType = itemData.armorType
-    entry.weaponType = itemData.weaponType
-    entry.weaponHandedness = itemData.weaponHandedness
-    entry.weaponTypeId = itemData.weaponTypeId
-    entry.furnitureDataId = itemData.furnitureDataId
     entry.setName = itemData.setName or ""
     entry.enchantName = itemData.enchantName or ""
     entry.styleName = itemData.styleName or ""
     entry.requiredLevel = tonumber(itemData.requiredLevel or 0) or 0
     entry.requiredCp = tonumber(itemData.requiredCp or 0) or 0
-    entry.flavorText = itemData.flavorText or ""
-    entry.esoDetails = itemData.esoDetails or {}
     -- Where it was marked, and how many were there. A standing offer's number is the count
     -- in that one place, so the offer has to remember the place as well as the number: the
     -- site can only show what is held when it is told, and a reserve belongs to a place.
@@ -4882,7 +4844,6 @@ SyncSharedItemsWithInventory = function(quiet, prebuiltIndex)
             entry.heldCount = actualCount
             entry.sharedFrom = currentLocation
             entry.locationKey = currentLocationKey
-            entry.lastDumpedAt = GetTimeStamp()
 
             if targetItemKey ~= itemKey then
                 sharedItems[itemKey] = nil
@@ -4964,9 +4925,6 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
             local previousLocation = tostring(entry.sharedFrom or "")
             local previousItemKey = itemKey
             local previousLocationKey = tostring(entry.locationKey or "")
-            local previousApparelSlot = tostring(entry.apparelSlot or "")
-            local previousApparelWeight = tostring(entry.apparelWeight or "")
-            local previousWeaponType = tostring(entry.weaponType or "")
             local targetItemKey = tostring(currentItemKey or itemKey)
 
             local rebuiltEntry = nil
@@ -4977,7 +4935,6 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
             if rebuiltEntry then
                 rebuiltEntry.sharedFrom = currentLocation
                 rebuiltEntry.locationKey = currentLocationKey
-                rebuiltEntry.lastDumpedAt = GetTimeStamp()
                 sharedItems[targetItemKey] = rebuiltEntry
                 if targetItemKey ~= itemKey then
                     sharedItems[itemKey] = nil
@@ -4987,7 +4944,6 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
                 entry.heldCount = actualCount
                 entry.sharedFrom = currentLocation
                 entry.locationKey = currentLocationKey
-                entry.lastDumpedAt = GetTimeStamp()
                 if targetItemKey ~= itemKey then
                     sharedItems[itemKey] = nil
                     sharedItems[targetItemKey] = entry
@@ -4999,10 +4955,7 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
             if previousCount ~= GetEntryOfferedCount(entry)
                 or previousLocation ~= tostring(entry.sharedFrom or "")
                 or previousItemKey ~= targetItemKey
-                or previousLocationKey ~= tostring(entry.locationKey or "")
-                or previousApparelSlot ~= tostring(entry.apparelSlot or "")
-                or previousApparelWeight ~= tostring(entry.apparelWeight or "")
-                or previousWeaponType ~= tostring(entry.weaponType or "") then
+                or previousLocationKey ~= tostring(entry.locationKey or "") then
                 updatedCount = updatedCount + 1
                 if not quiet then
                     PrintMessage(string.format("Rebuilt shared item: %s (%d) - %s", itemName, GetEntryOfferedCount(entry), tostring(entry.sharedFrom or "-")))
@@ -5997,6 +5950,7 @@ local function OnAddonLoaded(event, addonName)
     -- table existed carries it on each row: taken once here, oldest first, so every row for
     -- the same item agrees from the first read on.
     SeedItemFirstDumpedAt()
+    ScrubSavedEntryFields()
 
     local legacyPlacedShares = PruneLegacyPlacedFurnitureShares()
     if legacyPlacedShares > 0 then
