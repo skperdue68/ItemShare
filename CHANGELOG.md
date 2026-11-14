@@ -10,6 +10,17 @@ in the addon's status messages.
 
 ## Addon
 
+### 1.11.37
+- Automatic bag reads can be turned off: `/ishare autoscan` toggles them, `/ishare autoscan off`
+  and `/ishare autoscan on` say which way. Off, nothing is read at login, on a zone change, when a
+  storage becomes readable or at logout, and only a command reads your bags - which is what to try
+  while chasing a client that locks up with this addon loaded.
+- `/ishare scan bags` reads your bags and rewrites every share from what is in them, on request, in
+  the same slices an automatic read uses so nothing hitches. `/ishare rebuild` still does the same
+  work in a single go.
+- `/ishare scan` still shares the furnishings placed in the house you are standing in, and
+  `/ishare scan house` now says that out loud; `scan clear` is unchanged.
+
 ### 1.11.36
 - Items in a bank, a house chest, the furnishing vault or the guild bank are seen again. Those
   places only give up their items while their window is open - at login they report no slots - and

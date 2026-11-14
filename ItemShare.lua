@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.36"
+local ADDON_VERSION = "1.11.37"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -53,6 +53,10 @@ local defaults = {
     -- client is misbehaving, because a stall with no message and a stall after "scanning
     -- your bags" are different problems; /ishare scanmessages turns it off again.
     scanMessages = true,
+    -- Whether the addon reads your bags on its own: at login, on a zone change, when a
+    -- storage becomes readable, and at logout. Off, nothing is read unless a command asks,
+    -- which is the setting for chasing a client that locks up with this addon loaded.
+    autoScan = true,
     -- How long a share may stay on offer, in days, before its badge becomes the
     -- stopwatch. 0 is off. One number for the whole file rather than a flag on each
     -- share: what counts as "too long" is a decision about the list, and changing it
@@ -4897,6 +4901,10 @@ local function ScheduleAutoReconcile(reason)
         return
     end
 
+    if ItemShare.savedVars.autoScan == false then
+        return
+    end
+
     if autoReconcilePending then
         return
     end
@@ -4932,6 +4940,18 @@ local function ScheduleAutoReconcile(reason)
             RebuildSharedItemsWithInventory(true, index)
         end, reason)
     end, 4000)
+end
+
+-- Reading the bags when a command asks for it, in the same slices as the automatic pass:
+-- a manual read costs the same per frame as a login one, and says so in chat the same way.
+local function ScanBagsNow(reason)
+    if not ItemShare.savedVars then
+        return
+    end
+
+    StartInventoryScan(function(index)
+        RebuildSharedItemsWithInventory(false, index)
+    end, reason)
 end
 
 -- Which of the tracked bags can be read right now. The bank, the guild bank, each house
@@ -4983,7 +5003,7 @@ end
 -- through, so this one runs to the end in a single go. A short beat at logout is worth a
 -- file that carries the newest counts.
 local function ScanBeforeLogout()
-    if not ItemShare.savedVars then
+    if not ItemShare.savedVars or ItemShare.savedVars.autoScan == false then
         return
     end
 
@@ -5559,8 +5579,10 @@ local function PrintCommandHelp()
     PrintMessage("/itemshare server    - Show the platform and megaserver this file is recorded for")
     PrintMessage("/itemshare guildbank - Turn sharing from the guild bank on or off (the bag is only read while this is on)")
     PrintMessage("/itemshare scanmessages - Turn the chat line at the start and end of every bag read on or off")
-    PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in")
+    PrintMessage("/itemshare scan bags - Read your bags now and rewrite every share from what is in them")
+    PrintMessage("/itemshare scan      - Share every unbound furnishing placed in the house you own and are standing in (same as scan house)")
     PrintMessage("/itemshare scan clear - Clear every share filed as Placed (<house>) for the house you are standing in")
+    PrintMessage("/itemshare autoscan  - Turn the reads that happen on their own on or off: /itemshare autoscan on|off")
     PrintMessage("/itemshare protect   - Turn the lock on a shared copy on or off: mailing and trading still work")
     PrintMessage("Right-click an item - Add to Share, Always Share This Item, Share Reserve")
 end
@@ -5590,7 +5612,9 @@ local function OnSlashCommand(arg)
         SyncSharedItemsWithInventory()
     elseif string.match(lowerArg, "^scan%s+clear$") or string.match(lowerArg, "^scan%s+reset$") then
         ClearPlacedFurnishingsForCurrentHouse()
-    elseif lowerArg == "scan" then
+    elseif string.match(lowerArg, "^scan%s+bags?$") then
+        ScanBagsNow("the /ishare scan bags command")
+    elseif lowerArg == "scan" or lowerArg == "scan house" or lowerArg == "scan placed" then
         ScanPlacedFurnishings()
     elseif lowerArg == "rebuild" then
         RebuildSharedItemsWithInventory()
@@ -5673,6 +5697,26 @@ local function OnSlashCommand(arg)
             wasOn and "off" or "on",
             wasOn and "Bag reads no longer say so in chat."
                 or "Every bag read says so in chat as it starts and as it ends."
+        ))
+    elseif lowerArg == "autoscan" or string.match(lowerArg, "^autoscan%s+on$") or string.match(lowerArg, "^autoscan%s+off$") then
+        local wasOn = ItemShare.savedVars.autoScan ~= false
+        local isOn
+
+        if string.match(lowerArg, "^autoscan%s+on$") then
+            isOn = true
+        elseif string.match(lowerArg, "^autoscan%s+off$") then
+            isOn = false
+        else
+            isOn = not wasOn
+        end
+
+        ItemShare.savedVars.autoScan = isOn
+        PrintMessage(string.format(
+            "Automatic bag reads %s. %s",
+            isOn and "on" or "off",
+            isOn
+                and "The bags are read at login, on a zone change, when a storage becomes readable, and at logout."
+                or "Nothing is read on its own now. /ishare scan bags reads them when you ask, and /ishare sync and /ishare rebuild still work."
         ))
     else
         PrintCommandHelp()

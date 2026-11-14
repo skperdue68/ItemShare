@@ -1,6 +1,6 @@
 ## Title: ItemShare
 ## Author: evainefaye
-## Version: 1.11.36
+## Version: 1.11.37
 ## APIVersion: 101051
 ## SavedVariables: ItemShareSavedVars
 ## DependsOn: LibCustomMenu>=7.3.0
