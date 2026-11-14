@@ -3,7 +3,7 @@ ItemShare.name = "ItemShare"
 -- Kept in step with ## Version in ItemShare.txt. Written into the saved
 -- variables so an uploaded file says which addon produced it, which is the only
 -- reliable way to answer "am I actually running the new version?".
-local ADDON_VERSION = "1.11.38"
+local ADDON_VERSION = "1.11.39"
 -- Bumped whenever the saved layout changes shape. A file written by a different
 -- number is not migrated: its tables are started over, so the file is rewritten in
 -- the current layout on the next save.
@@ -53,9 +53,9 @@ local defaults = {
     -- client is misbehaving, because a stall with no message and a stall after "scanning
     -- your bags" are different problems; /ishare scanmessages turns it off again.
     scanMessages = true,
-    -- Whether the addon reads your bags on its own: at login, on a zone change, when a
-    -- storage becomes readable, and at logout. Off, nothing is read unless a command asks,
-    -- which is the setting for chasing a client that locks up with this addon loaded.
+    -- Whether the addon reads your bags on its own: at login (a reload says so), on a zone
+    -- change, when a storage closes, and at logout. Off, nothing is read unless a command
+    -- asks, which is the setting for chasing a client that locks up with this addon loaded.
     autoScan = true,
     -- When each item first went on offer, keyed by item link. The date belongs to the item
     -- rather than to the place a copy was found, so a share only carries a copy of it for
@@ -97,6 +97,7 @@ local RebuildSharedItemsWithInventory
 
 -- Declared here because the badge and the list rows are built before the reserve
 -- and standing-offer code they ask about runs for the first time.
+local GetItemFirstDumpedAt
 local GetShareReserve
 local ShareableCount
 local GetAlwaysShareTable
@@ -134,7 +135,12 @@ end
 -- unknown age is never treated as old: a file that predates the timestamps would
 -- otherwise have every share show the stopwatch on its first load.
 local function GetShareAgeInDays(entry)
-    local firstDumpedAt = tonumber(entry and entry.firstDumpedAt) or 0
+    -- The date belongs to the item, so it is asked for by link. A file written before that
+    -- table existed still carries it on the row, and the login seed moves it from there.
+    local firstDumpedAt = tonumber(GetItemFirstDumpedAt and GetItemFirstDumpedAt(entry and entry.itemLink)) or 0
+    if firstDumpedAt <= 0 then
+        firstDumpedAt = tonumber(entry and entry.firstDumpedAt) or 0
+    end
     local now = tonumber(GetTimeStamp()) or 0
     if firstDumpedAt <= 0 or now <= 0 or now < firstDumpedAt then
         return nil
@@ -3144,7 +3150,7 @@ local function AddItemToShareFromBagSlot(bagId, slotIndex)
         stackCount = GetItemShareCount(bagId, slotIndex)
     end
     local existing = ItemShare.savedVars.sharedItems[itemData.itemKey]
-    local savedEntry = SaveSharedEntry(itemData, stackCount, existing and existing.firstDumpedAt or GetTimeStamp(), true)
+    local savedEntry = SaveSharedEntry(itemData, stackCount, nil, true)
 
     if not savedEntry then
         PrintMessage(string.format("Could not add %s to the shared list.", tostring(itemData.itemName or "that item")))
@@ -3211,7 +3217,7 @@ local function GetItemFirstDumpedTable()
     return byLink
 end
 
-local function GetItemFirstDumpedAt(itemLink)
+GetItemFirstDumpedAt = function(itemLink)
     local link = tostring(itemLink or "")
     if link == "" then
         return nil
@@ -3291,11 +3297,10 @@ local function SeedItemFirstDumpedAt()
         end
     end
 
+    -- The row copy is not kept: the index is the only place the date lives now, so an old
+    -- row's field is cleared as it is read rather than carried forward.
     for _, entry in pairs(ItemShare.savedVars.sharedItems or {}) do
-        local stamp = tonumber(byLink[tostring(entry and entry.itemLink or "")])
-        if stamp and stamp > 0 then
-            entry.firstDumpedAt = stamp
-        end
+        entry.firstDumpedAt = nil
     end
 end
 
@@ -3366,9 +3371,10 @@ SaveSharedEntry = function(itemData, count, firstDumpedAt, refreshListWindow)
     -- on the site and the number kept back can never drift apart.
     local heldCount = math.max(0, math.floor(tonumber(count) or 0))
     entry.heldCount = heldCount
-    -- The index owns this date, so a copy shared from a second place keeps the day the
-    -- item was first offered instead of taking a new one.
-    entry.firstDumpedAt = RememberItemFirstDumpedAt(entry.itemLink, firstDumpedAt or entry.firstDumpedAt or now) or now
+    -- The date belongs to the item and lives in the index, not on the row: a copy shared
+    -- from a second place keeps the day the item was first offered, and nothing is written
+    -- into the file twice for the website to read back.
+    RememberItemFirstDumpedAt(entry.itemLink, firstDumpedAt or now)
     entry.lastDumpedAt = now
 
     ItemShare.savedVars.sharedItems[itemData.itemKey] = entry
@@ -3422,7 +3428,7 @@ SaveSharedEntryFromSavedEntry = function(entry, refreshListWindow)
         sharedFrom = entry.sharedFrom,
     }
 
-    return SaveSharedEntry(itemData, GetEntryHeldCount(entry), entry.firstDumpedAt or GetTimeStamp(), refreshListWindow)
+    return SaveSharedEntry(itemData, GetEntryHeldCount(entry), nil, refreshListWindow)
 end
 
 -- "Placed" shares: furniture standing in a house rather than held in a bag.
@@ -3697,7 +3703,7 @@ local function ScanPlacedFurnishings()
     for link, copies in pairs(copiesByLink) do
         local existing = sharedItems[BuildSharedItemKey(link, placedKey)]
         local itemData = BuildPlacedItemData(link, dataIdByLink[link], placedLabel, placedKey)
-        SaveSharedEntry(itemData, copies, existing and existing.firstDumpedAt or GetTimeStamp(), false)
+        SaveSharedEntry(itemData, copies, nil, false)
     end
 
     RefreshShareListWindowIfVisible()
@@ -4611,13 +4617,18 @@ StartInventoryScan = function(onDone, reason)
     }
     scanJob = job
 
-    -- The bag count is the useful half of this line: a pass that can see three places is
-    -- not the same pass as one that can see sixteen, and an unopened bank counts as none.
+    -- The names are the useful half of this line: a pass that can see the backpack and the
+    -- bank is a different reading from one that can see the house chests, and an unopened
+    -- storage is listed by its absence rather than counted as zero.
+    local readableNames = {}
+    for _, unit in ipairs(units) do
+        readableNames[#readableNames + 1] = tostring(unit.locationLabel)
+    end
+
     AnnounceScan(string.format(
-        "Scanning your bags (%s) - %d readable bag%s.",
+        "Scanning your bags (%s): %s.",
         tostring(reason or "unknown"),
-        #units,
-        #units == 1 and "" or "s"
+        #readableNames > 0 and table.concat(readableNames, ", ") or "no bag can be read right now"
     ))
 
     if #units == 0 or not zo_callLater then
@@ -4960,7 +4971,7 @@ RebuildSharedItemsWithInventory = function(quiet, prebuiltIndex)
 
             local rebuiltEntry = nil
             if currentItemData then
-                rebuiltEntry = SaveSharedEntry(currentItemData, actualCount, entry.firstDumpedAt or GetTimeStamp(), false)
+                rebuiltEntry = SaveSharedEntry(currentItemData, actualCount, nil, false)
             end
 
             if rebuiltEntry then
@@ -5061,6 +5072,19 @@ local function ScheduleAutoReconcile(reason)
     end, 4000)
 end
 
+-- A reload runs the load handler and fires PLAYER_ACTIVATED exactly as a login does, so
+-- the difference has to come from somewhere else: the client's own clock is the only thing
+-- that knows how long the game has been running. A login is a client that has just started;
+-- a reload is one that has been up for a while.
+local function DescribeLoadReason()
+    local gameMilliseconds = (GetGameTimeMilliseconds and GetGameTimeMilliseconds()) or 0
+    if gameMilliseconds > 120000 then
+        return "a UI reload"
+    end
+
+    return "login"
+end
+
 -- Reading the bags when a command asks for it, in the same slices as the automatic pass:
 -- a manual read costs the same per frame as a login one, and says so in chat the same way.
 local function ScanBagsNow(reason)
@@ -5159,11 +5183,11 @@ end
 local readableBagsSeen = nil
 
 -- A pass may not judge a place it could not read, so a share filed in an unopened bank
--- survives every pass that cannot see the bank - and anything new put there is never
--- noticed either, because no pass ever runs while the bank is readable. The moment a bag
--- becomes readable is the only chance to see what is in it, so a storage opening asks for
--- one pass. Only a bag that was not readable before counts: a window closing takes places
--- away and reads nothing new.
+-- survives every pass that cannot see the bank - and anything new put there is never noticed
+-- either, unless a pass runs because of the storage. It runs on the close, not the open:
+-- opening one is a look, and a look followed by a deposit would be read twice for nothing,
+-- while the close happens once, with the contents settled. A bag that has just stopped being
+-- readable is what asks for the pass, and the bag it held is still readable at that moment.
 local function NoticeReadableBags()
     if not ItemShare.savedVars then
         return
@@ -5177,9 +5201,12 @@ local function NoticeReadableBags()
         return
     end
 
-    for bagId in pairs(readable) do
-        if not seen[bagId] then
-            ScheduleAutoReconcile("a storage opening")
+    -- A storage is read when it closes, not when it opens: opening one is a look, and a
+    -- look that is followed by a deposit is read twice for nothing. The close is where the
+    -- contents are settled, and the bag it just held is still readable at that moment.
+    for bagId in pairs(seen) do
+        if not readable[bagId] then
+            ScheduleAutoReconcile("a storage closing")
             return
         end
     end
@@ -5904,7 +5931,7 @@ local function OnSlashCommand(arg)
             "Automatic bag reads %s. %s",
             isOn and "on" or "off",
             isOn
-                and "The bags are read at login, on a zone change, when a storage becomes readable, and at logout."
+                and "The bags are read at login, on a zone change, when a storage closes, and at logout."
                 or "Nothing is read on its own now. /ishare scan bags reads them when you ask, and /ishare sync and /ishare rebuild still work."
         ))
     else
@@ -6012,11 +6039,11 @@ local function OnAddonLoaded(event, addonName)
             -- The baseline is taken before the first pass, so the first bank opened in a
             -- session is still noticed as a place that was not readable a moment ago.
             NoticeReadableBags()
-            ScheduleAutoReconcile("login")
+            ScheduleAutoReconcile(DescribeLoadReason())
         end)
 
-    -- The bags are read at login, on a zone change, when a storage becomes readable, when
-    -- the bank closes, and at logout.
+    -- The bags are read at login (or a reload), on a zone change, when a storage closes, and
+    -- at logout.
     --
     -- Reading them is the most expensive thing this addon does: sixteen bags, the craft
     -- bag, both banks, ten house chests, the furnishing vault and the guild bank, at about
@@ -6031,10 +6058,6 @@ local function OnAddonLoaded(event, addonName)
     -- the only moment its contents can be read at all, which is why it asks for a pass.
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_ZONE_CHANGED, function()
             ScheduleAutoReconcile("a new zone")
-        end)
-
-        EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_OPEN_BANK, function()
-            ScheduleAutoReconcile("the bank opening")
         end)
 
         EVENT_MANAGER:RegisterForEvent(ItemShare.name, EVENT_CLOSE_BANK, function()

@@ -141,11 +141,11 @@ An item's age starts when it was first shared. Re-sharing it, moving it to anoth
 [*][b]list[/b] - open or close the shared items window
 [*][b]reset[/b] (or clear) - clear every share and every standing offer
 [*][b]sync[/b] (cleanup, reconcile) - recount shares against the bags readable now and drop the ones you no longer have. Standing offers are left alone.
-[*][b]rebuild[/b] - rewrite every share from your current bags. Also runs at login, on a zone change, when a storage becomes readable (the bank, a house chest, the furnishing vault, and the guild bank only while guild bank sharing is on), when the bank closes, and at logout.
+[*][b]rebuild[/b] - rewrite every share from your current bags. Also runs at login (or a reload, which it names as a reload), on a zone change, when a storage closes (the bank, a house chest, the furnishing vault, and the guild bank only while guild bank sharing is on), and at logout. Every read says which bags it can see, by name, when it starts.
 [*][b]scan bags[/b] - read your bags now and rewrite every share from what is in them, in the same slices an automatic read uses
 [*][b]scan raw[/b] - read every available bag and keep nothing: no shares written, nothing compared. Reports which bags it could read, how long each took, and the total, so a slow read can be told apart from slow work afterwards
 [*][b]scan[/b] (or scan house) - share every unbound furnishing placed in the house you own and are standing in, and take back the ones no longer there
-[*][b]autoscan [on|off][/b] - turn the reads that happen on their own off or on: at login, on a zone change, when a storage becomes readable, and at logout
+[*][b]autoscan [on|off][/b] - turn the reads that happen on their own off or on: at login, on a zone change, when a storage closes, and at logout
 [*][b]scan clear[/b] - clear every share filed as [i]Placed (<house>)[/i] for the house you are standing in
 [*][b]protect[/b] - turn the share lock off (or back on): a shared copy can be mailed or traded or stored, nothing else
 [*][b]save[/b] - rebuild, then offer to reload the UI, which writes the file to disk
@@ -173,7 +173,7 @@ If you would rather run your own copy, the site's source is at [url=https://gith
 [b][size=4][color=#D4AF37]Notes[/color][/size][/b]
 
 [list]
-[*]Version 1.11.38, API 101051. Requires LibCustomMenu 7.3.0 or newer.
+[*]Version 1.11.39, API 101051. Requires LibCustomMenu 7.3.0 or newer.
 [*]The saved file has a format version, and a file written by another one is not carried forward. Your shares come back from your bags on the next rebuild, but standing offers and reserves are set by hand rather than read from a bag, so they start empty.
 [*]Parts of the addon were written with AI assistance and it is still being tidied up.
 [*]Addon source: [url=https://github.com/skperdue68/ItemShare]github.com/skperdue68/ItemShare[/url]
